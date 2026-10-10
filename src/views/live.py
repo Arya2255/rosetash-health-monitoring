@@ -41,6 +41,22 @@ def _rssi_color(rssi):
     return WARN
 
 
+def _spo2_value(vitals):
+    """اکسیژن خون از نخستین بایت فریم خام (0A,B2).
+
+    همان قاعدهٔ پارسر SDK خود اپ: بایت اول = مقدار درصد؛ اگر بیرون بازهٔ
+    سالم باشد یعنی قرائت معتبری نیامده (مثلاً مچ‌بند روی دست نیست).
+    """
+    for raw in (vitals or {}).get("spo2_raw") or []:
+        try:
+            first = int(raw.split(":", 1)[1][0:2], 16)
+        except Exception:
+            continue
+        if 70 <= first <= 100:
+            return first
+    return None
+
+
 def _rel(seconds):
     if seconds is None:
         return "—"
@@ -149,6 +165,45 @@ def live_view(app):
         ft.Container(expand=True, content=win_card),
     ], spacing=14)
 
+    # ── ردیف دوم: حیاتی‌های دستگاه (باتری، اکسیژن، HRV، قدم) ──
+    bat_value = txt("—", size=30, font=FONT, color=INK)
+    bat_sub = txt("در انتظار نخستین خواندن…", size=12, font=FONT, color=TEXT_MUTED)
+    bat_card = _kpi(
+        "باتری مچ‌بند", ft.Icons.BATTERY_FULL, INK, "#E9EBEE",
+        ft.Row([bat_value, txt("٪", size=12, font=FONT, color=TEXT_MUTED)],
+               spacing=6, vertical_alignment=ft.CrossAxisAlignment.END),
+        bat_sub)
+
+    spo2_value = txt("—", size=30, font=FONT, color=INK)
+    spo2_sub = txt("هر چند پنجره یک‌بار اندازه‌گیری می‌شود…", size=12,
+                   font=FONT, color=TEXT_MUTED)
+    spo2_card = _kpi(
+        "اکسیژن خون", ft.Icons.WATER_DROP, INK, "#E9EBEE",
+        ft.Row([spo2_value, txt("٪", size=12, font=FONT, color=TEXT_MUTED)],
+               spacing=6, vertical_alignment=ft.CrossAxisAlignment.END),
+        spo2_sub)
+
+    hrv_value = txt("—", size=30, font=FONT, color=INK)
+    hrv_sub = txt("در انتظار پنجرهٔ HRV…", size=12, font=FONT, color=TEXT_MUTED)
+    hrv_card = _kpi("HRV — فشار و بازیابی", ft.Icons.INSIGHTS, INK, "#E9EBEE",
+                    hrv_value, hrv_sub)
+
+    step_value = txt("—", size=30, font=FONT, color=INK)
+    step_sub = txt("شمارندهٔ قدم از گزارش لحظه‌ای می‌آید", size=12,
+                   font=FONT, color=TEXT_MUTED)
+    step_card = _kpi(
+        "قدم‌های امروز", ft.Icons.DIRECTIONS_WALK, INK, "#E9EBEE",
+        ft.Row([step_value, txt("قدم", size=12, font=FONT, color=TEXT_MUTED)],
+               spacing=6, vertical_alignment=ft.CrossAxisAlignment.END),
+        step_sub)
+
+    vitals_row = ft.Row([
+        ft.Container(expand=True, content=bat_card),
+        ft.Container(expand=True, content=spo2_card),
+        ft.Container(expand=True, content=hrv_card),
+        ft.Container(expand=True, content=step_card),
+    ], spacing=14)
+
     # ── نمودار سیگنال ──
     bars_row = ft.Row([], spacing=2, height=64,
                       vertical_alignment=ft.CrossAxisAlignment.END)
@@ -239,6 +294,73 @@ def live_view(app):
             win_value.value = "—"
             win_value.color = INK
 
+        # حیاتی‌های دستگاه: باتری، اکسیژن، HRV، قدم
+        vitals = (d or {}).get("vitals") or []
+        v = vitals[0] if vitals else None
+        if v:
+            bat = v.get("battery")
+            if bat is not None:
+                bat_value.value = fa_num(bat)
+                bat_value.color = OK if bat >= 30 else (WARN if bat >= 15 else OFFLINE)
+                fw = v.get("dev_fw") or "—"
+                bat_sub.value = (f"دستگاه با نسخهٔ {fw} — خوانده‌شده {_rel(v.get('age_s'))}")
+            else:
+                bat_value.value = "—"
+                bat_value.color = OFFLINE
+                bat_sub.value = "باتری خوانده نشد"
+
+            spo2 = _spo2_value(v)
+            spo2_age = v.get("vitals_age_s", v.get("age_s"))
+            if spo2 is not None:
+                spo2_value.value = fa_num(spo2)
+                spo2_value.color = OK if spo2 >= 95 else WARN
+                spo2_sub.value = f"خوانده‌شده {_rel(spo2_age)}"
+            elif v.get("spo2_ack"):
+                spo2_value.value = "—"
+                spo2_value.color = WARN
+                spo2_sub.value = f"اندازه‌گیری انجام شد ولی قرائت معتبری نیامد — {_rel(spo2_age)}"
+            else:
+                spo2_value.value = "—"
+                spo2_value.color = INK
+                spo2_sub.value = "در انتظار پنجرهٔ اکسیژن — هر چند پنجره یک‌بار"
+
+            hrv_frames = len(v.get("hrv_raw") or [])
+            if hrv_frames:
+                hrv_value.value = "—"
+                hrv_value.color = INK
+                hrv_sub.value = (f"{fa_num(hrv_frames)} فریم خام ثبت شد — "
+                                 "رمزگشایی مقدار در حال تکمیل")
+            elif v.get("hrv_ack"):
+                hrv_value.value = "—"
+                hrv_value.color = INK
+                hrv_sub.value = "پذیرفته شد — فریمی برنگشت"
+            else:
+                hrv_value.value = "—"
+                hrv_value.color = INK
+                hrv_sub.value = "در انتظار پنجرهٔ HRV…"
+
+            steps = v.get("steps")
+            if steps is not None:
+                step_value.value = fa_num(steps)
+                step_value.color = INK
+                step_sub.value = "از گزارش لحظه‌ای مچ‌بند"
+            else:
+                step_value.value = "—"
+                step_value.color = INK
+                step_sub.value = "شمارندهٔ قدم هنوز نرسیده"
+        else:
+            bat_value.value = "—"
+            bat_value.color = OFFLINE
+            bat_sub.value = "در انتظار نخستین خواندن…"
+            spo2_value.value = "—"
+            spo2_value.color = INK
+            spo2_sub.value = "در انتظار پنجرهٔ اکسیژن…"
+            hrv_value.value = "—"
+            hrv_value.color = INK
+            hrv_sub.value = "در انتظار پنجرهٔ HRV…"
+            step_value.value = "—"
+            step_value.color = INK
+
         # گیت‌وی
         gws = (d or {}).get("gateways") or []
         if gws:
@@ -280,6 +402,10 @@ def live_view(app):
             kind = e.get("kind")
             if kind in NOISE_KINDS:
                 continue
+            if kind == "vitals":
+                entries.append((_epoch(e.get("ts")), "ok",
+                                "باتری و اطلاعات دستگاه به‌روز شد"))
+                continue
             entries.append((_epoch(e.get("ts")), "off", str(kind)))
         entries.sort(key=lambda x: x[0], reverse=True)
         if entries:
@@ -311,6 +437,7 @@ def live_view(app):
                        "دادهٔ واقعی از پل محلی — به‌روزرسانی هر ثانیه",
                        trailing=conn_chip),
         kpi_row,
+        vitals_row,
         chart_card,
         feed_card,
     ], spacing=14, expand=True, scroll=ft.ScrollMode.AUTO)

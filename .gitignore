@@ -18,6 +18,9 @@ firmware/test/host_test
 
 # Gateway per-board config (WiFi/MQTT credentials) + packed filesystem image
 firmware/gateway/data/config.json
+
+# Raw BLE probe logs (kept out of the repo)
+tools/band/*.log
 firmware/gateway/littlefs.bin
 
 # Live bridge runtime state (SQLite database + logs)

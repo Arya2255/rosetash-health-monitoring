@@ -61,7 +61,7 @@ def live_available() -> bool:
 
 
 def live_summary():
-    """خلاصهٔ کوچک برای نمایش: گیت‌وی، حضور مچ‌بند و آخرین ضربان."""
+    """خلاصهٔ کوچک برای نمایش: گیت‌وی، حضور مچ‌بند، آخرین ضربان و حیاتی‌ها."""
     doc = live_status()
     if not doc or not doc.get("ok"):
         return None
@@ -70,10 +70,12 @@ def live_summary():
     bands = doc.get("bands") or []
     band = bands[0] if bands else None
     health = (doc.get("health") or [None])[0]
+    vitals = (doc.get("vitals") or [None])[0]
     return {
         "available": True,
         "fetched_at": doc.get("fetched_at"),
         "gateway": gateway,
         "band": band,
         "health": health,
+        "vitals": vitals,
     }

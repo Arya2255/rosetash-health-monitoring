@@ -33,13 +33,30 @@
 ## نقاط HTTP پل
 
 - `GET /health` — زنده بودن پل
-- `GET /api/snapshot` — تصویر کامل: `gateways`, `bands`, `health`, `events`
+- `GET /api/snapshot` — تصویر کامل: `gateways`, `bands`, `health`, `vitals`, `events`
 - `GET /api/events` — آخرین رویدادها
+
+## حیاتی‌های دستگاه — `vitals`
+
+از فِرمویر ۰٫۱٫۴، گیت‌وی بعد از هر اندازه‌گیری روی `roztash/<gw>/vitals` منتشر می‌کند:
+
+```json
+{"gw":"gw-test-1","mac":"f3:...","battery":90,"dev_fw":"2.0.2.3","dev_hw":"1.0.0.0",
+ "dev_maker":"Beijing OnMicro Electronics Co., Ltd.",
+ "spo2_ack":true,"hrv_ack":true,"spo2_raw":["0AB2:001A0A0B022C2D"],"hrv_raw":[]}
+```
+
+- باتری و اطلاعات دستگاه در **هر پنجره** خوانده می‌شوند؛ مراحل اکسیژن و HRV هر پنج پنجره یک‌بار.
+- پل آخرین ردیف `vitals` هر مچ‌بند را نگه می‌دارد و اگر آن پنجره قرائت اکسیژن/HRV نداشته باشد،
+  از تازه‌ترین ردیفی که قرائت داشته پر می‌کند — به‌همراه `vitals_age_s` تا سن واقعی قرائت معلوم بماند.
+- صفحهٔ «پایش زنده» ردیف دوم کارت‌ها را از همین داده پر می‌کند: باتری، اکسیژن خون، HRV، قدم.
+  مقدار اکسیژن از بایت اول فریم خام `(0A,B2)` خوانده می‌شود؛ بیرون بازهٔ ۷۰..۱۰۰ یعنی قرائت معتبر نیست.
 
 ## قواعد زمانی
 
 - حضور مچ‌بند: ۶۰ ثانیه — هماهنگ با TTL فریمور گیت‌وی
 - آخرین اندازه‌گیری سلامت: ۱۵ دقیقه
+- حیاتی‌های دستگاه (باتری، اطلاعات، اکسیژن، HRV): ۱ ساعت
 - آنلاین بودن گیت‌وی: ۱۸۰ ثانیه بدون پیام وضعیت
 
 ## متغیرهای محیطی
@@ -47,8 +64,8 @@
 - `ROZTASH_MQTT_HOST` و `ROZTASH_MQTT_PORT` — پیش‌فرض `127.0.0.1:1884`
 - `ROZTASH_BRIDGE_PORT` — پیش‌فرض `8726`
 - `ROZTASH_BRIDGE_DB` — پیش‌فرض `backend/state/live.db`
-- `ROZTASH_PRESENCE_TTL` / `ROZTASH_HEALTH_TTL` / `ROZTASH_GATEWAY_ONLINE_TTL`
-- در برنامه: `ROZTASH_LIVE=auto|1|0` و `ROZTASH_BRIDGE=http://127.0.0.1:8726`
+- `ROZTASH_PRESENCE_TTL` / `ROZTASH_HEALTH_TTL` / `ROZTASH_VITALS_TTL` / `ROZTASH_GATEWAY_ONLINE_TTL`
+- در برنامه: `ROZTASH_LIVE=auto|1|0`، `ROZTASH_BRIDGE=http://127.0.0.1:8726` و `ROZTASH_VIEW=live` برای باز شدن روی نمای پایش زنده
 
 ## تست
 

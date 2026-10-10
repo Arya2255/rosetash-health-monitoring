@@ -49,8 +49,13 @@ class App:
 
     def __init__(self, page: ft.Page):
         self.page = page
+        # ROZTASH_VIEW=live → برنامه روی نمای پایش زنده باز می‌شود
+        # (برای نمایشگر کنار خط تولید که همیشه باید همان نما را نشان دهد)
+        initial = os.environ.get("ROZTASH_VIEW", "dashboard")
+        if initial not in BUILDERS:
+            initial = "dashboard"
         self.state = {
-            "view": "dashboard", "emp": None, "filter": "all",
+            "view": initial, "emp": None, "filter": "all",
             "search": "", "back_to": "dashboard",
         }
         self.alerts_active = [dict(a) for a in ALERTS_ACTIVE]
