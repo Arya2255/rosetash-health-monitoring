@@ -20,7 +20,8 @@ class MqttLink {
   void poll();  // wifi/mqtt reconnect + queue flush; call every loop()
   bool online() { return mqtt_.connected(); }
 
-  void publishStatus(const char* fw, int wifi_rssi, const char* ip);
+  void publishStatus(const char* fw, int wifi_rssi, const char* ip,
+                     int bands_seen, uint32_t adv_seen);
   void publishPresence(BleCentral& ble);
   void publishHealth(const BleCentral& ble);
   void publishEvent(const char* type, const char* mac, const char* detail);

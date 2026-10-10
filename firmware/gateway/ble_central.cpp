@@ -1,7 +1,12 @@
 #include "ble_central.h"
 
 // --- verified UUIDs (docs/band-protocol.md, live-tested 2026-10-10) ---------
+// The band's advertisement packet carries the 16-bit UUID 0xBAA0 (expanded
+// to 0000baa0-0000-1000-8000-00805f9b34fb) — verified 2026-10-11 with a live
+// adv scan; the 128-bit custom service below only appears in the GATT table
+// after connecting. The Porodo Fit app filters scans on the same 16-bit UUID.
 static const char* kBandName = "PDMB1062";
+static const NimBLEUUID kAdvSvc16((uint16_t)0xBAA0);
 static const NimBLEUUID kSvcUuid("4cdabaa0-2cea-c0c1-b38d-a0481ae60a97");
 static const NimBLEUUID kWriteUuid("4cdabaa1-2cea-c0c1-b38d-a0481ae60a97");
 static const NimBLEUUID kNotifyUuid("4cdabaa2-2cea-c0c1-b38d-a0481ae60a97");
@@ -32,10 +37,10 @@ void BleCentral::begin(uint16_t scan_interval_ms, uint16_t scan_window_ms,
   NimBLEDevice::setPower(9);  // max TX power (verify range in the pilot)
 
   scan_ = NimBLEDevice::getScan();
-  scan_->setScanCallbacks(new ScanCb(this), false);  // wantDuplicates=false
+  scan_->setScanCallbacks(new ScanCb(this), true);  // wantDuplicates: keep RSSI fresh
   scan_->setInterval(scan_interval_ms_);
   scan_->setWindow(scan_window_ms_);
-  scan_->setActiveScan(false);  // passive: name+services ride in the adv data
+  scan_->setActiveScan(true);  // active: the band's name rides in the scan response
   scan_->start(0, false, true); // forever, restart on controller reset
   Serial.printf("[ble] scanning (int=%u win=%u ms)\n",
                 (unsigned)scan_interval_ms_, (unsigned)scan_window_ms_);
@@ -43,10 +48,13 @@ void BleCentral::begin(uint16_t scan_interval_ms, uint16_t scan_window_ms,
 
 // --- presence ---------------------------------------------------------------
 void BleCentral::onResult(const NimBLEAdvertisedDevice* dev) {
+  adv_count_++;
+
   bool match = dev->haveName() && dev->getName() == kBandName;
   if (!match) {
     for (uint8_t i = 0; i < dev->getServiceUUIDCount(); ++i) {
-      if (dev->getServiceUUID(i).equals(kSvcUuid)) { match = true; break; }
+      const NimBLEUUID u = dev->getServiceUUID(i);
+      if (u.equals(kAdvSvc16) || u.equals(kSvcUuid)) { match = true; break; }
     }
   }
   if (!match) return;
@@ -213,6 +221,14 @@ bool BleCentral::startHealth(const char* mac) {
 }
 
 void BleCentral::poll() {
+  // Scan watchdog: NimBLE stops the scan while a connection is attempted and
+  // does not resume it afterwards — restart scanning whenever we are idle so
+  // presence keeps working after every health job.
+  if (state_ == JobState::Idle && scan_ && !scan_->isScanning()) {
+    scan_->start(0, false, true);
+    Serial.println("[ble] scan restarted (watchdog)");
+  }
+
   if (state_ != JobState::Measuring) return;
   const uint32_t now = millis();
   if (ended_ || !wearing_ok_) {

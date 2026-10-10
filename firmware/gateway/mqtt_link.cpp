@@ -69,7 +69,8 @@ bool MqttLink::send(const char* topic, const char* payload, bool retained,
   return false;
 }
 
-void MqttLink::publishStatus(const char* fw, int wifi_rssi, const char* ip) {
+void MqttLink::publishStatus(const char* fw, int wifi_rssi, const char* ip,
+                             int bands_seen, uint32_t adv_seen) {
   JsonDocument doc;
   doc["gw"] = cfg_.gw_id;
   doc["zone"] = cfg_.zone;
@@ -78,7 +79,8 @@ void MqttLink::publishStatus(const char* fw, int wifi_rssi, const char* ip) {
   doc["ip"] = ip;
   doc["rssi"] = wifi_rssi;
   doc["uptime_s"] = (uint32_t)(millis() / 1000UL);
-  doc["bands_seen"] = 0;  // filled by caller when needed
+  doc["bands_seen"] = bands_seen;
+  doc["adv_seen"] = adv_seen;  // total adv packets since boot (radio liveness)
   String out;
   serializeJson(doc, out);
   char topic[48];

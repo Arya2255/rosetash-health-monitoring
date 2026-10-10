@@ -151,13 +151,21 @@ arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=min_spiffs" firmwa
 arduino-cli upload --fqbn "esp32:esp32:esp32:PartitionScheme=min_spiffs" -p /dev/ttyUSB0 firmware/gateway
 ```
 
-> ✅ روش فلش تأییدشده روی برد ZY-ESP32 (۲۰۲۶-۱۰-۱۰): باینری ادغام‌شدهٔ بیلد با esptool مستقیم فلش شد — پایدارتر و ساده‌تر:
+> ⚠️ پیت‌فال مهم (۲۰۲۶-۱۰-۱۱): کامپایل پیش‌فرض arduino-cli خروجی‌ها را در `~/.cache/arduino/sketches/<هش>/` می‌نویسد — نه در `firmware/gateway/build/`. یک‌بار از پوشهٔ build کهنه فلش شد و برد فریمور قدیمی بوت کرد. همیشه از خروجی تازهٔ همان کامپایل فلش کن.
+>
+> ✅ روش فلش تأییدشده (۲۰۲۶-۱۰-۱۱) — چهار فایل جدا، بدون پاک‌شدن تنظیمات LittleFS:
 >
 > ```
-> ~/.arduino15/packages/esp32/tools/esptool_py/*/esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash 0x0 firmware/gateway/build/esp32.esp32.esp32/gateway.ino.merged.bin
+> D=$(ls -dt ~/.cache/arduino/sketches/*/ | head -1)   # پوشهٔ خروجی تازه‌ترین کامپایل
+> ~/.arduino15/packages/esp32/tools/esptool_py/*/esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 \
+>   write_flash --flash-mode dio --flash-freq 80m --flash-size 4MB \
+>   0x1000 $D/gateway.ino.bootloader.bin 0x8000 $D/gateway.ino.partitions.bin \
+>   0xe000 $D/boot_app0.bin 0x10000 $D/gateway.ino.bin
 > ```
 >
-> نکته: در باود 921600 استابِ فلشر این برد خطا می‌دهد؛ با 460800 بدون خطا فلش می‌شود (~۳۰ ثانیه) و خودکار هش را verify می‌کند. فایل merged.bin همه‌چیز را یکجا دارد — بوت‌لودر + جدول پارتیشن + برنامه — و از آفست 0x0 نوشته می‌شود.
+> با این روش پارتیشن LittleFS (آفست 0x3D0000 — همان config.json و رمز وای‌فای) دست‌نخورده می‌ماند و نیازی به فلش دوبارهٔ تنظیمات نیست. روش قدیمی merged.bin از آفست 0x0 هنوز کار می‌کند ولی کل فلش را بازنویسی می‌کند و LittleFS را پاک می‌کند — بعدش باید littlefs.bin را دوباره فلش کنی.
+>
+> نکته: در باود 921600 استابِ فلشر این برد خطا می‌دهد؛ با 460800 بدون خطا فلش می‌شود (~۳۰ ثانیه) و خودکار هش را verify می‌کند.
 
 > ✅ کامپایل روی این لپ‌تاپ با موفقیت انجام شد (۲۰۲۶-۱۰-۱۰) — باینری ۱٫۲۳ مگابایت از ۱٫۹۶ مگابایت پارتیشن (۶۲٪) و رم ۵۹ کیلوبایت از ۳۲۰ کیلوبایت (۱۸٪). طرح `min_spiffs` عمدی است: با طرح پیش‌فرض مصرف به ۹۴٪ می‌رسید و افزودن فیچرهای بعدی (مثل سنسور دما) سرریز می‌کرد.
 
@@ -176,7 +184,7 @@ arduino-cli monitor -p /dev/ttyUSB0 -c baudrate=115200
 
 ```
 rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
-[gw] boot — fw 0.1.0-skeleton
+[gw] boot — fw 0.1.2-skeleton
 [cfg] /config.json not found — using defaults
 [gw] wifi: not connected (continuing)
 [ble] scanning (int=160 win=80 ms)

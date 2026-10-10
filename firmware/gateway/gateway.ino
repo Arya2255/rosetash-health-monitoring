@@ -18,7 +18,7 @@
 #include "config.h"
 #include "mqtt_link.h"
 
-static const char* kFwVersion = "0.1.0-skeleton";
+static const char* kFwVersion = "0.1.2-skeleton";
 
 static GatewayConfig cfg;
 static BleCentral ble;
@@ -120,7 +120,8 @@ void loop() {
   if (now - last_status_ms >= 60000) {
     last_status_ms = now;
     mqtt.publishStatus(kFwVersion, WiFi.RSSI(),
-                       WiFi.localIP().toString().c_str());
+                       WiFi.localIP().toString().c_str(),
+                       ble.sightingCount(), ble.advCount());
   }
 
   esp_task_wdt_reset();

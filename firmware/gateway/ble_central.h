@@ -36,6 +36,7 @@ class BleCentral {
 
   // ---- presence -------------------------------------------------------------
   int sightingCount();
+  uint32_t advCount() const { return adv_count_; }  // adv packets since boot
   bool getSlot(int slot, Sighting& out);  // slot in [0, kMaxBands)
   int findSighting(const char* mac);      // -1 when unseen
   void pruneStale(uint32_t now, uint32_t ttl_ms);
@@ -66,6 +67,7 @@ class BleCentral {
 
   // sightings — mutated from the BLE task, guarded by mux_
   Sighting sightings_[kMaxBands]{};
+  volatile uint32_t adv_count_ = 0;  // every adv packet the controller reports
   portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
 
   // scan
