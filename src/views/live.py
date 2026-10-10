@@ -156,7 +156,7 @@ def live_view(app):
         ft.Row([
             txt("نمودار سیگنال مچ‌بند", size=15, font=FONT_SB, color=INK),
             ft.Container(expand=True),
-            txt("هر ستون یک بستهٔ حضور — ارتفاع = قدرت سیگنال",
+            txt("از لحظهٔ باز شدن صفحه پر می‌شود — هر ستون یک بستهٔ حضور",
                 size=11, font=FONT, color=TEXT_MUTED),
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
         ft.Container(content=bars_row, padding=ft.Padding.only(top=6)),
