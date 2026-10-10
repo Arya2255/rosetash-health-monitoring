@@ -15,6 +15,7 @@ import time
 
 PORT = "/dev/ttyUSB0"
 OUT = sys.argv[1] if len(sys.argv) > 1 else "serial_boot.log"
+DUR = float(sys.argv[2]) if len(sys.argv) > 2 else 22.0
 
 fd = os.open(PORT, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
 
@@ -45,7 +46,7 @@ t0 = time.time()
 
 total = 0
 with open(OUT, "wb") as f:
-    while time.time() - t0 < 22:
+    while time.time() - t0 < DUR:
         r, _, _ = select.select([fd], [], [], 0.25)
         if not r:
             continue

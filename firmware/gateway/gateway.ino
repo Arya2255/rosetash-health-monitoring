@@ -18,7 +18,7 @@
 #include "config.h"
 #include "mqtt_link.h"
 
-static const char* kFwVersion = "0.1.2-skeleton";
+static const char* kFwVersion = "0.1.3-skeleton";
 
 static GatewayConfig cfg;
 static BleCentral ble;

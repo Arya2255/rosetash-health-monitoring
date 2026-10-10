@@ -201,10 +201,11 @@ bool BleCentral::startHealth(const char* mac) {
           [this](NimBLERemoteCharacteristic*, uint8_t* data, size_t len, bool) {
             onNotifyData(data, len);
           },
-          false)) {
+          true)) {  // CCCD write WITH response — the band ignores no-response CCCD writes
     finishJob(JobState::Failed, Fail::Subscribe);
     return false;
   }
+  Serial.printf("[ble] subscribed; sending start frame to %s\n", mac);
 
   uint8_t frame[16];
   const size_t n = fundo::buildFrame(counter_++, fundo::CMD_MEASURE,
@@ -254,7 +255,12 @@ void BleCentral::clearJob() {
 
 void BleCentral::onNotifyData(const uint8_t* data, size_t len) {
   fundo::Parsed p;
-  if (!fundo::parseFrame(data, len, p) || !p.valid || !p.crc_ok) return;
+  if (!fundo::parseFrame(data, len, p) || !p.valid || !p.crc_ok) {
+    Serial.printf("[ble] notify unparsed (len=%u)\n", (unsigned)len);
+    return;
+  }
+  Serial.printf("[ble] notify (%02X,%02X) dlen=%u\n", p.cmd1, p.cmd2,
+                (unsigned)p.data_len);
 
   if (p.cmd1 == fundo::CMD_REALTIME && p.cmd2 == fundo::SUB_REALTIME_HR &&
       p.data_len >= 1) {
