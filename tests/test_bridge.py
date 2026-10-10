@@ -37,6 +37,21 @@ def main() -> None:
         recv_ts=NOW - 30)
     bridge.ingest(f"roztash/{GW}/event", json.dumps({
         "gw": GW, "type": "measure_ok", "mac": MAC}), recv_ts=NOW - 30)
+    bridge.ingest(f"roztash/{GW}/vitals", json.dumps({
+        "gw": GW, "mac": MAC, "battery": 90, "dev_fw": "2.0.2.3",
+        "dev_hw": "1.0.0.0", "dev_maker": "Beijing OnMicro Electronics Co., Ltd.",
+        "spo2_ack": False, "hrv_ack": False, "spo2_raw": [], "hrv_raw": []}),
+        recv_ts=NOW - 28)
+    # پنجرهٔ حیاتی‌ها: اکسیژن و HRV پذیرفته شد
+    bridge.ingest(f"roztash/{GW}/vitals", json.dumps({
+        "gw": GW, "mac": MAC, "battery": 89, "dev_fw": "2.0.2.3",
+        "spo2_ack": True, "hrv_ack": True, "spo2_raw": ["0AB2:001A0A0B022C2D"],
+        "hrv_raw": []}), recv_ts=NOW - 26)
+    # پنجرهٔ بعدی بدون مرحلهٔ حیاتی‌ها — نباید وضعیت را پاک کند
+    bridge.ingest(f"roztash/{GW}/vitals", json.dumps({
+        "gw": GW, "mac": MAC, "battery": 90, "dev_fw": "2.0.2.3",
+        "spo2_ack": False, "hrv_ack": False, "spo2_raw": [], "hrv_raw": []}),
+        recv_ts=NOW - 24)
 
     snap = bridge.snapshot(now=NOW)
     assert snap["ok"] is True
@@ -46,8 +61,15 @@ def main() -> None:
     assert snap["bands"][0]["rssi"] == -72
     assert len(snap["health"]) == 1 and snap["health"][0]["avg"] == 76.8
     assert snap["health"][0]["bpm"][0] == 79 and snap["health"][0]["wearing"] is True
+    assert len(snap["vitals"]) == 1 and snap["vitals"][0]["battery"] == 90
+    assert snap["vitals"][0]["dev_fw"] == "2.0.2.3"
+    assert snap["vitals"][0]["mac"] == MAC
+    # آخرین پنجره دادهٔ اکسیژن نداشت — از پنجرهٔ قبل پر می‌شود
+    assert snap["vitals"][0]["spo2_ack"] is True, "وضعیت اکسیژن باید از پنجرهٔ قبل بیاید"
+    assert snap["vitals"][0]["spo2_raw"][0].startswith("0AB2:")
+    assert snap["vitals"][0]["vitals_age_s"] >= 25
     kinds = {e["kind"] for e in snap["events"]}
-    assert {"status", "presence", "health", "measure_ok"} <= kinds
+    assert {"status", "presence", "health", "vitals", "measure_ok"} <= kinds
 
     # TTL حضور: ۶۰ ثانیه — بعد از ۱۲۰ ثانیه باید خالی شود
     snap2 = bridge.snapshot(now=NOW + 120)
@@ -61,6 +83,11 @@ def main() -> None:
     # TTL سلامت: ۱۵ دقیقه
     snap3 = bridge.snapshot(now=NOW + 1000)
     assert snap3["health"] == [], "health TTL کار نکرد"
+    assert snap3["vitals"][0]["battery"] == 90, "TTL حیاتی‌ها باید یک ساعت باشد"
+
+    # TTL حیاتی‌ها: ۱ ساعت
+    snap4 = bridge.snapshot(now=NOW + 4000)
+    assert snap4["vitals"] == [], "vitals TTL کار نکرد"
 
     print("bridge tests PASSED — ingest/snapshot/TTL")
 

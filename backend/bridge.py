@@ -11,6 +11,7 @@
   - اشتراک MQTT با mosquitto_sub به‌عنوان زیرفرایند و حلقهٔ بازاتصال
   - TTL حضور ۶۰ ثانیه — هماهنگ با فریمور گیتوی
   - TTL سلامت ۱۵ دقیقه — برای نمایش آخرین اندازه‌گیری
+  - TTL حیاتی‌ها ۱ ساعت — باتری و اطلاعات دستگاه دیرتر کهنه می‌شوند
   - گیتوی آنلاین اگر status آن کمتر از ۱۸۰ ثانیه پیش رسیده باشد
 """
 from __future__ import annotations
@@ -34,9 +35,11 @@ DB_PATH = os.environ.get("ROZTASH_BRIDGE_DB", os.path.join(HERE, "state", "live.
 
 PRESENCE_TTL = float(os.environ.get("ROZTASH_PRESENCE_TTL", "60"))
 HEALTH_TTL = float(os.environ.get("ROZTASH_HEALTH_TTL", "900"))
+VITALS_TTL = float(os.environ.get("ROZTASH_VITALS_TTL", "3600"))
 GATEWAY_ONLINE_TTL = float(os.environ.get("ROZTASH_GATEWAY_ONLINE_TTL", "180"))
 EVENTS_KEEP = 3000
 HEALTH_KEEP = 5000
+VITALS_KEEP = 2000
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events(
@@ -53,6 +56,12 @@ CREATE TABLE IF NOT EXISTS health(
   ts REAL, gw TEXT, mac TEXT, state TEXT, fail TEXT, wearing INTEGER,
   ended INTEGER, bpm TEXT, n INTEGER, avg REAL, payload TEXT);
 CREATE INDEX IF NOT EXISTS idx_health_ts ON health(ts);
+CREATE TABLE IF NOT EXISTS vitals(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts REAL, gw TEXT, mac TEXT, battery INTEGER, dev_fw TEXT, dev_hw TEXT,
+  dev_maker TEXT, spo2_ack INTEGER, hrv_ack INTEGER, steps INTEGER,
+  spo2_raw TEXT, hrv_raw TEXT, payload TEXT);
+CREATE INDEX IF NOT EXISTS idx_vitals_ts ON vitals(ts);
 """
 
 _lock = threading.Lock()
@@ -132,12 +141,25 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
                  json.dumps(doc.get("bpm") or []), doc.get("n"), doc.get("avg"), payload))
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
                       (ts, gw, "health", doc.get("mac"), payload))
+        elif leaf == "vitals":
+            c.execute(
+                "INSERT INTO vitals(ts,gw,mac,battery,dev_fw,dev_hw,dev_maker,"
+                "spo2_ack,hrv_ack,steps,spo2_raw,hrv_raw,payload) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (ts, gw, doc.get("mac"), doc.get("battery"), doc.get("dev_fw"),
+                 doc.get("dev_hw"), doc.get("dev_maker"),
+                 1 if doc.get("spo2_ack") else 0, 1 if doc.get("hrv_ack") else 0,
+                 doc.get("steps"), json.dumps(doc.get("spo2_raw") or []),
+                 json.dumps(doc.get("hrv_raw") or []), payload))
+            c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
+                      (ts, gw, "vitals", doc.get("mac"), payload))
         else:
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
                       (ts, gw, doc.get("type", leaf), doc.get("mac"), payload))
         # هرس سبک
         c.execute("DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?", (EVENTS_KEEP,))
         c.execute("DELETE FROM health WHERE id <= (SELECT MAX(id) FROM health) - ?", (HEALTH_KEEP,))
+        c.execute("DELETE FROM vitals WHERE id <= (SELECT MAX(id) FROM vitals) - ?", (VITALS_KEEP,))
         c.commit()
 
 
@@ -179,10 +201,44 @@ def snapshot(now: float | None = None) -> dict:
         events = [{
             "ts": _iso(r["ts"]), "gw": r["gw"], "kind": r["kind"], "mac": r["mac"],
         } for r in c.execute("SELECT * FROM events ORDER BY id DESC LIMIT 50")]
+        vitals = []
+        seen_pairs = set()
+        for r in c.execute("SELECT * FROM vitals WHERE ts >= ? ORDER BY ts DESC",
+                           (now - VITALS_TTL,)):
+            key = (r["gw"], r["mac"])
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            v = {
+                "gw": r["gw"], "mac": r["mac"], "battery": r["battery"],
+                "dev_fw": r["dev_fw"], "dev_hw": r["dev_hw"], "dev_maker": r["dev_maker"],
+                "spo2_ack": bool(r["spo2_ack"]), "hrv_ack": bool(r["hrv_ack"]),
+                "steps": r["steps"],
+                "spo2_raw": json.loads(r["spo2_raw"] or "[]"),
+                "hrv_raw": json.loads(r["hrv_raw"] or "[]"),
+                "ts": _iso(r["ts"]), "age_s": round(now - r["ts"], 1),
+            }
+            # مراحل اکسیژن و HRV هر چند پنجره یک‌بار اجرا می‌شوند؛ پنجره‌های بدون آن‌ها
+            # نباید وضعیت را پاک کنند — از تازه‌ترین ردیفی که قرائت داشته پر می‌شود.
+            if not (v["spo2_raw"] or v["hrv_raw"] or v["spo2_ack"] or v["hrv_ack"]):
+                back = c.execute(
+                    "SELECT * FROM vitals WHERE gw=? AND mac=? AND "
+                    "(spo2_ack=1 OR hrv_ack=1 OR spo2_raw != '[]' OR hrv_raw != '[]') "
+                    "ORDER BY ts DESC LIMIT 1", (r["gw"], r["mac"])).fetchone()
+                if back:
+                    v["spo2_ack"] = bool(back["spo2_ack"])
+                    v["hrv_ack"] = bool(back["hrv_ack"])
+                    v["spo2_raw"] = json.loads(back["spo2_raw"] or "[]")
+                    v["hrv_raw"] = json.loads(back["hrv_raw"] or "[]")
+                    v["vitals_ts"] = _iso(back["ts"])
+                    v["vitals_age_s"] = round(now - back["ts"], 1)
+            vitals.append(v)
     return {
         "ok": True, "fetched_at": _iso(now), "now": now,
         "presence_ttl": PRESENCE_TTL, "health_ttl": HEALTH_TTL,
-        "gateways": gws, "bands": bands, "health": health, "events": events,
+        "vitals_ttl": VITALS_TTL,
+        "gateways": gws, "bands": bands, "health": health, "vitals": vitals,
+        "events": events,
     }
 
 
