@@ -10,6 +10,7 @@ from theme import (
 
 NAV_ITEMS = [
     ("dashboard", "داشبورد", ft.Icons.DASHBOARD),
+    ("live", "پایش زنده", ft.Icons.SENSORS),
     ("employees", "کارکنان", ft.Icons.GROUPS),
     ("attendance", "حضور و غیاب", ft.Icons.FACT_CHECK),
     ("alerts", "هشدارها", ft.Icons.NOTIFICATIONS_ACTIVE),

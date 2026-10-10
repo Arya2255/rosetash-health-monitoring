@@ -9,6 +9,7 @@
 import asyncio
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -18,9 +19,10 @@ from theme import (  # noqa: E402
     BORDER, FONT, FONT_MED, FONTS, INK, PAGE_BG, TEXT_MAIN, TEXT_MUTED, WHITE,
     fa_clock, fa_date, txt,
 )
-from data import ALERTS_ACTIVE  # noqa: E402
+from data import ALERTS_ACTIVE, live_available  # noqa: E402
 from components.sidebar import build_sidebar  # noqa: E402
 from views.dashboard import dashboard_view  # noqa: E402
+from views.live import live_view  # noqa: E402
 from views.employees import employees_view  # noqa: E402
 from views.attendance import attendance_view  # noqa: E402
 from views.employee_detail import employee_detail_view  # noqa: E402
@@ -31,6 +33,7 @@ from views.settings import settings_view  # noqa: E402
 
 BUILDERS = {
     "dashboard": dashboard_view,
+    "live": live_view,
     "employees": employees_view,
     "attendance": attendance_view,
     "employee": employee_detail_view,
@@ -120,12 +123,12 @@ def main(page: ft.Page):
     # ── نوار بالایی ──
     time_txt = txt("", size=16, font=FONT_MED, color=INK)
     date_txt = txt("", size=11, font=FONT, color=TEXT_MUTED)
+    # نشان اتصال — از وضعیت واقعی پل محلی پر می‌شود
+    conn_dot = ft.Container(width=8, height=8, border_radius=4, bgcolor="#9AA0A6")
+    conn_txt = txt("در حال بررسی گیت‌وی…", size=12, font=FONT_MED, color=TEXT_MUTED)
     conn_chip = ft.Container(
-        content=ft.Row([
-            ft.Container(width=8, height=8, border_radius=4, bgcolor="#1E8E4E"),
-            txt("متصل به گیت‌وی", size=12, font=FONT_MED, color="#1E8E4E"),
-        ], spacing=6, tight=True),
-        bgcolor="#E6F4EB", border_radius=999,
+        content=ft.Row([conn_dot, conn_txt], spacing=6, tight=True),
+        bgcolor="#F1F2F4", border_radius=999,
         padding=ft.Padding.symmetric(horizontal=12, vertical=5),
     )
     user_box = ft.Row([
@@ -176,7 +179,7 @@ def main(page: ft.Page):
 
         async def shot_tour():
             await asyncio.sleep(3)
-            for v in ("dashboard", "employees", "attendance", "employee",
+            for v in ("dashboard", "live", "employees", "attendance", "employee",
                       "alerts", "reports", "management", "settings"):
                 if v == "employee":
                     app.go("employee", 1)
@@ -189,12 +192,24 @@ def main(page: ft.Page):
 
     # ── ساعت زنده ──
     async def clock_loop():
+        last_check = 0.0
         while True:
             try:
                 time_txt.value = fa_clock()
                 date_txt.value = fa_date()
                 time_txt.update()
                 date_txt.update()
+                # نشان اتصال هر چند ثانیه از پل محلی تازه می‌شود
+                now = time.time()
+                if now - last_check >= 5:
+                    last_check = now
+                    online = live_available()
+                    conn_dot.bgcolor = "#1E8E4E" if online else "#9AA0A6"
+                    conn_txt.value = ("گیت‌وی آنلاین — دادهٔ زنده" if online
+                                      else "گیت‌وی در دسترس نیست")
+                    conn_txt.color = "#1E8E4E" if online else TEXT_MUTED
+                    conn_chip.bgcolor = "#E6F4EB" if online else "#F1F2F4"
+                    conn_chip.update()
             except Exception:
                 return
             await asyncio.sleep(1)

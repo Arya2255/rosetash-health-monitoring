@@ -7,7 +7,7 @@ from theme import (
     BORDER, DANGER, FONT, FONT_B, FONT_MED, INK, TEXT_MUTED, WARN, WHITE,
     fa_num, txt,
 )
-from data import EMPLOYEES, kpis
+from data import EMPLOYEES, kpis, live_summary
 from components.common import card, pill, stat_card
 from components.employee_card import STATUS_ORDER, employee_card
 from components.alert_banner import emergency_banner
@@ -18,9 +18,62 @@ FILTERS = [
 ]
 
 
+def _ago(sec):
+    """سن یک رویداد به زبان آدمیزاد."""
+    if sec is None:
+        return "—"
+    sec = int(sec)
+    if sec < 60:
+        return f"{fa_num(sec)} ثانیه پیش"
+    if sec < 3600:
+        return f"{fa_num(sec // 60)} دقیقه پیش"
+    return f"{fa_num(sec // 3600)} ساعت پیش"
+
+
+def _live_strip(live):
+    """نوار دادهٔ زنده — فقط وقتی پل محلی پاسخ می‌دهد."""
+    if not live or not live.get("available"):
+        return None
+    gw = live.get("gateway") or {}
+    band = live.get("band") or {}
+    health = live.get("health") or {}
+    online = bool(gw.get("online"))
+    dot = "#1E8E4E" if online else "#9AA0A6"
+
+    def chip(value, label):
+        return ft.Column([
+            txt(value, size=13, font=FONT_MED, color=INK),
+            txt(label, size=10, font=FONT, color=TEXT_MUTED),
+        ], spacing=1, tight=True)
+
+    hbpm = health.get("avg")
+    band_lbl = (f"حضور مچ‌بند — آنتن {band.get('rssi')}" if band
+                else "حضور مچ‌بند — در دید نیست")
+    hr_txt = f"{fa_num(round(hbpm))} ضربه در دقیقه" if hbpm is not None else "—"
+    hr_lbl = (f"آخرین ضربان — {_ago(health.get('age_s'))}" if hbpm is not None
+              else "آخرین ضربان")
+
+    return ft.Container(
+        content=ft.Row([
+            ft.Row([
+                ft.Container(width=8, height=8, border_radius=4, bgcolor=dot),
+                txt("دادهٔ زندهٔ گیت‌وی" if online else "پل محلی — گیت‌وی آفلاین",
+                    size=12, font=FONT_MED, color="#1E8E4E" if online else TEXT_MUTED),
+            ], spacing=6, tight=True),
+            ft.Container(width=1, height=28, bgcolor=BORDER),
+            chip(gw.get("gw") or "—", f"گیت‌وی — {gw.get('ip') or '—'}"),
+            chip(band.get("mac") or "در دید نیست", band_lbl),
+            chip(hr_txt, hr_lbl),
+        ], spacing=16, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        bgcolor=WHITE, border=ft.Border.all(1, BORDER), border_radius=12,
+        padding=ft.Padding.symmetric(horizontal=14, vertical=9),
+    )
+
+
 def dashboard_view(app):
     state = app.state
     k = kpis()
+    live = _live_strip(live_summary())
     danger_emps = [e for e in EMPLOYEES if e["status"] == "danger"]
 
     # ── نوار هشدار اضطراری ──
@@ -98,6 +151,8 @@ def dashboard_view(app):
     refresh()
 
     controls = []
+    if live:
+        controls += [live]
     if banner:
         controls += [banner]
 
