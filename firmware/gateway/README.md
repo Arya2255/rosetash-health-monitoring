@@ -49,14 +49,17 @@ bash firmware/test/run_host_test.sh
 
 ## بیلد و فلش
 
+راهنمای گام‌به‌گام کامل (آماده‌سازی لینوکس، تنظیم `config.json`، فلش، تست روی میز و نصب میدانی): `docs/gateway-setup.md`
+
 ```
 arduino-cli core install esp32:esp32
 arduino-cli lib install "NimBLE-Arduino" "PubSubClient" "ArduinoJson"
-arduino-cli compile --fqbn esp32:esp32:esp32 firmware/gateway
-arduino-cli upload  --fqbn esp32:esp32:esp32 -p /dev/ttyUSB0 firmware/gateway
+arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=min_spiffs" firmware/gateway
+arduino-cli upload  --fqbn "esp32:esp32:esp32:PartitionScheme=min_spiffs" -p /dev/ttyUSB0 firmware/gateway
 ```
 
-- نسخهٔ کتابخانه‌ها: NimBLE-Arduino ≥ ۲٫۱ ، ArduinoJson ≥ ۷ ، PubSubClient ≥ ۲٫۸
+- نسخه‌های تأییدشده روی لپ‌تاپ مرجع: NimBLE-Arduino ۲٫۵٫۱ ، ArduinoJson ۷٫۴٫۳ ، PubSubClient ۲٫۸
+- طرح پارتیشن `min_spiffs` لازم است — باینری از پارتیشن پیش‌فرض (۹۴٪ مصرف) نزدیک به سرریز بود
 - اگر پورت سریال پیدا نشد: `sudo usermod -aG dialout $USER` و مسدودسازی سرویس `brltty`
 - خروجی سریال: ۱۱۵۲۰۰ باد — همهٔ رویدادها با برچسب `[gw]/[ble]/[mqtt]/[cfg]` لاگ می‌شوند
 
@@ -73,5 +76,6 @@ arduino-cli upload  --fqbn esp32:esp32:esp32 -p /dev/ttyUSB0 firmware/gateway
 
 - ✅ لایهٔ پروتکل: تست طلایی پاس — آمادهٔ استفاده
 - ✅ اسکلت NimBLE + MQTT + صف آفلاین: نوشته شده
-- ⏳ **کامپایل کامل روی برد**: روی ماشین فعلی `arduino-cli` نصب نیست — قدم بعدی نصب زنجیرهٔ ساخت و کامپایل روی سخت‌افزار واقعی
+- ✅ **زنجیرهٔ ساخت و کامپایل** (۲۰۲۶-۱۰-۱۰): `arduino-cli` + هستهٔ `esp32:esp32` نسخهٔ ۳٫۳٫۱۲ + کتابخانه‌ها نصب؛ فریمور بدون خطا برای برد کامپایل می‌شود (طرح پارتیشن `min_spiffs` — مصرف ۶۲٪). دو خطای سازگاری NimBLE 2.5 رفع شد. راهنمای کامل: `docs/gateway-setup.md`
+- ⏳ **فلش روی برد فیزیکی**: منتظر اتصال برد به لپ‌تاپ — دستورها و تنظیم پورت در راهنما آماده است
 - ⏳ تست میدانی: طرح ۵ مرحله‌ای در سند طراحی

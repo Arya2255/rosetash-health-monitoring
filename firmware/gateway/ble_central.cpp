@@ -21,25 +21,12 @@ class BleCentral::ScanCb : public NimBLEScanCallbacks {
   BleCentral* owner_;
 };
 
-class BleCentral::NotifyCb : public NimBLECharacteristicCallbacks {
- public:
-  explicit NotifyCb(BleCentral* owner) : owner_(owner) {}
-  void onNotify(NimBLECharacteristic* ch, NimBLEConnInfo& connInfo) override {
-    const NimBLEAttValue v = ch->getValue();
-    owner_->onNotifyData(v.data(), v.size());
-  }
-
- private:
-  BleCentral* owner_;
-};
-
 // --- setup ------------------------------------------------------------------
 void BleCentral::begin(uint16_t scan_interval_ms, uint16_t scan_window_ms,
                        uint32_t measure_timeout_ms) {
   scan_interval_ms_ = scan_interval_ms;
   scan_window_ms_ = scan_window_ms;
   measure_timeout_ms_ = measure_timeout_ms;
-  notify_cb_ = new NotifyCb(this);
 
   NimBLEDevice::init("roztash-gw");
   NimBLEDevice::setPower(9);  // max TX power (verify range in the pilot)
@@ -201,7 +188,12 @@ bool BleCentral::startHealth(const char* mac) {
   notify_char_ = svc->getCharacteristic(kNotifyUuid);
   write_char_ = svc->getCharacteristic(kWriteUuid);
   if (!notify_char_ || !write_char_ ||
-      !notify_char_->subscribe(notify_cb_, false)) {
+      !notify_char_->subscribe(
+          true,
+          [this](NimBLERemoteCharacteristic*, uint8_t* data, size_t len, bool) {
+            onNotifyData(data, len);
+          },
+          false)) {
     finishJob(JobState::Failed, Fail::Subscribe);
     return false;
   }

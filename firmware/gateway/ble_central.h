@@ -58,11 +58,11 @@ class BleCentral {
 
  private:
   class ScanCb;
-  class NotifyCb;
 
   void onResult(const NimBLEAdvertisedDevice* dev);
   void onNotifyData(const uint8_t* data, size_t len);
   void finishJob(JobState st, Fail f);
+  NimBLEClient* clientFor(const NimBLEAddress& addr);
 
   // sightings — mutated from the BLE task, guarded by mux_
   Sighting sightings_[kMaxBands]{};
@@ -94,9 +94,9 @@ class BleCentral {
   };
   WarmClient clients_[kMaxClients];
   int warm_idx_ = -1;
+  int warm_next_ = 0;
 
   NimBLEClient* job_client_ = nullptr;
   NimBLERemoteCharacteristic* write_char_ = nullptr;
   NimBLERemoteCharacteristic* notify_char_ = nullptr;
-  NotifyCb* notify_cb_ = nullptr;
 };

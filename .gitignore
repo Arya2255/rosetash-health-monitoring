@@ -15,3 +15,7 @@ wheels/
 # Firmware build artifacts
 firmware/test/host_test
 *.o
+
+# Gateway per-board config (WiFi/MQTT credentials) + packed filesystem image
+firmware/gateway/data/config.json
+firmware/gateway/littlefs.bin
