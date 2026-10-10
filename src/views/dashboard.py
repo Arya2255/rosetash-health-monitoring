@@ -1,0 +1,118 @@
+# -*- coding: utf-8 -*-
+"""داشبورد لحظه‌ای — صفحهٔ اصلی رصد وضعیت کارکنان."""
+
+import flet as ft
+
+from theme import (
+    BORDER, DANGER, FONT, FONT_B, FONT_MED, INK, TEXT_MUTED, WARN, WHITE,
+    fa_num, txt,
+)
+from data import EMPLOYEES, kpis
+from components.common import card, pill, stat_card
+from components.employee_card import STATUS_ORDER, employee_card
+from components.alert_banner import emergency_banner
+
+FILTERS = [
+    ("all", "همه"), ("danger", "اضطراری"), ("warn", "هشدار"),
+    ("ok", "عادی"), ("off", "قطع اتصال"),
+]
+
+
+def dashboard_view(app):
+    state = app.state
+    k = kpis()
+    danger_emps = [e for e in EMPLOYEES if e["status"] == "danger"]
+
+    # ── نوار هشدار اضطراری ──
+    banner = None
+    if danger_emps:
+        banner = emergency_banner(
+            danger_emps[0],
+            on_view=lambda e: app.go("employee", danger_emps[0]["id"]),
+            on_siren=lambda e: app.set_siren(False),
+        )
+
+    # ── شاخص‌های کلیدی ──
+    kpi_row = ft.Row([
+        ft.Container(expand=True, content=stat_card(
+            "حاضر در شیفت", f'{fa_num(k["present"])} از {fa_num(k["total"])}',
+            "ثبت ورود از طریق مچ‌بند", ft.Icons.GROUPS, INK, "#E9EBEE")),
+        ft.Container(expand=True, content=stat_card(
+            "هشدار فعال", fa_num(k["warn"]),
+            "نیازمند پیگیری مسئول HSE", ft.Icons.ERROR_OUTLINE, WARN, "#FCF0DC")),
+        ft.Container(expand=True, content=stat_card(
+            "وضعیت اضطراری", fa_num(k["danger"]),
+            "سقوط — در انتظار اقدام", ft.Icons.SOS, DANGER, "#FCE7E8")),
+        ft.Container(expand=True, content=stat_card(
+            "میانگین ضربان", f'{fa_num(k["avg_hr"])} ضربه',
+            "در دقیقه — همهٔ کارکنان", ft.Icons.MONITOR_HEART, INK, "#E9EBEE")),
+    ], spacing=14)
+
+    # ── فیلترها و جستجو ──
+    grid = ft.GridView(
+        expand=True, max_extent=315, child_aspect_ratio=1.30,
+        spacing=14, run_spacing=14, scroll=ft.ScrollMode.AUTO,
+    )
+    count_text = txt("", size=12, font=FONT, color=TEXT_MUTED)
+
+    def open_emp(emp_id):
+        state["back_to"] = "dashboard"
+        app.go("employee", emp_id)
+
+    def refresh():
+        emps = EMPLOYEES
+        if state["filter"] != "all":
+            emps = [e for e in emps if e["status"] == state["filter"]]
+        q = state.get("search", "").strip()
+        if q:
+            emps = [e for e in emps if q in e["name"]]
+        emps = sorted(emps, key=lambda e: STATUS_ORDER[e["status"]])
+        grid.controls = [employee_card(e, open_emp) for e in emps]
+        count_text.value = f'{fa_num(len(emps))} کارکن در این نما'
+
+    pills_map = {}
+
+    def on_filter(key):
+        state["filter"] = key
+        for kk, (c, t_) in pills_map.items():
+            active = kk == key
+            c.bgcolor = INK if active else WHITE
+            c.border = ft.Border.all(1, INK if active else BORDER)
+            t_.color = WHITE if active else INK
+        refresh()
+        app.page.update()
+
+    pill_controls = []
+    for key, label in FILTERS:
+        c, t_ = pill(label, active=(state["filter"] == key),
+                     on_click=lambda e, kk=key: on_filter(kk))
+        pills_map[key] = (c, t_)
+        pill_controls.append(c)
+
+    search = ft.TextField(
+        hint_text="جستجوی نام کارکن…", prefix_icon=ft.Icons.SEARCH,
+        width=250, height=44, text_size=13,
+        on_change=lambda e: (state.update({"search": e.control.value}), refresh(), app.page.update()),
+    )
+
+    refresh()
+
+    controls = []
+    if banner:
+        controls += [banner]
+
+    controls += [
+        kpi_row,
+        ft.Container(
+            content=ft.Row(
+                [txt("وضعیت لحظه‌ای کارکنان", size=18, font=FONT_B, color=INK),
+                 count_text],
+                spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding.only(top=6),
+        ),
+        ft.Row([*pill_controls, ft.Container(expand=True), search], spacing=8,
+               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        grid,
+    ]
+    return ft.Column(controls, spacing=14, expand=True)
