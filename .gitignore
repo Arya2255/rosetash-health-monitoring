@@ -11,3 +11,7 @@ wheels/
 
 # Flet dev cache
 .flet/
+
+# Firmware build artifacts
+firmware/test/host_test
+*.o
