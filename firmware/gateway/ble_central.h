@@ -44,7 +44,10 @@ class BleCentral {
   // ---- health jobs ----------------------------------------------------------
   bool healthBusy() const;
   bool jobFinished() const;
-  bool startHealth(const char* mac);  // blocking connect (bounded), then async collect
+  // Blocking connect (bounded), then async collection. `vitals` adds the SpO2
+  // and HRV measurement stages after the heart-rate stage; battery and device
+  // information are always read right after connecting.
+  bool startHealth(const char* mac, bool vitals = false);
   void poll();                        // drives measure timeout; call from loop()
 
   // finished-job accessors — valid until clearJob()
@@ -55,6 +58,37 @@ class BleCentral {
   const uint8_t* samples() const { return samples_; }
   bool wearingOk() const { return wearing_ok_; }
   bool ended() const { return ended_; }
+
+  // ---- extra device features: battery, SpO2, HRV, steps --------------------
+  // Valid until clearJob(). Raw frames are forwarded as-is: the SpO2/HRV data
+  // layouts are only partly decoded, so the gateway publishes what it saw.
+  static constexpr int kMaxRawFrames = 6;
+  static constexpr int kMaxRawLen = 10;
+
+  struct RawFrame {
+    uint8_t c1 = 0;
+    uint8_t c2 = 0;
+    uint8_t len = 0;
+    uint8_t data[kMaxRawLen] = {0};
+  };
+
+  struct Vitals {
+    bool battery_ok = false;
+    uint8_t battery = 0;         // percent
+    char dev_fw[16] = {0};       // device information 0x2A28 (software revision)
+    char dev_hw[16] = {0};       // 0x2A27 (hardware revision)
+    char dev_maker[40] = {0};    // 0x2A29 (manufacturer name)
+    bool spo2_ack = false;       // band accepted the SpO2 measurement
+    bool hrv_ack = false;        // band accepted the HRV measurement
+    uint8_t spo2_frames = 0;
+    uint8_t hrv_frames = 0;
+    RawFrame spo2[kMaxRawFrames];
+    RawFrame hrv[kMaxRawFrames];
+    bool steps_ok = false;       // realtime-report step frame seen
+    uint32_t steps = 0;
+  };
+
+  const Vitals& vitals() const { return vitals_; }
   void clearJob();
 
  private:
@@ -86,6 +120,20 @@ class BleCentral {
   uint32_t job_started_ms_ = 0;
   uint32_t measure_timeout_ms_ = 45000;
   uint16_t counter_ = 0;
+
+  // multi-stage vitals job: HR → SpO2 → HRV, one connection per band
+  enum class Stage : uint8_t { Hr = 0, Spo2 = 1, Hrv = 2, Done = 3 };
+  Stage stage_ = Stage::Hr;
+  bool vitals_enabled_ = false;
+  uint32_t stage_started_ms_ = 0;
+  uint32_t stage_settle_ms_ = 0;  // 0 = not settling; >0 = waiting before next stage
+  uint8_t stage_end_type_ = 0;
+  Vitals vitals_;
+
+  bool sendMeasureStart(uint8_t type);
+  void readDeviceInfo();
+  void advanceStage();
+  static void addRaw(RawFrame* arr, uint8_t& count, const fundo::Parsed& p);
 
   // warm clients — keep NimBLE clients cached per band so reconnects skip
   // service discovery (connect(addr, false)).

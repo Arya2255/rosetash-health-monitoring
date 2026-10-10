@@ -18,7 +18,12 @@
 #include "config.h"
 #include "mqtt_link.h"
 
-static const char* kFwVersion = "0.1.3-skeleton";
+static const char* kFwVersion = "0.1.4-vitals";
+
+// SpO2 + HRV stages run only every Nth health window: three PPG measurements
+// back to back on every window would drain the band's battery. Battery and
+// device information are read on every connect (cheap GATT reads).
+static const uint16_t kVitalsEveryN = 5;
 
 static GatewayConfig cfg;
 static BleCentral ble;
@@ -40,7 +45,8 @@ static bool pickNextBand() {
     if (attempted_gen[slot] == window_gen) continue;
     if ((now - s.seen_ms) > 120000) continue;  // stale sighting, skip
     attempted_gen[slot] = window_gen;
-    return ble.startHealth(s.mac);
+    const bool vitals = (window_gen % kVitalsEveryN) == 0;
+    return ble.startHealth(s.mac, vitals);
   }
   return false;
 }
@@ -105,6 +111,7 @@ void loop() {
   if (!ble.healthBusy()) {
     if (ble.jobFinished()) {
       mqtt.publishHealth(ble);
+      mqtt.publishVitals(ble);  // battery / device info / SpO2+HRV frames
       if (ble.state() == BleCentral::JobState::Failed)
         mqtt.publishEvent("measure_fail", ble.jobMac(), "");
       else if (!ble.wearingOk())

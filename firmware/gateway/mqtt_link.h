@@ -4,6 +4,7 @@
 //   /status     retained heartbeat + LWT offline marker
 //   /presence   periodic batch of {mac, rssi} sightings (10 s)
 //   /health     finished measurement: {mac, bpm[], n, avg, wearing, ended, state}
+//   /vitals     battery percent, device info and raw SpO2/HRV frames (same job)
 //   /event      errors worth surfacing: wearing_error, connect_fail, ...
 #pragma once
 
@@ -24,6 +25,7 @@ class MqttLink {
                      int bands_seen, uint32_t adv_seen);
   void publishPresence(BleCentral& ble);
   void publishHealth(const BleCentral& ble);
+  void publishVitals(const BleCentral& ble);
   void publishEvent(const char* type, const char* mac, const char* detail);
 
  private:

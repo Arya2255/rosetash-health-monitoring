@@ -135,6 +135,46 @@ void MqttLink::publishHealth(const BleCentral& ble) {
   Serial.printf("[mqtt] health -> %s\n", out.c_str());
 }
 
+// "C1C2:PAYLOAD" — one compact hex line per captured raw frame.
+static void rawToHex(const BleCentral::RawFrame& f, char* out, size_t cap) {
+  snprintf(out, cap, "%02X%02X:", f.c1, f.c2);
+  size_t off = strlen(out);
+  for (uint8_t i = 0; i < f.len && (off + 3) <= cap; ++i)
+    off += snprintf(out + off, cap - off, "%02X", f.data[i]);
+}
+
+void MqttLink::publishVitals(const BleCentral& ble) {
+  const BleCentral::Vitals& v = ble.vitals();
+  JsonDocument doc;
+  doc["gw"] = cfg_.gw_id;
+  doc["mac"] = ble.jobMac();
+  if (v.battery_ok) doc["battery"] = v.battery;
+  if (v.dev_fw[0]) doc["dev_fw"] = v.dev_fw;
+  if (v.dev_hw[0]) doc["dev_hw"] = v.dev_hw;
+  if (v.dev_maker[0]) doc["dev_maker"] = v.dev_maker;
+  doc["spo2_ack"] = v.spo2_ack;
+  doc["hrv_ack"] = v.hrv_ack;
+  if (v.steps_ok) doc["steps"] = v.steps;
+  JsonArray spo2 = doc["spo2_raw"].to<JsonArray>();
+  for (uint8_t i = 0; i < v.spo2_frames; ++i) {
+    char hex[3 * BleCentral::kMaxRawLen + 4];
+    rawToHex(v.spo2[i], hex, sizeof hex);
+    spo2.add(hex);
+  }
+  JsonArray hrv = doc["hrv_raw"].to<JsonArray>();
+  for (uint8_t i = 0; i < v.hrv_frames; ++i) {
+    char hex[3 * BleCentral::kMaxRawLen + 4];
+    rawToHex(v.hrv[i], hex, sizeof hex);
+    hrv.add(hex);
+  }
+  String out;
+  serializeJson(doc, out);
+  char topic[48];
+  snprintf(topic, sizeof topic, "%s/vitals", base_);
+  send(topic, out.c_str(), false, true);  // queue vitals when offline
+  Serial.printf("[mqtt] vitals -> %s\n", out.c_str());
+}
+
 void MqttLink::publishEvent(const char* type, const char* mac,
                             const char* detail) {
   JsonDocument doc;

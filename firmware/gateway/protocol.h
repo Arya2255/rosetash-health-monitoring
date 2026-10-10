@@ -19,12 +19,24 @@ constexpr uint8_t SUB_MEASURE_START = 0x70;  // request start, payload [1, type]
 constexpr uint8_t SUB_MEASURE_ACK   = 0x71;  // reply: data[0] 1 = accepted, 0 = wearing error
 constexpr uint8_t SUB_MEASURE_END   = 0x72;  // reply: data[0] = measure type
 constexpr uint8_t MEASURE_TYPE_HR   = 1;
+constexpr uint8_t MEASURE_TYPE_SPO2 = 2;  // verified live 2026-10-11 (end type=2)
+constexpr uint8_t MEASURE_TYPE_HRV  = 6;  // verified live 2026-10-11 (end type=6)
 
 constexpr uint8_t CMD_REALTIME      = 0x0A;  // realtime sample stream during measurement
 constexpr uint8_t SUB_REALTIME_HR   = 0xAB;  // data[0] = bpm
+constexpr uint8_t SUB_REALTIME_SPO2 = 0xB2;  // SpO2 result frame, payload 7 bytes
+                                             // (captured live 2026-10-11; layout not
+                                             //  fully decoded yet — raw is forwarded)
 
 constexpr uint8_t CMD_BATTERY       = 0x04;
 constexpr uint8_t SUB_BATTERY       = 0x41;  // data = [percent, state]
+
+// realtime report mode (A6 05 request → A6 06 [1] ack; band pushes A6 AB / A6 AC)
+constexpr uint8_t CMD_REPORT        = 0xA6;
+constexpr uint8_t SUB_REPORT_START  = 0x05;
+constexpr uint8_t SUB_REPORT_ACK    = 0x06;
+constexpr uint8_t SUB_REPORT_HR     = 0xAB;  // data[0] = bpm
+constexpr uint8_t SUB_REPORT_STEPS  = 0xAC;  // data = steps, little-endian 3 bytes
 
 // ---- crc ------------------------------------------------------------------
 // CRC16 as used by the app SDK (init 0xFFFF) — validated against live frames.

@@ -11,8 +11,17 @@ static const NimBLEUUID kSvcUuid("4cdabaa0-2cea-c0c1-b38d-a0481ae60a97");
 static const NimBLEUUID kWriteUuid("4cdabaa1-2cea-c0c1-b38d-a0481ae60a97");
 static const NimBLEUUID kNotifyUuid("4cdabaa2-2cea-c0c1-b38d-a0481ae60a97");
 
-static const uint8_t kHrStart[2] = {0x01, 0x01};  // measure type 1 (HR)
 static const uint32_t kConnectTimeoutMs = 10000;
+static const uint32_t kStageSettleMs = 1500;  // wait for late result frames
+
+// Standard GATT services the band also exposes (verified live 2026-10-11):
+//   180F/2A19 battery percent (read+notify), 180A/2A27-2A29 device information.
+static const NimBLEUUID kBatterySvc((uint16_t)0x180F);
+static const NimBLEUUID kBatteryChr((uint16_t)0x2A19);
+static const NimBLEUUID kDevInfoSvc((uint16_t)0x180A);
+static const NimBLEUUID kDevFwChr((uint16_t)0x2A28);
+static const NimBLEUUID kDevHwChr((uint16_t)0x2A27);
+static const NimBLEUUID kDevMakerChr((uint16_t)0x2A29);
 
 // --- callbacks --------------------------------------------------------------
 class BleCentral::ScanCb : public NimBLEScanCallbacks {
@@ -161,7 +170,7 @@ NimBLEClient* BleCentral::clientFor(const NimBLEAddress& addr) {
   return c;
 }
 
-bool BleCentral::startHealth(const char* mac) {
+bool BleCentral::startHealth(const char* mac, bool vitals) {
   if (healthBusy()) return false;
   const int slot = findSighting(mac);
   if (slot < 0) return false;
@@ -173,6 +182,13 @@ bool BleCentral::startHealth(const char* mac) {
   ended_ = false;
   fail_ = Fail::None;
   state_ = JobState::Connecting;
+
+  vitals_enabled_ = vitals;
+  vitals_ = Vitals{};
+  stage_ = Stage::Hr;
+  stage_end_type_ = 0;
+  stage_settle_ms_ = 0;
+  stage_started_ms_ = millis();
 
   NimBLEAddress addr;
   portENTER_CRITICAL(&mux_);
@@ -207,18 +223,100 @@ bool BleCentral::startHealth(const char* mac) {
   }
   Serial.printf("[ble] subscribed; sending start frame to %s\n", mac);
 
-  uint8_t frame[16];
-  const size_t n = fundo::buildFrame(counter_++, fundo::CMD_MEASURE,
-                                     fundo::SUB_MEASURE_START, kHrStart, 2, frame);
-  if (!n || !write_char_->writeValue(frame, n, false)) {
+  readDeviceInfo();  // battery + device information — cheap, right after connect
+
+  if (!sendMeasureStart(fundo::MEASURE_TYPE_HR)) {
     finishJob(JobState::Failed, Fail::Write);
     return false;
   }
 
-  Serial.printf("[ble] health job started: %s\n", mac);
+  Serial.printf("[ble] health job started: %s (vitals=%d battery=%d)\n", mac,
+                (int)vitals_enabled_,
+                vitals_.battery_ok ? (int)vitals_.battery : -1);
   job_started_ms_ = millis();
+  stage_started_ms_ = job_started_ms_;
   state_ = JobState::Measuring;
   return true;
+}
+
+// Builds <cmd1=C+START><type> with the shared frame builder (same path as HR).
+bool BleCentral::sendMeasureStart(uint8_t type) {
+  const uint8_t payload[2] = {0x01, type};
+  uint8_t frame[16];
+  const size_t n = fundo::buildFrame(counter_++, fundo::CMD_MEASURE,
+                                     fundo::SUB_MEASURE_START, payload, 2, frame);
+  if (!n || !write_char_ || !write_char_->writeValue(frame, n, false)) return false;
+  Serial.printf("[ble] measure start type=%u\n", (unsigned)type);
+  return true;
+}
+
+// Battery (180F/2A19) and device information (180A/*) — present on the band as
+// ordinary GATT services; reading them costs one round trip each.
+void BleCentral::readDeviceInfo() {
+  if (!job_client_ || !job_client_->isConnected()) return;
+
+  if (NimBLERemoteService* svc = job_client_->getService(kBatterySvc)) {
+    if (NimBLERemoteCharacteristic* ch = svc->getCharacteristic(kBatteryChr)) {
+      const std::string v = ch->readValue();
+      if (!v.empty()) {
+        vitals_.battery = (uint8_t)v[0];
+        vitals_.battery_ok = true;
+      }
+    }
+  }
+
+  if (NimBLERemoteService* svc = job_client_->getService(kDevInfoSvc)) {
+    struct Row {
+      const NimBLEUUID* chr;
+      char* dst;
+      size_t cap;
+    } rows[] = {
+        {&kDevFwChr, vitals_.dev_fw, sizeof vitals_.dev_fw},
+        {&kDevHwChr, vitals_.dev_hw, sizeof vitals_.dev_hw},
+        {&kDevMakerChr, vitals_.dev_maker, sizeof vitals_.dev_maker},
+    };
+    for (const Row& r : rows) {
+      NimBLERemoteCharacteristic* ch = svc->getCharacteristic(*r.chr);
+      if (!ch) continue;
+      const std::string v = ch->readValue();
+      if (v.empty()) continue;
+      strlcpy(r.dst, v.c_str(), r.cap);
+      for (size_t i = 0; i < strlen(r.dst); ++i)
+        if ((uint8_t)r.dst[i] < 0x20) { r.dst[i] = 0; break; }  // trim gatt noise
+    }
+  }
+}
+
+void BleCentral::addRaw(RawFrame* arr, uint8_t& count, const fundo::Parsed& p) {
+  if (count >= (uint8_t)kMaxRawFrames) return;
+  RawFrame& f = arr[count++];
+  f.c1 = p.cmd1;
+  f.c2 = p.cmd2;
+  f.len = p.data_len > (uint8_t)kMaxRawLen ? (uint8_t)kMaxRawLen : p.data_len;
+  memcpy(f.data, p.data, f.len);
+}
+
+// HR finished → optionally SpO2 → HRV, all on the same connection. The band
+// answers each start with (02,71) ack and closes the window with (02,72) whose
+// data[0] is the finished measure type (1=HR, 2=SpO2, 6=HRV — live-verified).
+void BleCentral::advanceStage() {
+  ended_ = false;
+  stage_settle_ms_ = 0;
+  stage_started_ms_ = millis();
+  wearing_ok_ = true;
+  const uint8_t next = (uint8_t)stage_ + 1;
+  if (!vitals_enabled_ || next > (uint8_t)Stage::Hrv) {
+    stage_ = Stage::Done;
+    return;
+  }
+  stage_ = (Stage)next;
+  const uint8_t type =
+      (stage_ == Stage::Spo2) ? fundo::MEASURE_TYPE_SPO2 : fundo::MEASURE_TYPE_HRV;
+  if (!sendMeasureStart(type)) {
+    stage_ = Stage::Done;
+    return;
+  }
+  Serial.printf("[ble] stage -> %s\n", stage_ == Stage::Spo2 ? "spo2" : "hrv");
 }
 
 void BleCentral::poll() {
@@ -232,15 +330,33 @@ void BleCentral::poll() {
 
   if (state_ != JobState::Measuring) return;
   const uint32_t now = millis();
-  if (ended_ || !wearing_ok_) {
-    finishJob(JobState::Done, Fail::None);
-  } else if ((now - job_started_ms_) > measure_timeout_ms_) {
-    finishJob(sample_count_ ? JobState::Done : JobState::Failed, Fail::Timeout);
+
+  if (stage_ == Stage::Done) {
+    const bool got_any = sample_count_ || vitals_.spo2_frames || vitals_.hrv_frames ||
+                         vitals_.battery_ok;
+    finishJob(got_any ? JobState::Done : JobState::Failed,
+              got_any ? Fail::None : Fail::Timeout);
+    Serial.printf(
+        "[ble] job done: %s samples=%u spo2_frames=%u hrv_frames=%u battery=%d\n",
+        job_mac_, (unsigned)sample_count_, (unsigned)vitals_.spo2_frames,
+        (unsigned)vitals_.hrv_frames, vitals_.battery_ok ? (int)vitals_.battery : -1);
+    return;
   }
-  if (state_ == JobState::Done) {
-    Serial.printf("[ble] job done: %s samples=%u wearing=%d\n", job_mac_,
-                  (unsigned)sample_count_, (int)wearing_ok_);
+
+  // A wearing error on the heart-rate stage means the band is off the wrist —
+  // SpO2/HRV need skin contact too, so skip the remaining stages.
+  if (!wearing_ok_) {
+    stage_ = Stage::Done;
+    return;
   }
+
+  const bool stage_over = ended_ || ((now - stage_started_ms_) > measure_timeout_ms_);
+  if (!stage_over) return;
+  if (stage_settle_ms_ == 0) {
+    stage_settle_ms_ = now ? now : 1;  // let late result frames land first
+    return;
+  }
+  if ((now - stage_settle_ms_) >= kStageSettleMs) advanceStage();
 }
 
 void BleCentral::clearJob() {
@@ -251,6 +367,10 @@ void BleCentral::clearJob() {
   notify_char_ = nullptr;
   sample_count_ = 0;
   job_mac_[0] = 0;
+  stage_ = Stage::Hr;
+  stage_settle_ms_ = 0;
+  vitals_enabled_ = false;
+  vitals_ = Vitals{};
 }
 
 void BleCentral::onNotifyData(const uint8_t* data, size_t len) {
@@ -259,18 +379,61 @@ void BleCentral::onNotifyData(const uint8_t* data, size_t len) {
     Serial.printf("[ble] notify unparsed (len=%u)\n", (unsigned)len);
     return;
   }
-  Serial.printf("[ble] notify (%02X,%02X) dlen=%u\n", p.cmd1, p.cmd2,
-                (unsigned)p.data_len);
+  Serial.printf("[ble] notify (%02X,%02X) dlen=%u stage=%u\n", p.cmd1, p.cmd2,
+                (unsigned)p.data_len, (unsigned)stage_);
 
-  if (p.cmd1 == fundo::CMD_REALTIME && p.cmd2 == fundo::SUB_REALTIME_HR &&
+  // --- measurement control ----------------------------------------------------
+  if (p.cmd1 == fundo::CMD_MEASURE && p.cmd2 == fundo::SUB_MEASURE_ACK &&
       p.data_len >= 1) {
-    if (sample_count_ < kMaxSamples) samples_[sample_count_++] = p.data[0];
-  } else if (p.cmd1 == fundo::CMD_MEASURE &&
-             p.cmd2 == fundo::SUB_MEASURE_ACK && p.data_len >= 1) {
     wearing_ok_ = (p.data[0] == 1);  // 0 = wearing error
+    if (stage_ == Stage::Spo2) vitals_.spo2_ack = wearing_ok_;
+    if (stage_ == Stage::Hrv) vitals_.hrv_ack = wearing_ok_;
     if (!wearing_ok_) Serial.printf("[ble] wearing error: %s\n", job_mac_);
-  } else if (p.cmd1 == fundo::CMD_MEASURE &&
-             p.cmd2 == fundo::SUB_MEASURE_END) {
+    return;
+  }
+  if (p.cmd1 == fundo::CMD_MEASURE && p.cmd2 == fundo::SUB_MEASURE_END) {
+    if (p.data_len >= 1) stage_end_type_ = p.data[0];
     ended_ = true;
+    Serial.printf("[ble] measure end type=%u\n", (unsigned)stage_end_type_);
+    return;
+  }
+
+  // --- battery pushed by the band (04,41) ------------------------------------
+  if (p.cmd1 == fundo::CMD_BATTERY && p.cmd2 == fundo::SUB_BATTERY &&
+      p.data_len >= 1) {
+    vitals_.battery = p.data[0];
+    vitals_.battery_ok = true;
+    return;
+  }
+
+  // --- realtime-report step counter (A6,AC): 3-byte little-endian -------------
+  if (p.cmd1 == fundo::CMD_REPORT && p.cmd2 == fundo::SUB_REPORT_STEPS &&
+      p.data_len >= 3) {
+    vitals_.steps = (uint32_t)p.data[0] | ((uint32_t)p.data[1] << 8) |
+                    ((uint32_t)p.data[2] << 16);
+    vitals_.steps_ok = true;
+    return;
+  }
+
+  // --- stage data -------------------------------------------------------------
+  // Capture stays on the current stage during the settle window, so a result
+  // frame that lands right after the end frame still lands in the right bucket.
+  switch (stage_) {
+    case Stage::Hr:
+      if (p.cmd1 == fundo::CMD_REALTIME && p.cmd2 == fundo::SUB_REALTIME_HR &&
+          p.data_len >= 1) {
+        if (sample_count_ < kMaxSamples) samples_[sample_count_++] = p.data[0];
+      }
+      break;
+    case Stage::Spo2:
+      addRaw(vitals_.spo2, vitals_.spo2_frames, p);
+      break;
+    case Stage::Hrv:
+      addRaw(vitals_.hrv, vitals_.hrv_frames, p);
+      break;
+    default:
+      if (p.cmd1 == fundo::CMD_REALTIME && p.cmd2 == fundo::SUB_REALTIME_SPO2)
+        addRaw(vitals_.spo2, vitals_.spo2_frames, p);
+      break;
   }
 }
