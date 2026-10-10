@@ -29,6 +29,8 @@
     DESIGN.md            مستندات UI/UX و سیستم طراحی
     docs/band-protocol.md   پروتکل BLE مچ‌بند — خروجی مهندسی معکوس
     docs/gateway-design.md  طراحی گیتوی ESP32 — فاز ۲
+    firmware/gateway/       اسکلت فریمور گیتوی ESP32 (Arduino + NimBLE)
+    firmware/test/          تست طلایی لایهٔ پروتکل روی لپ‌تاپ
     tools/band/             ابزارهای مرجع پروتکل مچ‌بند (فاز ۲)
 
 ## جدایی رابط کاربری از بک‌اند
