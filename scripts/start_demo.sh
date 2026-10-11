@@ -62,8 +62,8 @@ fi
 
 if [ "$MODE" = "--web" ]; then
   echo "نسخهٔ وب: http://127.0.0.1:8550"
-  exec uv run flet run -r --web --port 8550
+  exec uv run flet run -r --ignore-dirs __pycache__ --web --port 8550
 else
   echo "برنامه را باز می‌کنم…"
-  exec uv run flet run -r
+  exec uv run flet run -r --ignore-dirs __pycache__
 fi
