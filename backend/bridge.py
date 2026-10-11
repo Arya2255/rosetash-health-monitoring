@@ -784,16 +784,33 @@ def _current_wifi() -> dict:
                         psk = line.split(":", 1)[1].strip()
                         break
     else:
-        act = _run_cmd(["nmcli", "-t", "-f", "ACTIVE,SSID,DEVICE",
-                        "dev", "wifi"])
-        if act:
-            for line in act.splitlines():
-                if not line.startswith("yes:"):
-                    continue
-                ssid = line.split(":", 1)[1].rsplit(":", 1)[0]
-                break
-        if ssid:
+        # مسیر سریع و بدون اسکن: «nmcli dev wifi» برای فهرست شبکهها اسکن
+        # زنده میزند و چند ثانیه طول میکشد — با تایمآوت ۴ ثانیهای اپ
+        # بیمعنی بود. بهجایش: دستگاه وایفای متصل از dev status + SSID از
+        # iw (netlink).
+        iface = ""
+        dev = _run_cmd(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE",
+                        "dev", "status"])
+        if dev:
+            for line in dev.splitlines():
+                parts = line.rsplit(":", 2)
+                if len(parts) == 3 and parts[1] == "wifi" \
+                        and parts[2] == "connected":
+                    iface = parts[0]
+                    break
+        if iface:
             source = "nmcli"
+            link = _run_cmd(["iw", "dev", iface, "link"])
+            if link:
+                for line in link.splitlines():
+                    line = line.strip()
+                    if line.startswith("SSID:"):
+                        ssid = line.split(":", 1)[1].strip()
+                        break
+            if not ssid:  # ابزار iw نبود — نام پروفایل اتصال فعال
+                gen = _run_cmd(["nmcli", "-t", "-g", "GENERAL.CONNECTION",
+                                "dev", "show", iface])
+                ssid = (gen or "").strip()
             conn = _run_cmd(["nmcli", "-t", "-f", "NAME,TYPE,ACTIVE",
                              "connection", "show", "--active"])
             name = ""

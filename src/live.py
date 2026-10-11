@@ -27,6 +27,8 @@ import time
 import urllib.parse
 import urllib.request
 
+import applog
+
 
 def _env(*names, default: str = "") -> str:
     """نخستین متغیر محیطی موجود — پذیرش هر دو املای ROZTASH/ROSETASH."""
@@ -306,7 +308,7 @@ def netinfo(include_pass: bool = False):
     suffix = "?include_pass=1" if include_pass else ""
     try:
         with urllib.request.urlopen(BRIDGE + "/api/netinfo" + suffix,
-                                    timeout=4.0) as resp:
+                                    timeout=6.0) as resp:
             doc = json.loads(resp.read().decode("utf-8"))
         return doc if doc.get("ok") else None
     except Exception:
