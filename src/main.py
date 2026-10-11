@@ -23,6 +23,7 @@ from data import ALERTS_ACTIVE, live_available, live_status, send_vibrate  # noq
 from components.sidebar import build_sidebar  # noqa: E402
 from views.dashboard import dashboard_view  # noqa: E402
 from views.live import live_view  # noqa: E402
+from views.map import map_view  # noqa: E402
 from views.employees import employees_view  # noqa: E402
 from views.attendance import attendance_view  # noqa: E402
 from views.employee_detail import employee_detail_view  # noqa: E402
@@ -32,6 +33,7 @@ from views.management import management_view  # noqa: E402
 from views.settings import settings_view  # noqa: E402
 
 BUILDERS = {
+    "map": map_view,
     "dashboard": dashboard_view,
     "live": live_view,
     "employees": employees_view,
@@ -49,11 +51,12 @@ class App:
 
     def __init__(self, page: ft.Page):
         self.page = page
+        # پیش‌فرض «نقشهٔ کارخانه» است — صفحهٔ ورود برنامه
         # ROZTASH_VIEW=live → برنامه روی نمای پایش زنده باز می‌شود
         # (برای نمایشگر کنار خط تولید که همیشه باید همان نما را نشان دهد)
         # املای ROSETASH_VIEW هم پذیرفته می‌شود
         initial = (os.environ.get("ROZTASH_VIEW")
-                   or os.environ.get("ROSETASH_VIEW") or "dashboard")
+                   or os.environ.get("ROSETASH_VIEW") or "map")
         if initial not in BUILDERS:
             initial = "dashboard"
         self.state = {
@@ -206,7 +209,7 @@ def main(page: ft.Page):
 
         async def shot_tour():
             await asyncio.sleep(3)
-            for v in ("dashboard", "live", "employees", "attendance", "employee",
+            for v in ("map", "dashboard", "live", "employees", "attendance", "employee",
                       "alerts", "reports", "management", "settings"):
                 if v == "employee":
                     app.go("employee", 1)

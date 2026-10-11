@@ -20,6 +20,7 @@ import views.dashboard as v_dashboard  # noqa: E402
 import views.employee_detail as v_detail  # noqa: E402
 import views.employees as v_employees  # noqa: E402
 import views.live as v_live  # noqa: E402
+import views.map as v_map  # noqa: E402
 import views.management as v_management  # noqa: E402
 import views.reports as v_reports  # noqa: E402
 import views.settings as v_settings  # noqa: E402
@@ -69,6 +70,7 @@ def main():
         ("پوسته / نوار کناری", lambda: c_sidebar.build_sidebar("dashboard", app.go, 3)),
         ("داشبورد", lambda: v_dashboard.dashboard_view(app)),
         ("پایش زنده", lambda: v_live.live_view(app)),
+        ("نقشهٔ کارخانه", lambda: v_map.map_view(app)),
         ("کارکنان", lambda: v_employees.employees_view(app)),
         ("حضور و غیاب", lambda: v_attendance.attendance_view(app)),
         ("هشدارها", lambda: v_alerts.alerts_view(app)),
@@ -97,6 +99,7 @@ def main():
 
         assert app_main.BUILDERS
         assert "attendance" in app_main.BUILDERS
+        assert "map" in app_main.BUILDERS
         print("OK   — فایل اصلی (main.py)")
     except Exception as e:  # noqa: BLE001
         fails += 1
@@ -116,6 +119,21 @@ def main():
     except Exception as e:  # noqa: BLE001
         fails += 1
         print(f"FAIL — دادهٔ حضور و غیاب: {type(e).__name__}: {e}")
+
+    # دادهٔ نقشه — مختصات نسبی معتبر و تصویر پایه در assets
+    try:
+        from data import MAP_GATEWAYS, MAP_IMAGE
+
+        assert MAP_GATEWAYS, "فهرست گیت‌وی‌های نقشه خالی است"
+        for g in MAP_GATEWAYS:
+            assert 0 <= g["x"] <= 1 and 0 <= g["y"] <= 1, f"مختصات خارج از بازه: {g}"
+            assert g.get("label"), "برچسب نشانگر خالی است"
+        _assets = os.path.join(_HERE, "..", "src", "assets", MAP_IMAGE)
+        assert os.path.exists(_assets), f"تصویر نقشه پیدا نشد: {_assets}"
+        print("OK   — دادهٔ نقشهٔ کارخانه (نشانگرها و تصویر پایه)")
+    except Exception as e:  # noqa: BLE001
+        fails += 1
+        print(f"FAIL — دادهٔ نقشهٔ کارخانه: {type(e).__name__}: {e}")
 
     print()
     print("نتیجه:", "همهٔ صفحه‌ها سالم" if not fails else f"{fails} خطا")

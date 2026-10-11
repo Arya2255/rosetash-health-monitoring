@@ -32,3 +32,8 @@ from mock_data import (  # noqa: F401
 # views هرگز مستقیم به live نباید وصل شوند؛ اگر به دادهٔ زندهٔ بیشتری
 # نیاز باشد، تابع تازه‌ای همین‌جا ساخته می‌شود.
 from live import live_available, live_status, live_summary, send_vibrate  # noqa: E402,F401
+
+# ── نقشهٔ کارخانه — تصویر پایه و موقعیت نشانگرها ──
+from map_data import (  # noqa: E402,F401
+    MAP_ENTRANCE, MAP_GATEWAYS, MAP_IMAGE, MAP_IMAGE_H, MAP_IMAGE_W,
+)
