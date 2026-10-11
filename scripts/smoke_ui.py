@@ -128,6 +128,10 @@ def main():
         for g in MAP_GATEWAYS:
             assert 0 <= g["x"] <= 1 and 0 <= g["y"] <= 1, f"مختصات خارج از بازه: {g}"
             assert g.get("label"), "برچسب نشانگر خالی است"
+        installed = [g for g in MAP_GATEWAYS if g.get("kind") == "installed"]
+        gids = [g.get("gw") for g in installed]
+        assert all(gids), "گیت‌وی نصب‌شده بدون شناسهٔ gw است"
+        assert len(gids) == len(set(gids)), "شناسهٔ گیت‌وی نصب‌شده تکراری است"
         _assets = os.path.join(_HERE, "..", "src", "assets", MAP_IMAGE)
         assert os.path.exists(_assets), f"تصویر نقشه پیدا نشد: {_assets}"
         print("OK   — دادهٔ نقشهٔ کارخانه (نشانگرها و تصویر پایه)")

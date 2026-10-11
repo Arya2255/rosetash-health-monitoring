@@ -6,6 +6,7 @@
 #   bash scripts/start_demo.sh --check    # فقط بررسی وضعیت اجزا
 #
 # هر جزئی که از قبل بالا باشد، دوباره اجرا نمی‌شود.
+# برنامه با watch رکورسیو -r بالا می‌آید — تغییرات کد خودکار اعمال می‌شود.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
@@ -61,8 +62,8 @@ fi
 
 if [ "$MODE" = "--web" ]; then
   echo "نسخهٔ وب: http://127.0.0.1:8550"
-  exec uv run flet run --web --port 8550
+  exec uv run flet run -r --web --port 8550
 else
   echo "برنامه را باز می‌کنم…"
-  exec uv run flet run
+  exec uv run flet run -r
 fi
