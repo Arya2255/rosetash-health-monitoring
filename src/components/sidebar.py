@@ -10,6 +10,7 @@ from theme import (
 
 NAV_ITEMS = [
     ("map", "نقشه کارخانه", ft.Icons.MAP),
+    ("gateways", "گیت‌وی‌ها", ft.Icons.ROUTER),
     ("dashboard", "داشبورد", ft.Icons.DASHBOARD),
     ("live", "پایش زنده", ft.Icons.SENSORS),
     ("bands", "مچ‌بندها", ft.Icons.WATCH),

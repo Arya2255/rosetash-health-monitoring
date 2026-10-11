@@ -143,6 +143,8 @@ _ERROR_FA = {
     "bad photo": "فرمت عکس پشتیبانی نمی‌شود — JPG یا PNG انتخاب کن",
     "photo save failed": "ذخیرهٔ عکس روی پل ناموفق بود",
     "body too large": "حجم درخواست بیش از حد مجاز است",
+    "invalid gw": "شناسهٔ گیت‌وی معتبر نیست — حروف کوچک انگلیسی، عدد، نقطه و خط تیره؛ نمونه: gw-filter-2",
+    "invalid position": "موقعیت باید بین ۰ و ۱ باشد",
 }
 
 
@@ -262,3 +264,31 @@ def save_catalog(doc: dict) -> tuple[bool, str]:
 def delete_catalog(cid) -> tuple[bool, str]:
     """حذف یک تعریف پایه از پل — والدی که زیرمجموعه دارد رد می‌شود."""
     return _delete_json("/api/catalogs", "id", cid, "حذف نشد")
+
+
+# ─────────────── دفتر گیت‌وی‌ها — تعریف و چیدمان روی نقشه ───────────────
+
+
+def live_gateways(force: bool = False):
+    """فهرست ادغام‌شدهٔ گیت‌وی‌های نقشه از پل — None یعنی پل در دسترس نیست.
+
+    خروجی snapshot["map_gateways"] است: گیت‌وی‌های تعریف‌شده (با موقعیت
+    نسبی روی نقشه) + گیت‌وی‌های کشف‌شدهٔ شبکه که هنوز تعریف نشده‌اند.
+    """
+    doc = live_status(force=force)
+    if not doc or not doc.get("ok"):
+        return None
+    return doc.get("map_gateways") or []
+
+
+def save_gateway(doc: dict) -> tuple[bool, str]:
+    """ثبت/ویرایش گیت‌وی در دفتر پل — شناسهٔ خالی = ساخت خودکار (gw-۱…)."""
+    doc = dict(doc or {})
+    doc["gw"] = str(doc.get("gw") or "").strip().lower()
+    return _post_json("/api/gateways", doc)
+
+
+def delete_gateway(gw: str) -> tuple[bool, str]:
+    """حذف گیت‌وی از دفتر پل — اگر دوباره در شبکه دیده شود، «تعریف‌نشده» می‌ماند."""
+    return _delete_json("/api/gateways", "gw", str(gw or "").strip().lower(),
+                        "حذف نشد")

@@ -10,6 +10,8 @@
   - بخش «مچ‌بندها» برنامه — دفتر مچ‌بندها با GET/POST/DELETE /api/bands و
     فهرست ادغام‌شدهٔ مچ‌بندهای شناخته‌شده در snapshot["bands_known"]
   - بخش «تعاریف پایه» — GET/POST/DELETE /api/catalogs (شرکت، واحد، خط، سمت)
+  - بخش «گیت‌وی‌ها» — دفتر گیت‌وی‌ها با GET/POST/DELETE /api/gateways و
+    ادغامش با وضعیت زنده در snapshot["map_gateways"] (تعریف و چیدمان روی نقشه)
   - عکس پرسنلی کارکنان — GET /api/photo/<mac>؛ فایل‌ها در state/photos/
 
 قواعد طراحی:
@@ -23,12 +25,16 @@
     ثبت‌شده و هر مچ‌بند ثبت‌نشدهٔ در دید را با دادهٔ زنده ادغام می‌کند
   - فیلدهای پروندهٔ پزشکی و عکس پرسنلی اختیاری‌اند؛ عکس فقط JPG/PNG/WebP
     تا سقف PHOTO_MAX_BYTES و در پوشهٔ کنار پایگاه داده ذخیره می‌شود
+  - دفتر گیت‌وی‌ها: نگاشت گیت‌وی فیزیکی ↔ نقطهٔ نقشه (کلید = شناسهٔ gw، همان
+    که در config.json برد و موضوع MQTT می‌آید)؛ موقعیت x/y نسبی ۰..۱ است و
+    نبودشان یعنی «هنوز روی نقشه چیده نشده»
 """
 from __future__ import annotations
 
 import base64
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -97,6 +103,9 @@ CREATE TABLE IF NOT EXISTS catalogs(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL, name TEXT NOT NULL, parent_id INTEGER,
   created_at REAL, updated_at REAL);
+CREATE TABLE IF NOT EXISTS gateway_registry(
+  gw TEXT PRIMARY KEY, label TEXT, zone TEXT, kind TEXT,
+  x REAL, y REAL, note TEXT, created_at REAL, updated_at REAL);
 """
 
 _lock = threading.Lock()
@@ -569,6 +578,166 @@ def catalogs_list() -> dict:
     return out
 
 
+# ─────────────── دفتر گیت‌وی‌ها — تعریف، منطقه و چیدمان روی نقشه ───────────────
+# نگاشت گیت‌وی فیزیکی ↔ نقطهٔ نقشه: کلید = شناسهٔ گیت‌وی (همان که در
+# config.json برد می‌آید و در موضوع MQTT می‌نشیند؛ نمونه: gw-test-1). نقاط
+# پیشنهادی هنوز برد ندارند ولی از الان شناسه و موقعیت می‌گیرند تا بعد از نصب،
+# دادهٔ زنده خودکار به همان نقطه بچسبد. موقعیت x/y نسبی است — ۰..۱ از
+# چپ/بالا؛ نبودشان یعنی «هنوز روی نقشه چیده نشده».
+
+_GW_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,31}$")
+GW_KINDS = ("proposed", "installed")
+_POS_UNSET = object()  # نگهبان «دست نزن» برای x/y
+
+
+def _norm_gw(raw) -> str:
+    """یکسان‌سازی شناسهٔ گیت‌وی — حروف کوچک، فاصله → خط تیره."""
+    return str(raw or "").strip().lower().replace(" ", "-")
+
+
+def _valid_gw(s: str) -> bool:
+    return bool(_GW_RE.match(s))
+
+
+def _next_gw_id(c: sqlite3.Connection) -> str:
+    """شناسهٔ تازهٔ خودکار gw-۱، gw-۲… — کوچک‌ترین شمارهٔ بلااستفاده."""
+    used = {r[0] for r in c.execute("SELECT gw FROM gateway_registry")}
+    n = 1
+    while f"gw-{n}" in used:
+        n += 1
+    return f"gw-{n}"
+
+
+def _pos_of(doc: dict, key: str):
+    """x/y از درخواست — _POS_UNSET یعنی دست نزن؛ None یعنی پاک کن؛ عدد ۰..۱."""
+    if key not in doc:
+        return _POS_UNSET
+    raw = doc.get(key)
+    if raw in ("", None):
+        return None
+    val = float(raw)  # TypeError/ValueError بالادست به «موقعیت نامعتبر» تبدیل می‌شود
+    if not (0.0 <= val <= 1.0):
+        raise ValueError("position range")
+    return val
+
+
+def upsert_gateway(doc: dict) -> tuple[bool, str]:
+    """ثبت/ویرایش گیت‌وی در دفتر — ویرایش جزئی مثل بقیهٔ دفترها.
+
+    شناسهٔ خالی = ساخت خودکار (gw-۱، gw-۲…). x/y نسبی ۰..۱ ذخیره می‌شوند؛
+    رشتهٔ خالی برای x/y یعنی «برداشتن از نقشه»، نبودنشان یعنی دست‌نزدن.
+    """
+    doc = dict(doc or {})
+    try:
+        x_new, y_new = _pos_of(doc, "x"), _pos_of(doc, "y")
+    except (TypeError, ValueError):
+        return False, "invalid position"
+    kind_new = None  # None یعنی دست نزن
+    if "kind" in doc:
+        kind_new = str(doc.get("kind") or "").strip() or "proposed"
+        if kind_new not in GW_KINDS:
+            return False, "invalid kind"
+
+    now = time.time()
+    with _lock:
+        c = db()
+        gw = _norm_gw(doc.get("gw"))
+        row = None
+        if gw:
+            if not _valid_gw(gw):
+                return False, "invalid gw"
+            row = c.execute("SELECT * FROM gateway_registry WHERE gw=?",
+                            (gw,)).fetchone()
+        else:
+            gw = _next_gw_id(c)
+
+        def pick(key: str) -> str:
+            if key in doc:
+                return str(doc.get(key) or "").strip()
+            return str((row[key] if row is not None else "") or "").strip()
+
+        label = pick("label") or gw  # نام خالی = خود شناسه
+        kind = kind_new or str((row["kind"] if row is not None else "") or "") or "proposed"
+        x_val = (row["x"] if row is not None else None) if x_new is _POS_UNSET else x_new
+        y_val = (row["y"] if row is not None else None) if y_new is _POS_UNSET else y_new
+        c.execute(
+            "INSERT INTO gateway_registry(gw,label,zone,kind,x,y,note,"
+            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(gw) DO UPDATE SET label=excluded.label, "
+            "zone=excluded.zone, kind=excluded.kind, x=excluded.x, y=excluded.y, "
+            "note=excluded.note, updated_at=excluded.updated_at",
+            (gw, label, pick("zone"), kind, x_val, y_val, pick("note"), now, now))
+        c.commit()
+    log(f"gateway saved gw={gw} label={label!r}")
+    return True, ""
+
+
+def remove_gateway(gw) -> tuple[bool, str]:
+    """حذف گیت‌وی از دفتر — اگر دوباره در شبکه دیده شود، «تعریف‌نشده» می‌ماند."""
+    gw = _norm_gw(gw)
+    if not _valid_gw(gw):
+        return False, "invalid gw"
+    with _lock:
+        c = db()
+        cur = c.execute("DELETE FROM gateway_registry WHERE gw=?", (gw,))
+        c.commit()
+    if cur.rowcount == 0:
+        return False, "not found"
+    log(f"gateway removed gw={gw}")
+    return True, ""
+
+
+def gateways_registry_list() -> list[dict]:
+    """دفتر خام گیت‌وی‌ها — بدون ادغام وضعیت زنده (برای API)."""
+    with _lock:
+        rows = db().execute(
+            "SELECT * FROM gateway_registry ORDER BY created_at, gw").fetchall()
+    return [dict(r) for r in rows]
+
+
+def _gateways_view(c: sqlite3.Connection, now: float) -> list[dict]:
+    """ادغام دفتر گیت‌وی‌ها با وضعیت زنده — خوراک بخش «گیت‌وی‌ها» و نقشه.
+
+    ردیف‌های دفتر با وضعیت زنده (آنلاین، نسخهٔ فریم‌ور، آخرین تماس، IP)
+    غنی می‌شوند و گیت‌وی‌هایی که در شبکه دیده شده‌اند ولی هنوز تعریف نشده‌اند
+    هم با registered=false به فهرست می‌آیند تا کاربر تعریفشان کند.
+    """
+    live = {r["gw"]: r for r in c.execute("SELECT * FROM gateways")}
+    reg = c.execute(
+        "SELECT * FROM gateway_registry ORDER BY created_at, gw").fetchall()
+    rows = []
+    for r in reg:
+        gw = r["gw"]
+        lv = live.pop(gw, None)
+        age = (now - lv["last_seen"]) if (lv is not None and lv["last_seen"]) else None
+        rows.append({
+            "gw": gw, "label": r["label"], "zone": r["zone"], "kind": r["kind"],
+            "x": r["x"], "y": r["y"], "note": r["note"],
+            "registered": True,
+            "live": lv is not None,
+            "online": bool(lv is not None and age is not None
+                           and age <= GATEWAY_ONLINE_TTL),
+            "fw": lv["fw"] if lv is not None else None,
+            "ip": lv["ip"] if lv is not None else None,
+            "adv_seen": lv["adv_seen"] if lv is not None else None,
+            "last_seen": _iso(lv["last_seen"]) if lv is not None else None,
+            "age_s": round(age, 1) if age is not None else None,
+        })
+    for gw, lv in sorted(live.items()):
+        age = (now - lv["last_seen"]) if lv["last_seen"] else None
+        rows.append({
+            "gw": gw, "label": None, "zone": lv["zone"], "kind": "installed",
+            "x": None, "y": None, "note": None,
+            "registered": False,
+            "live": True,
+            "online": bool(age is not None and age <= GATEWAY_ONLINE_TTL),
+            "fw": lv["fw"], "ip": lv["ip"], "adv_seen": lv["adv_seen"],
+            "last_seen": _iso(lv["last_seen"]),
+            "age_s": round(age, 1) if age is not None else None,
+        })
+    return rows
+
+
 def _decode_spo2(spo2_raw) -> int | None:
     """اکسیژن خون از نخستین بایت فریم خام (0A,B2) — همان قاعدهٔ SDK خود اپ."""
     for raw in spo2_raw or []:
@@ -827,6 +996,7 @@ def snapshot(now: float | None = None) -> dict:
             vitals.append(v)
         employees = _employees_view(c, now)
         bands_known = _bands_known_view(c, now)
+        map_gateways = _gateways_view(c, now)
         catalogs = {kind: [] for kind in CATALOG_KINDS}
         for r in c.execute("SELECT * FROM catalogs ORDER BY kind, name"):
             catalogs.setdefault(r["kind"], []).append(dict(r))
@@ -836,7 +1006,7 @@ def snapshot(now: float | None = None) -> dict:
         "vitals_ttl": VITALS_TTL,
         "gateways": gws, "bands": bands, "health": health, "vitals": vitals,
         "employees": employees, "bands_known": bands_known,
-        "catalogs": catalogs,
+        "catalogs": catalogs, "map_gateways": map_gateways,
         "events": events,
     }
 
@@ -966,6 +1136,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "bands": bands_list()})
         elif path == "/api/catalogs":
             self._send(200, {"ok": True, "catalogs": catalogs_list()})
+        elif path == "/api/gateways":
+            self._send(200, {"ok": True, "gateways": gateways_registry_list()})
         elif path.startswith("/api/photo/"):
             self._send_photo(unquote(path[len("/api/photo/"):]))
         else:
@@ -987,7 +1159,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
         if path not in ("/api/command", "/api/employees", "/api/bands",
-                        "/api/catalogs"):
+                        "/api/catalogs", "/api/gateways"):
             self._send(404, {"ok": False, "error": "not found"})
             return
         try:
@@ -1009,12 +1181,16 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/catalogs":
             ok, err = upsert_catalog(doc)
             self._send(200 if ok else 400, {"ok": ok, "error": err or None})
+        elif path == "/api/gateways":
+            ok, err = upsert_gateway(doc)
+            self._send(200 if ok else 400, {"ok": ok, "error": err or None})
         else:
             ok, err = upsert_employee(doc)
             self._send(200 if ok else 400, {"ok": ok, "error": err or None})
 
     def do_DELETE(self) -> None:  # noqa: N802
-        # دو سبک پذیرفته می‌شود: ?کلید=… و /<کلید> — برای کارکن، مچ‌بند و تعاریف
+        # دو سبک پذیرفته می‌شود: ?کلید=… و /<کلید> — برای کارکن، مچ‌بند،
+        # تعاریف پایه و گیت‌وی‌ها
         path = self.path.split("?", 1)[0]
         qs = parse_qs(urlparse(self.path).query)
         if path.startswith("/api/employees/"):
@@ -1023,10 +1199,14 @@ class Handler(BaseHTTPRequestHandler):
             key, kind = unquote(path[len("/api/bands/"):]), "bands"
         elif path.startswith("/api/catalogs/"):
             key, kind = unquote(path[len("/api/catalogs/"):]), "catalogs"
+        elif path.startswith("/api/gateways/"):
+            key, kind = unquote(path[len("/api/gateways/"):]), "gateways"
         elif path in ("/api/employees", "/api/bands"):
             key, kind = (qs.get("mac") or [""])[0], path.rsplit("/", 1)[1]
         elif path == "/api/catalogs":
             key, kind = (qs.get("id") or [""])[0], "catalogs"
+        elif path == "/api/gateways":
+            key, kind = (qs.get("gw") or [""])[0], "gateways"
         else:
             self._send(404, {"ok": False, "error": "not found"})
             return
@@ -1038,6 +1218,9 @@ class Handler(BaseHTTPRequestHandler):
             code = 200 if ok else (
                 400 if err == "invalid mac" else
                 409 if err == "assigned" else 404)
+        elif kind == "gateways":
+            ok, err = remove_gateway(key)
+            code = 200 if ok else (400 if err == "invalid gw" else 404)
         else:
             ok, err = remove_catalog(key)
             code = 200 if ok else (

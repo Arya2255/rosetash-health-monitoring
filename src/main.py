@@ -29,6 +29,7 @@ from views.map import map_view  # noqa: E402
 from views.employees import employees_view  # noqa: E402
 from views.bands import bands_view  # noqa: E402
 from views.definitions import definitions_view  # noqa: E402
+from views.gateways import gateways_view  # noqa: E402
 from views.attendance import attendance_view  # noqa: E402
 from views.employee_detail import employee_detail_view  # noqa: E402
 from views.alerts import alerts_view  # noqa: E402
@@ -38,6 +39,7 @@ from views.settings import settings_view  # noqa: E402
 
 BUILDERS = {
     "map": map_view,
+    "gateways": gateways_view,
     "dashboard": dashboard_view,
     "live": live_view,
     "employees": employees_view,
@@ -215,8 +217,8 @@ def main(page: ft.Page):
 
         async def shot_tour():
             await asyncio.sleep(3)
-            for v in ("map", "dashboard", "live", "bands", "employees",
-                      "definitions", "attendance", "employee",
+            for v in ("map", "gateways", "dashboard", "live", "bands",
+                      "employees", "definitions", "attendance", "employee",
                       "alerts", "reports", "management", "settings"):
                 if v == "employee":
                     app.go("employee", 1)

@@ -2,33 +2,41 @@
 """نقشهٔ کارخانه — موقعیت گیت‌وی‌ها و کارکنان روی پلان واقعی.
 
 تصویر پایه، پلان برچسب‌دار کارخانه است (src/assets/factory-map.jpg).
-نشانگرها از لایهٔ داده می‌آیند (data.MAP_GATEWAYS) و موقعیت‌ها نسبی‌اند
-تا با هر اندازه‌ای از نمایش درست بنشینند.
+گیت‌وی‌ها از دفتر پل می‌آیند (بخش «گیتوی‌ها» — ردیف‌های snapshot با
+موقعیت نسبی x/y)؛ اگر پل نبود، همان نقاط نمایشی MAP_GATEWAYS با برچسب
+«غیرقابل ویرایش» نشان داده می‌شود.
 
-گیت‌وی نصب‌شده (kind="installed" همراه gw) به وضعیت زندهٔ پل وصل است:
-هر مچ‌بند در دیدش زیر همان گیت‌وی نقطه می‌گیرد و برچسب «≈ فاصلهٔ تخمینی»
-زیر نقطه می‌آید — برای تست میدانی برد. صفحه هر ۲ ثانیه خودش تازه می‌شود
-تا هنگام راه‌رفتن هم به‌روز بماند.
+حالت «چیدن روی نقشه»: پین‌ها با کشیدن ماوس جابه‌جا می‌شوند و موقعیت در
+دفتر پل ذخیره می‌شود؛ پین چیده‌نشده فقط در همین حالت دیده می‌شود.
+
+گیت‌وی نصب‌شده به وضعیت زندهٔ پل وصل است: هر مچ‌بند در دیدش زیر همان
+گیت‌وی نقطه می‌گیرد و برچسب «≈ فاصلهٔ تخمینی» زیر نقطه می‌آید — برای
+تست میدانی برد. صفحه هر ۲ ثانیه خودش تازه می‌شود تا هنگام راه‌رفتن هم
+به‌روز بماند.
 """
 
 import asyncio
+import os
 import time
 from datetime import datetime
 
 import flet as ft
 
 from theme import (
-    BORDER, FONT, FONT_B, FONT_MED, INK, OK, TEXT_MAIN, TEXT_MUTED, WARN,
-    WHITE, fa_clock, fa_num, txt,
+    BORDER, BRAND_RED, FONT, FONT_B, FONT_MED, INK, OK, TEXT_MAIN, TEXT_MUTED,
+    WARN, WHITE, fa_clock, fa_num, txt,
 )
 from data import (
     MAP_ENTRANCE, MAP_GATEWAYS, MAP_IMAGE, MAP_IMAGE_H, MAP_IMAGE_W,
-    live_status,
+    live_status, save_gateway,
 )
+from layout import is_phone, page_w
 from components.common import card, section_header
+from components.gateway_form import open_gateway_form
 
 _RATIO = MAP_IMAGE_W / MAP_IMAGE_H
 _COLOR = {"proposed": WARN, "installed": OK}
+_DISCOVERED = "#9AA0A6"   # گیت‌وی کشف‌شده از شبکه که هنوز تعریف نشده
 _ENTRY_COLOR = "#5B6B7B"
 _BAND_COLOR = "#1A5FB4"
 _PIN = 30          # قطر پین نشانگر
@@ -45,7 +53,10 @@ _STALE_AGE = 30.0  # از این سن، دیدن کهنه است و نقطه ک�
 
 
 def _display_size(app):
-    """اندازهٔ نمایش نقشه — از ارتفاع پنجره، با کف و سقف معقول."""
+    """اندازهٔ نمایش نقشه — دسکتاپ: از ارتفاع پنجره؛ موبایل: از عرض صفحه."""
+    if is_phone(app):
+        w = max(250, min(460, page_w(app) - 36))
+        return int(round(w)), int(round(w / _RATIO))
     h = 520
     try:
         wh = int(getattr(app.page, "height", None) or 0)
@@ -101,18 +112,34 @@ def _rel(seconds):
     return f"{fa_num(seconds // 3600)} ساعت پیش"
 
 
-def _gw_name(gw):
-    """نام خوانا برای شناسهٔ گیت‌وی — از همان فهرست نقشه."""
+def _gw_name(gw, gw_rows=None):
+    """نام خوانا برای شناسهٔ گیت‌وی — اول دفتر گیت‌وی‌های پل، بعد فهرست نقشه."""
+    for g in (gw_rows or []):
+        if g.get("gw") == gw:
+            return g.get("label") or str(gw)
     for g in MAP_GATEWAYS:
         if g.get("gw") == gw:
             return g.get("label") or str(gw)
     return str(gw or "—")
 
 
-def _gw_marker(n, item, W, H):
-    """نشانگر شماره‌دار گیت‌وی — پین رنگی با برچسب زیر آن."""
-    cx, cy = item["x"] * W, item["y"] * H
-    color = _COLOR.get(item.get("kind"), WARN)
+def _short_label(item):
+    """برچسب کوتاه زیر پین — بلندها با «…» کوتاه می‌شوند تا پین‌ها نپوشانند."""
+    label = str(item.get("short") or item.get("label") or item.get("gw") or "—")
+    return label if len(label) <= 16 else label[:15].rstrip() + "…"
+
+
+def _gw_marker(n, item, W, H, spot=None):
+    """نشانگر شماره‌دار گیت‌وی — پین رنگی با برچسب زیر آن.
+
+    موقعیت از x/y ردیف است؛ ردیف چیده‌نشده (x/y ندار) در نقطهٔ spot
+    نمایش داده می‌شود — فقط در حالت چیدن.
+    """
+    placed = item.get("x") is not None and item.get("y") is not None
+    px, py = (item["x"], item["y"]) if placed else (spot or (0.5, 0.5))
+    cx, cy = px * W, py * H
+    color = (_DISCOVERED if item.get("registered") is False
+             else _COLOR.get(item.get("kind"), WARN))
     pin = ft.Container(
         width=_PIN, height=_PIN, border_radius=_PIN // 2, bgcolor=color,
         border=ft.Border.all(2.5, WHITE),
@@ -121,11 +148,18 @@ def _gw_marker(n, item, W, H):
         content=txt(fa_num(n), size=13, font=FONT_B, color=WHITE),
     )
     col = ft.Column(
-        [pin, _label_chip(item.get("short") or item["label"], _CHIP_W, size=10.5)],
+        [pin, _label_chip(_short_label(item), _CHIP_W, size=10.5)],
         spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
     )
     left = min(max(cx - _CHIP_W / 2, 3), W - _CHIP_W - 3)
-    return ft.Container(content=col, left=left, top=cy - _PIN / 2)
+    holder = ft.Container(content=col, left=left, top=cy - _PIN / 2)
+    tip = str(item.get("label") or item.get("gw") or "گیت‌وی")
+    if item.get("registered") is False:
+        tip += " — کشف‌شده از شبکه، هنوز تعریف نشده"
+    if not placed:
+        tip += " — هنوز روی نقشه چیده نشده"
+    holder.tooltip = tip
+    return holder
 
 
 def _entry_marker(W, H):
@@ -145,17 +179,20 @@ def _entry_marker(W, H):
     return ft.Container(content=col, left=left, top=cy - 5)
 
 
-def _worker_dots(W, H, doc=None):
-    """مچ‌بندهای در دید — زیر گیت‌وی نصب‌شده‌ای که دیده‌شان.
+def _worker_dots(W, H, doc=None, rows=None):
+    """مچ‌بندهای در دید — زیر گیت‌وی جایگیری‌شده‌ای که دیده‌شان.
 
     به‌ازای هر مچ‌بند یک نقطه و برچسب «≈ فاصلهٔ تخمینی» می‌آید. فاصله از
     قدرت سیگنال حساب می‌شود و فقط برای تست میدانی برد است — نه موقعیت
     واقعی روی پلان. دیدن کهنه‌تر از _STALE_AGE کم‌رنگ نشان داده می‌شود.
+    rows ردیف‌های دفتر گیت‌وی‌های پل است؛ نبودش یعنی همان MAP_GATEWAYS.
     """
     dots = []
     try:
-        pos = {g.get("gw"): g for g in MAP_GATEWAYS
-               if g.get("kind") == "installed" and g.get("gw")}
+        reg = rows if rows else MAP_GATEWAYS
+        pos = {g.get("gw"): g for g in reg
+               if g.get("gw") and g.get("x") is not None
+               and g.get("y") is not None}
         if not pos:
             return dots
         d = doc if doc is not None else (live_status() or {})
@@ -198,14 +235,31 @@ def _worker_dots(W, H, doc=None):
 
 
 def _gw_row(n, item):
-    """ردیف فهرست گیت‌وی — هم‌شماره با نشانگر روی نقشه."""
-    color = _COLOR.get(item.get("kind"), WARN)
-    if item.get("kind") == "installed":
+    """ردیف فهرست گیت‌وی — هم‌شماره با نشانگر روی نقشه.
+
+    ردیف دفتر پل: وضعیت زنده، جنس (نصب‌شده/پیشنهادی) و چیده‌شدن روی نقشه.
+    """
+    kind = item.get("kind")
+    registered = item.get("registered")
+    color = _COLOR.get(kind, WARN)
+    if registered is False:
+        color = _DISCOVERED
+        sub = f"کشف‌شده از شبکه — {item.get('gw') or '—'} — هنوز تعریف نشده"
+    elif kind == "installed":
         sub = f"نصب‌شده — {item.get('gw') or '—'}"
         if item.get("testing"):
             sub += " — در حال تست فاصله"
     else:
         sub = "پیشنهادی — در انتظار تست میدانی"
+    if item.get("gw") and registered is not False:
+        if item.get("online"):
+            sub += " — آنلاین"
+            if item.get("fw"):
+                sub += f" — نسخهٔ {item['fw']}"
+        elif item.get("live"):
+            sub += " — آفلاین"
+    if registered is True and item.get("x") is None and item.get("y") is None:
+        sub += " — روی نقشه چیده نشده"
     return ft.Row([
         ft.Container(
             width=22, height=22, border_radius=11, bgcolor=color,
@@ -213,7 +267,8 @@ def _gw_row(n, item):
             content=txt(fa_num(n), size=11, font=FONT_B, color=WHITE),
         ),
         ft.Column([
-            txt(item["label"], size=13, font=FONT_MED, color=INK),
+            txt(item.get("label") or item.get("gw") or "گیت‌وی",
+                size=13, font=FONT_MED, color=INK),
             txt(sub, size=11, font=FONT, color=TEXT_MUTED),
         ], spacing=1, expand=True),
     ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
@@ -234,6 +289,7 @@ def _legend_card():
         txt("راهنمای نقشه", size=14, font=FONT_B, color=INK),
         item(WARN, "نقطهٔ پیشنهادی نصب گیت‌وی — غیرقطعی"),
         item(OK, "گیت‌وی نصب‌شده — دادهٔ زنده"),
+        item(_DISCOVERED, "گیت‌وی کشف‌شده — هنوز تعریف نشده"),
         item(_BAND_COLOR, "مچ‌بند در دید — برچسب ≈ فاصلهٔ تخمینی"),
         item(_ENTRY_COLOR, "ورودی کارخانه"),
     ], spacing=8), pad=14)
@@ -250,7 +306,7 @@ def _device_row(dot_color, title, sub):
     ], spacing=7, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
 
-def _live_rows(d, watch):
+def _live_rows(d, watch, gw_rows=None):
     """ردیف‌های وضعیت زنده — گیت‌وی‌ها، مچ‌بندهای در دید و آمار تست فاصله."""
     rows = []
     d = d or {}
@@ -269,7 +325,15 @@ def _live_rows(d, watch):
         sub = f"{gw_id} — {'آنلاین' if on else 'آفلاین'}"
         if g.get("fw"):
             sub += f" — نسخهٔ {g.get('fw')}"
-        rows.append(_device_row(OK if on else "#9AA0A6", _gw_name(gw_id), sub))
+        rows.append(_device_row(OK if on else "#9AA0A6",
+                                _gw_name(gw_id, gw_rows), sub))
+    unknown_count = sum(1 for r in (gw_rows or [])
+                        if r.get("registered") is False)
+    if unknown_count:
+        rows.append(txt(
+            f"{fa_num(unknown_count)} گیت‌وی کشف‌شده هنوز تعریف نشده — "
+            "از بخش «گیت‌وی‌ها» تعریفش کن.", size=10.5, font=FONT,
+            color=TEXT_MUTED))
     if not bands:
         rows.append(txt("مچ‌بندی در دید نیست — از گیت‌وی دور شده یا مچ‌بند همراه نیست.",
                         size=11, font=FONT, color=TEXT_MUTED))
@@ -297,28 +361,156 @@ def _live_rows(d, watch):
     return rows
 
 
+def _delta_xy(e):
+    """جابه‌جایی ماوس/انگشت در رویداد کشیدن — (dx, dy) پیکسلی؛ صفر اگر نبود."""
+    d = getattr(e, "local_delta", None) or getattr(e, "global_delta", None)
+    if d is None:
+        return 0.0, 0.0
+    try:
+        return float(getattr(d, "x", 0.0) or 0.0), float(getattr(d, "y", 0.0) or 0.0)
+    except Exception:
+        return 0.0, 0.0
+
+
+def _moved(x, y, W, H, dx, dy, margin=0.02):
+    """موقعیت نسبی تازه پس از جابه‌جایی — با نگه‌داشتن در حاشیهٔ ۲٪."""
+    nx = min(1 - margin, max(margin, x + dx / max(W, 1)))
+    ny = min(1 - margin, max(margin, y + dy / max(H, 1)))
+    return nx, ny
+
+
 def map_view(app):
-    """صفحهٔ «نقشهٔ کارخانه» — پلان واقعی + نشانگرهای زندهٔ گیت‌وی و مچ‌بند."""
+    """صفحهٔ «نقشهٔ کارخانه» — گیت‌وی‌ها و مچ‌بندهای زنده روی پلان واقعی.
+
+    گیت‌وی‌ها از دفتر پل می‌آیند (بخش «گیت‌وی‌ها»)؛ اگر پل نبود، همان نقاط
+    نمایشی MAP_GATEWAYS با برچسب «غیرقابل ویرایش» نشان داده می‌شود. با دکمهٔ
+    «چیدن روی نقشه»، پین‌ها با کشیدن جابه‌جا و موقعیت خودکار در دفتر پل
+    ذخیره می‌شود (x/y نسبی ۰..۱).
+    """
     W, H = _display_size(app)
     state = app.state
     gen = state.get("map_gen", 0) + 1
     state["map_gen"] = gen
     watch = state.setdefault("map_watch", {"weakest": None, "weakest_at": None,
                                            "samples": 0, "last_seen": None})
+    edit = bool(state.get("map_edit"))
+    if not edit and os.environ.get("ROSETASH_MAP_EDIT") == "1":
+        # قلاب تست بصری — شروع در حالت چیدن (تور اسکرین‌شات)
+        state["map_edit"] = True
+        edit = True
+    src = state.setdefault("map_src", {"rows": None})  # دفتر گیت‌وی‌های پل؛ None = پل نیست
 
     stack = ft.Stack(width=W, height=H)
+    dragging = {"on": False, "x": 0.0, "y": 0.0}
+
+    def _default_spot(n):
+        """نقطهٔ پیش‌فرض پین چیده‌نشده — پله‌های کوچک تا روی هم نیفتند."""
+        return (0.40 + ((n - 1) % 5) * 0.05, 0.48 + ((n - 1) // 5) * 0.07)
+
+    # ── کشیدن پین در حالت چیدن — موقعیت نسبی، ذخیره در رهاکردن ──
+    def _pan_start(item, n):
+        def handler(e):
+            sx, sy = _default_spot(n)
+            dragging.update(
+                on=True,
+                x=float(item["x"]) if item.get("x") is not None else sx,
+                y=float(item["y"]) if item.get("y") is not None else sy)
+        return handler
+
+    def _pan_update(holder):
+        def handler(e):
+            dx, dy = _delta_xy(e)
+            dragging["x"], dragging["y"] = _moved(dragging["x"], dragging["y"],
+                                                  W, H, dx, dy)
+            holder.left = min(max(dragging["x"] * W - _CHIP_W / 2, 3),
+                              W - _CHIP_W - 3)
+            holder.top = dragging["y"] * H - _PIN / 2
+            try:
+                holder.update()
+            except Exception:
+                pass
+        return handler
+
+    def _pan_end(item):
+        def handler(e):
+            dragging["on"] = False
+            gw = item.get("gw")
+            x, y = round(dragging["x"], 4), round(dragging["y"], 4)
+            ok, msg = save_gateway({"gw": gw, "x": x, "y": y})
+            if ok:
+                item["x"], item["y"] = x, y  # به‌روزرسانی خوش‌بینانهٔ ردیف محلی
+                app.snack(f"موقعیت «{item.get('label') or gw}» ذخیره شد")
+            else:
+                app.snack(f"ذخیرهٔ موقعیت نشد — {msg}")
+            _apply(live_status(force=True))
+            try:
+                app.page.update()
+            except Exception:
+                pass
+        return handler
+
+    def _wrap_drag(marker, item, n):
+        """پین را در حالت چیدن قابل کشیدن می‌کند."""
+        gd = ft.GestureDetector(content=marker.content, drag_interval=16)
+        marker.content = gd
+        gd.on_pan_start = _pan_start(item, n)
+        gd.on_pan_update = _pan_update(marker)
+        gd.on_pan_end = _pan_end(item)
+        return marker
 
     def _draw_plan(doc=None):
-        markers = [_gw_marker(i, item, W, H)
-                   for i, item in enumerate(MAP_GATEWAYS, start=1)]
+        gw_rows = src["rows"]
+        listing = (gw_rows if gw_rows else
+                   [dict(g, registered=None, online=False) for g in MAP_GATEWAYS])
+        editable = bool(edit and gw_rows)
+        markers = []
+        for i, item in enumerate(listing, start=1):
+            placed = item.get("x") is not None and item.get("y") is not None
+            if not placed and not editable:
+                continue  # چیده‌نشده فقط در حالت چیدن دیده می‌شود
+            marker = _gw_marker(i, item, W, H, spot=_default_spot(i))
+            if editable and item.get("gw"):
+                marker = _wrap_drag(marker, item, i)
+            markers.append(marker)
         markers.append(_entry_marker(W, H))
-        markers.extend(_worker_dots(W, H, doc=doc))
+        if not edit:
+            # در حالت چیدن فقط پین‌ها — نقطه‌های مچ‌بند شلوغی می‌کنند
+            markers.extend(_worker_dots(W, H, doc=doc, rows=gw_rows or None))
         stack.controls = [
             ft.Image(src=MAP_IMAGE, width=W, height=H, fit=ft.BoxFit.FILL),
             *markers,
         ]
 
     live_col = ft.Column([], spacing=7)
+    list_col = ft.Column([], spacing=10)
+
+    def _gateway_rows():
+        gw_rows = src["rows"]
+        out = []
+        if gw_rows is None:
+            out.append(txt("پل در دسترس نیست — چیدمان نمایشی و غیرقابل ویرایش.",
+                           size=11, font=FONT, color=TEXT_MUTED))
+            listing = MAP_GATEWAYS
+        elif not gw_rows:
+            out.append(txt("هنوز گیت‌ویی تعریف نشده — از بخش «گیت‌وی‌ها» "
+                           "یا «گیت‌وی جدید» شروع کن.",
+                           size=11, font=FONT, color=TEXT_MUTED))
+            listing = MAP_GATEWAYS
+        else:
+            listing = gw_rows
+        out += [_gw_row(i, item) for i, item in enumerate(listing, start=1)]
+        return out
+
+    def _hint_text():
+        if src["rows"] is None:
+            return "برای تعریف و چیدمان، پل باید بالا باشد."
+        if not src["rows"]:
+            return "گیت‌وی تازه تعریف کن؛ بعد در حالت چیدن روی نقشه بگذارش."
+        if edit:
+            return "پین را بکش و رها کن — موقعیت خودکار ذخیره می‌شود."
+        return "برای جابه‌جایی پین‌ها، «چیدن روی نقشه» را بزن."
+
+    hint = txt(_hint_text(), size=11, font=FONT, color=TEXT_MUTED)
 
     def _apply(d):
         # آمار تست فاصله — ضعیف‌ترین سیگنال دیده‌شده در این نشست
@@ -333,8 +525,12 @@ def map_view(app):
                 if watch["weakest"] is None or rssi < watch["weakest"]:
                     watch["weakest"] = rssi
                     watch["weakest_at"] = time.time()
+        d = d or {}
+        if d.get("ok") and d.get("map_gateways") is not None:
+            src["rows"] = d.get("map_gateways") or []
         _draw_plan(d)
-        live_col.controls = _live_rows(d, watch)
+        live_col.controls = _live_rows(d, watch, src["rows"])
+        list_col.controls = _gateway_rows()
 
     doc = live_status()
     _apply(doc)
@@ -342,8 +538,10 @@ def map_view(app):
     async def _loop():
         while state.get("view") == "map" and state.get("map_gen") == gen:
             try:
-                _apply(live_status())
-                app.page.update()
+                # در حالت چیدن رفرش خودکار خاموش است تا زیر دست کاربر عوض نشود
+                if not edit and not dragging["on"]:
+                    _apply(live_status())
+                    app.page.update()
             except Exception:
                 return
             await asyncio.sleep(2)
@@ -351,29 +549,73 @@ def map_view(app):
     if hasattr(app.page, "run_task"):
         app.page.run_task(_loop)
 
+    def _toggle_edit(e):
+        state["map_edit"] = not bool(state.get("map_edit"))
+        app.render()
+
+    can_edit = bool(src["rows"])
+    edit_btn = ft.Button(
+        "پایان چیدن" if edit else "چیدن روی نقشه",
+        icon=ft.Icons.DRAG_INDICATOR,
+        disabled=not can_edit,
+        tooltip=None if can_edit else "از بخش «گیت‌وی‌ها» گیت‌وی تعریف کن",
+        style=ft.ButtonStyle(
+            bgcolor=BRAND_RED if edit else INK, color=WHITE,
+            shape=ft.RoundedRectangleBorder(radius=8),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=6),
+        ),
+        on_click=_toggle_edit,
+    )
+
+    def _new_gateway(e):
+        open_gateway_form(app, on_saved=lambda: app.render())
+
+    def _open_gateways(e):
+        app.go("gateways")
+
     plan_card = card(stack, pad=10)
 
-    panel = ft.Column([
+    panel_controls = [
         # کارت تست زنده اول — هنگام راه‌رفتن بدون اسکرول دیده شود
         card(ft.Column([
             txt("وضعیت زنده و تست فاصله", size=14, font=FONT_B, color=INK),
             live_col,
         ], spacing=7), pad=14),
-        _legend_card(),
         card(ft.Column([
-            txt("نقاط نصب گیت‌وی", size=14, font=FONT_B, color=INK),
-            *[_gw_row(i, item) for i, item in enumerate(MAP_GATEWAYS, start=1)],
-            txt("موقعیت قطعی پس از تست میدانی تثبیت می‌شود.",
-                size=11, font=FONT, color=TEXT_MUTED),
-        ], spacing=10), pad=14),
-    ], width=296, spacing=12, scroll=ft.ScrollMode.AUTO)
+            ft.Row([
+                txt("گیت‌وی‌ها و چیدمان", size=14, font=FONT_B, color=INK),
+                ft.Container(expand=True),
+                edit_btn,
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            hint,
+            list_col,
+            ft.Row([
+                ft.TextButton("گیت‌وی جدید", icon=ft.Icons.ADD_LOCATION_ALT,
+                              on_click=_new_gateway),
+                ft.TextButton("بخش گیت‌وی‌ها", icon=ft.Icons.ROUTER,
+                              on_click=_open_gateways),
+            ], spacing=2),
+        ], spacing=8), pad=14),
+        _legend_card(),
+    ]
 
     header = section_header(
         "نقشهٔ کارخانه",
-        "پلان کارخانه روزتاش — گیت‌وی‌های نصب‌شده «سالن فیلتر ۱» و «انبار محصولات»؛ "
-        "مچ‌بندهای در دید هر ۲ ثانیه زیر گیت‌وی مربوطه نقطه می‌گیرند.",
+        "پلان کارخانه روزتاش — گیت‌وی‌ها از دفتر پل می‌آیند و مچ‌بندهای در دید "
+        "هر ۲ ثانیه زیر گیت‌وی مربوطه نقطه می‌گیرند؛ با «چیدن روی نقشه» "
+        "پین‌ها را جابه‌جا کن.",
     )
 
+    if is_phone(app):
+        # موبایل: نقشهٔ تمام‌عرض بالا، کارت‌ها زیر آن — یک ستون اسکرول‌دار
+        return ft.Column([
+            header,
+            ft.Container(content=plan_card, alignment=ft.Alignment.CENTER),
+            *panel_controls,
+        ], spacing=14, expand=True, scroll=ft.ScrollMode.AUTO)
+
+    panel = ft.Column(panel_controls, width=296, spacing=12,
+                      scroll=ft.ScrollMode.AUTO)
     return ft.Column([
         header,
         ft.Row([
