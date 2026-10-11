@@ -22,8 +22,10 @@ from theme import (
 from data import (
     delete_employee, live_bands, live_catalogs, photo_src, save_employee,
 )
+from layout import dialog_w
 
 SHIFTS = ("صبح", "عصر", "شب")
+_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 _MAX_UP = 1_200_000  # سقف پس از کوچک‌سازی — پل تا ۱.۶ مگابایت می‌پذیرد
 
 
@@ -38,9 +40,10 @@ def _dialog(app, title, controls, error_txt, on_confirm,
             confirm_label="ثبت", confirm_color=INK, tall=False):
     """بدنهٔ مشترک دیالوگ‌ها — ساخت AlertDialog و نمایش."""
     col = ft.Column([*controls, error_txt], spacing=10, tight=True)
-    body = ft.Container(width=380, content=col)
+    body = ft.Container(width=dialog_w(app), content=col)
     if tall:
-        body.height = 470
+        ph = int(getattr(app.page, "height", None) or 700)
+        body.height = max(260, min(470, ph - 220))
         col.scroll = ft.ScrollMode.AUTO
     dlg = ft.AlertDialog(
         modal=True,
@@ -197,6 +200,9 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
     age_f = ft.TextField(
         label="سن", value=(str(emp["age"]) if emp.get("age") else ""),
         text_size=13, width=120, keyboard_type=ft.KeyboardType.NUMBER,
+        input_filter=ft.InputFilter(
+            allow=True, regex_string=r"[0-9۰-۹٠-٩]",
+            replacement_string=""),
         hint_text="مثلاً ۳۴")
     dept_f = _cat_field(catalogs, "unit", "واحد", emp.get("dept"))
     line_f = _cat_field(catalogs, "line", "خط", emp.get("line"))
@@ -335,10 +341,17 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
                  if band_dd is not None else
                  "مک مچ‌بند لازم است — نمونه: f3:b6:d6:b7:47:d7")
             return
+        age_val = (age_f.value or "").strip().translate(_FA_DIGITS)
+        if age_val and not age_val.isdigit():
+            _err("سن باید فقط عدد باشد — مثلاً ۳۴")
+            return
+        if len(age_val) > 3:
+            _err("سن باید حداکثر ۳ رقم باشد")
+            return
         payload = {
             "mac": mac_val, "name": name,
             "company": (company_f.value or "").strip(),
-            "age": (age_f.value or "").strip(),
+            "age": age_val,
             "dept": (dept_f.value or "").strip(),
             "line": (line_f.value or "").strip(),
             "role": (role_f.value or "").strip(),
