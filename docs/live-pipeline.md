@@ -14,6 +14,8 @@
 - `src/views/live.py` — صفحهٔ «پایش زنده»: کارت‌های شاخص، نمودار سیگنال، خوراک رویداد. هر ثانیه تازه می‌شود.
 - `src/views/dashboard.py` — نوار زنده در بالای داشبورد.
 - `src/views/employees.py` — بخش «کارکنان»: فهرست زندهٔ دفتر + مچ‌بندهای ثبت‌نشدهٔ در دید؛ افزودن، ثبت و حذف.
+- `src/views/bands.py` — بخش «مچ‌بندها»: دفتر مچ‌بندها (برچسب/یادداشت)، وضعیت دید، تخصیص کارکن.
+- `src/views/definitions.py` — بخش «تعاریف پایه»: شرکت (با زیرشرکت)، واحد، خط، سمت.
 - `src/views/employee_detail.py` — پروفایل کارکن متصل به پل (شناسه = مک) در کنار مسیر نمایشی شناسه‌های عددی.
 - `src/components/employee_form.py` — فرم مشترک ثبت/ویرایش کارکن و دیالوگ تأیید حذف.
 - `src/main.py` — نشان اتصال نوار بالا؛ از وضعیت واقعی پل پر می‌شود.
@@ -42,6 +44,9 @@
 - `GET /api/employees` — دفتر خام کارکنان (بدون ادغام دادهٔ زنده)
 - `POST /api/employees` — ثبت/ویرایش کارکن: بدنهٔ `{"mac":"f3:...","name":"...","dept":"...","role":"...","shift":"صبح","note":""}` — نام و مک اجباری
 - `DELETE /api/employees?mac=f3:...` (یا `DELETE /api/employees/<mac>`) — حذف کارکن
+- `GET /api/bands` — دفتر مچ‌بندها؛ `POST /api/bands` ثبت/ویرایش (بدنهٔ `{"mac":"f3:...","label":"...","note":""}`)؛ `DELETE /api/bands?mac=…` یا `/api/bands/<mac>` — مچ‌بند تخصیص‌داده‌شده حذف نمی‌شود (`assigned`)
+- `GET /api/catalogs` — تعاریف پایه به تفکیک نوع (`company`, `unit`, `line`, `role`)؛ `POST /api/catalogs` (بدنهٔ `{"kind":"company","name":"...","parent_id":…}` برای زیرشرکت)؛ `DELETE /api/catalogs/<id>` — والد دارای زیرشرکت حذف نمی‌شود (`has children`)
+- `GET /api/photo/<mac>` — عکس پرسنلی (فایل در `backend/state/photos/`)؛ در `POST /api/employees` فیلد `photo` با data URI تصویری یا رشتهٔ خالی برای پاک‌کردن
 
 ## حیاتی‌های دستگاه — `vitals`
 
@@ -72,7 +77,7 @@
 
 ## دفتر کارکنان — نگاشت مک مچ‌بند ↔ کارکن
 
-- کلید هر کارکن، **مک مچ‌بند** است؛ فقط نام اجباری است و بقیهٔ فیلدها اختیاری‌اند: `dept`, `role`, `shift`, `note`.
+- کلید هر کارکن، **مک مچ‌بند** است؛ فقط نام اجباری است و بقیهٔ فیلدها اختیاری‌اند: `company`, `dept`, `line`, `role`, `shift`, `note`, `age` (۱..۱۲۰)، `conditions`, `medications`, `photo`.
 - ثبت از خود برنامه انجام می‌شود (دکمهٔ «افزودن کارکن» یا «ثبت کارکن» روی مچ‌بند ثبت‌نشده) یا با curl:
 
 ```json
@@ -89,6 +94,7 @@
   اگر پل در دسترس نباشد، فهرست به حالت نمایشی برمی‌گردد و بنر «دادهٔ نمایشی» بالای صفحه ظاهر می‌شود.
 - بخش‌هایی که هنوز دادهٔ واقعی ندارند (تاریخچهٔ حضور، ساعات کار) در پروفایل با کارت توضیح مشخص شده‌اند — نه دادهٔ نمایشی.
 - حذف کارکن یعنی فقط قطع نگاشت؛ خود مچ‌بند اگر در دید باشد «ثبت‌نشده» می‌ماند تا به کارکن تازه‌ای وصل شود.
+- `snapshot["bands_known"]` = ادغام دفتر مچ‌بندها + مچ‌بندهای در دید + تخصیص کارکنان (با `employee_name`)؛ `snapshot["catalogs"]` = تعاریف پایه.
 
 ## قواعد زمانی
 
@@ -109,6 +115,8 @@
 
     python3 tests/test_bridge.py          # بدون شبکه: ingest، snapshot، TTL، دفتر کارکنان
     uv run python tests/test_employees_ui.py  # بخش کارکنان با دادهٔ زندهٔ شبیه‌سازی‌شده
+    uv run python tests/test_bands_ui.py      # بخش مچ‌بندها
+    uv run python tests/test_definitions_ui.py  # بخش تعاریف پایه
     uv run python scripts/smoke_ui.py     # ساخت همهٔ صفحه‌ها بدون GUI — با و بدون پل
     ROZTASH_LIVE=0 uv run python scripts/smoke_ui.py
     uv run python tests/test_multidev_ui.py   # چند-دستگاهی: دو گیت‌وی و دو مچ‌بند ساختگی
