@@ -77,13 +77,13 @@
 - `ROZTASH_BRIDGE_PORT` — پیش‌فرض `8726`
 - `ROZTASH_BRIDGE_DB` — پیش‌فرض `backend/state/live.db`
 - `ROZTASH_PRESENCE_TTL` / `ROZTASH_HEALTH_TTL` / `ROZTASH_VITALS_TTL` / `ROZTASH_GATEWAY_ONLINE_TTL`
-- در برنامه: `ROZTASH_LIVE=auto|1|0`، `ROZTASH_BRIDGE=http://127.0.0.1:8726` و `ROZTASH_VIEW=live` برای باز شدن روی نمای پایش زنده
+- در برنامه: `ROZTASH_LIVE=auto|1|0`، `ROZTASH_BRIDGE=http://127.0.0.1:8726` و `ROZTASH_VIEW=live` برای باز شدن روی نمای پایش زنده — املای `ROSETASH_*` هم پذیرفته می‌شود
 
 ## تست
 
     python3 tests/test_bridge.py          # بدون شبکه: ingest، snapshot، TTL
     uv run python scripts/smoke_ui.py     # ساخت همهٔ صفحه‌ها بدون GUI — با و بدون پل
-    ROSETASH_LIVE=0 uv run python scripts/smoke_ui.py
+    ROZTASH_LIVE=0 uv run python scripts/smoke_ui.py
 
 ## دمو بدون مچ‌بند
 

@@ -262,6 +262,28 @@ def live_view(app):
         ft.Container(expand=True, content=step_card),
     ], spacing=14)
 
+    # ── کارت دستگاه‌ها: همهٔ گیت‌وی‌ها و مچ‌بندهای در دید ──
+    gw_list_col = ft.Column([], spacing=8)
+    band_list_col = ft.Column([], spacing=8)
+    devices_count = txt("—", size=11, font=FONT, color=TEXT_MUTED)
+    devices_card = card(ft.Column([
+        ft.Row([
+            txt("گیت‌وی‌ها و مچ‌بندهای در دید", size=15, font=FONT_SB, color=INK),
+            ft.Container(expand=True),
+            devices_count,
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ft.Row([
+            ft.Container(expand=True, content=ft.Column([
+                txt("گیت‌وی‌ها", size=12, font=FONT_MED, color=TEXT_MUTED),
+                gw_list_col,
+            ], spacing=6)),
+            ft.Container(expand=True, content=ft.Column([
+                txt("مچ‌بندها", size=12, font=FONT_MED, color=TEXT_MUTED),
+                band_list_col,
+            ], spacing=6)),
+        ], spacing=18, vertical_alignment=ft.CrossAxisAlignment.START),
+    ], spacing=10))
+
     # ── نمودار سیگنال ──
     bars_row = ft.Row([], spacing=2, height=64,
                       vertical_alignment=ft.CrossAxisAlignment.END)
@@ -318,7 +340,11 @@ def live_view(app):
             rssi = b.get("rssi")
             band_value.value = fa_num(round(rssi)) if rssi is not None else "—"
             band_value.color = _rssi_color(rssi)
-            band_sub.value = f"دیده می‌شود — {_rel(b.get('age_s'))}"
+            if len(bands) > 1:
+                band_sub.value = (f"{fa_num(len(bands))} مچ‌بند در دید — "
+                                  f"تازه‌ترین {_rel(b.get('age_s'))}")
+            else:
+                band_sub.value = f"دیده می‌شود — {_rel(b.get('age_s'))}"
             band_sub.color = OK
         else:
             band_value.value = "—"
@@ -419,9 +445,14 @@ def live_view(app):
             step_value.value = "—"
             step_value.color = INK
 
-        # گیت‌وی
+        # گیت‌وی — با چند گیت‌وی، شمار آنلاین‌ها و فهرست کامل در کارت پایین
         gws = (d or {}).get("gateways") or []
-        if gws:
+        if len(gws) > 1:
+            online_n = sum(1 for g in gws if g.get("online"))
+            gw_value.value = f"{fa_num(online_n)} از {fa_num(len(gws))}"
+            gw_value.color = INK if online_n else OFFLINE
+            gw_sub.value = "گیت‌وی آنلاین — جزئیات هر گیت‌وی در فهرست پایین"
+        elif gws:
             g = gws[0]
             gw_value.value = str(g.get("fw", "—"))
             gw_value.color = INK if g.get("online") else OFFLINE
@@ -433,6 +464,16 @@ def live_view(app):
         else:
             gw_value.value = "—"
             gw_value.color = OFFLINE
+
+        # فهرست کامل دستگاه‌ها — پشتیبانی از چند گیت‌وی و چند مچ‌بند
+        devices_count.value = (f"{fa_num(len(gws))} گیت‌وی — "
+                               f"{fa_num(len(bands))} مچ‌بند")
+        gw_list_col.controls = ([_gw_row(g) for g in gws] if gws else
+                                [txt("هنوز گیت‌ویی ثبت نشده…", size=12,
+                                     font=FONT, color=TEXT_MUTED)])
+        band_list_col.controls = ([_band_row(b) for b in bands] if bands else
+                                  [txt("مچ‌بندی در دید نیست", size=12,
+                                       font=FONT, color=TEXT_MUTED)])
 
         # نمودار سیگنال
         bars = []
@@ -508,6 +549,7 @@ def live_view(app):
                        trailing=conn_chip),
         kpi_row,
         vitals_row,
+        devices_card,
         chart_card,
         feed_card,
     ], spacing=14, expand=True, scroll=ft.ScrollMode.AUTO)

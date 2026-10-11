@@ -51,7 +51,9 @@ class App:
         self.page = page
         # ROZTASH_VIEW=live → برنامه روی نمای پایش زنده باز می‌شود
         # (برای نمایشگر کنار خط تولید که همیشه باید همان نما را نشان دهد)
-        initial = os.environ.get("ROZTASH_VIEW", "dashboard")
+        # املای ROSETASH_VIEW هم پذیرفته می‌شود
+        initial = (os.environ.get("ROZTASH_VIEW")
+                   or os.environ.get("ROSETASH_VIEW") or "dashboard")
         if initial not in BUILDERS:
             initial = "dashboard"
         self.state = {
@@ -134,9 +136,11 @@ def main(page: ft.Page):
 
     # ── اندازهٔ پیش‌فرض پنجره (دسکتاپ) ──
     # در حالت تور اسکرین‌شات می‌توان با ROSETASH_SHOT_H ارتفاع را بلندتر گرفت
+    # (املای ROZTASH_SHOT_H هم پذیرفته می‌شود)
     try:
         page.window.width = 1340
-        page.window.height = int(os.environ.get("ROSETASH_SHOT_H", "720"))
+        page.window.height = int(os.environ.get("ROSETASH_SHOT_H")
+                                 or os.environ.get("ROZTASH_SHOT_H") or "720")
     except Exception:
         pass
 
@@ -190,7 +194,8 @@ def main(page: ft.Page):
     app.render()
 
     # ── تورِ اسکرین‌شات خودکار (فقط در حالت توسعه) ──
-    shot_dir = os.environ.get("ROSETASH_SHOT_DIR")
+    shot_dir = (os.environ.get("ROSETASH_SHOT_DIR")
+                or os.environ.get("ROZTASH_SHOT_DIR"))
     if shot_dir and hasattr(page, "run_task"):
         page.enable_screenshots = True
 

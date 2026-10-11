@@ -53,6 +53,19 @@ def _live_strip(live):
     hr_lbl = (f"آخرین ضربان — {_ago(health.get('age_s'))}" if hbpm is not None
               else "آخرین ضربان")
 
+    # با چند گیت‌وی یا چند مچ‌بند، چیپ‌ها شمارشی می‌شوند
+    n_gw = live.get("gateways_count") or 0
+    n_band = live.get("bands_count") or 0
+    if n_gw > 1:
+        gw_chip = chip(f"{fa_num(n_gw)} گیت‌وی",
+                       f"{fa_num(live.get('gateways_online') or 0)} آنلاین")
+    else:
+        gw_chip = chip(gw.get("gw") or "—", f"گیت‌وی — {gw.get('ip') or '—'}")
+    if n_band > 1:
+        band_chip = chip(f"{fa_num(n_band)} مچ‌بند", "در دید")
+    else:
+        band_chip = chip(band.get("mac") or "در دید نیست", band_lbl)
+
     return ft.Container(
         content=ft.Row([
             ft.Row([
@@ -61,8 +74,8 @@ def _live_strip(live):
                     size=12, font=FONT_MED, color="#1E8E4E" if online else TEXT_MUTED),
             ], spacing=6, tight=True),
             ft.Container(width=1, height=28, bgcolor=BORDER),
-            chip(gw.get("gw") or "—", f"گیت‌وی — {gw.get('ip') or '—'}"),
-            chip(band.get("mac") or "در دید نیست", band_lbl),
+            gw_chip,
+            band_chip,
             chip(hr_txt, hr_lbl),
         ], spacing=16, vertical_alignment=ft.CrossAxisAlignment.CENTER),
         bgcolor=WHITE, border=ft.Border.all(1, BORDER), border_radius=12,

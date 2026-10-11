@@ -8,10 +8,10 @@
   - فقط کتابخانهٔ استاندارد پایتون
   - هرگز استثنا به بیرون نمی‌دهد؛ اگر پل نبود None برمی‌گرداند
   - نتیجه چند ثانیه کش می‌شود تا رابط کاربری سرور را اذیت نکند
-  - متغیرهای محیطی:
-      ROSETASH_LIVE=0   خاموش کردن حالت زنده
-      ROSETASH_BRIDGE   آدرس پل، پیش‌فرض http://127.0.0.1:8726
-      ROSETASH_LIVE_TTL عمر کش به ثانیه، پیش‌فرض ۴
+  - متغیرهای محیطی (هر دو املای ROZTASH_* و ROSETASH_* پذیرفته می‌شود):
+      ROZTASH_LIVE=0   خاموش کردن حالت زنده
+      ROZTASH_BRIDGE   آدرس پل، پیش‌فرض http://127.0.0.1:8726
+      ROZTASH_LIVE_TTL عمر کش به ثانیه، پیش‌فرض ۴
 """
 from __future__ import annotations
 
@@ -20,9 +20,20 @@ import os
 import time
 import urllib.request
 
-BRIDGE = os.environ.get("ROZTASH_BRIDGE", "http://127.0.0.1:8726")
-MODE = os.environ.get("ROZTASH_LIVE", "auto")
-CACHE_TTL = float(os.environ.get("ROZTASH_LIVE_TTL", "4"))
+
+def _env(*names, default: str = "") -> str:
+    """نخستین متغیر محیطی موجود — پذیرش هر دو املای ROZTASH/ROSETASH."""
+    for n in names:
+        v = os.environ.get(n)
+        if v is not None:
+            return v
+    return default
+
+
+BRIDGE = _env("ROZTASH_BRIDGE", "ROSETASH_BRIDGE",
+              default="http://127.0.0.1:8726")
+MODE = _env("ROZTASH_LIVE", "ROSETASH_LIVE", default="auto")
+CACHE_TTL = float(_env("ROZTASH_LIVE_TTL", "ROSETASH_LIVE_TTL", default="4"))
 
 _cache: dict = {"t": 0.0, "doc": None}
 _cached_once = False
@@ -78,6 +89,9 @@ def live_summary():
         "band": band,
         "health": health,
         "vitals": vitals,
+        "gateways_count": len(gateways),
+        "gateways_online": sum(1 for g in gateways if g.get("online")),
+        "bands_count": len(bands),
     }
 
 
