@@ -6,6 +6,7 @@
 //   /health     finished measurement: {mac, bpm[], n, avg, wearing, ended, state}
 //   /vitals     battery percent, device info and raw SpO2/HRV frames (same job)
 //   /event      errors worth surfacing: wearing_error, connect_fail, ...
+//   /cmd        SUBSCRIBED — remote commands: {"action":"vibrate","mac":"..."}
 #pragma once
 
 #include <Arduino.h>
@@ -28,6 +29,9 @@ class MqttLink {
   void publishVitals(const BleCentral& ble);
   void publishEvent(const char* type, const char* mac, const char* detail);
 
+  // Remote commands from roztash/<gw>/cmd — consume-once.
+  bool takeCommand(char* action, size_t action_cap, char* mac, size_t mac_cap);
+
  private:
   bool send(const char* topic, const char* payload, bool retained,
             bool queue_if_offline);
@@ -40,4 +44,7 @@ class MqttLink {
   char base_[40] = {0};
   uint32_t last_wifi_attempt_ms_ = 0;
   uint32_t last_mqtt_attempt_ms_ = 0;
+  char cmd_action_[16] = {0};
+  char cmd_mac_[20] = {0};
+  volatile bool cmd_pending_ = false;
 };

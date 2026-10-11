@@ -79,3 +79,26 @@ def live_summary():
         "health": health,
         "vitals": vitals,
     }
+
+
+def send_vibrate(mac: str | None = None, timeout: float = 2.5) -> tuple[bool, str]:
+    """فرمان لرزاندن مچ‌بند را از راه پل به گیت‌وی می‌دهد.
+
+    mac خالی باشد، پل خودش مچ‌بند شناخته‌شده را پیدا می‌کند. برمی‌گرداند
+    (ok، پیام کوتاه برای نمایش)؛ هرگز استثنا بیرون نمی‌دهد.
+    """
+    if MODE == "0":
+        return False, "حالت زنده خاموش است"
+    body = json.dumps({"action": "vibrate",
+                       "mac": (mac or "").strip().lower()}).encode("utf-8")
+    req = urllib.request.Request(
+        BRIDGE + "/api/command", data=body,
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            doc = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return False, "پل پاسخ نداد"
+    if doc.get("ok"):
+        return True, "فرمان لرزاندن رفت — اگر روی دست باشد می‌لرزد"
+    return False, str(doc.get("error") or "فرمان نرسید")

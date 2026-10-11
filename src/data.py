@@ -31,4 +31,4 @@ from mock_data import (  # noqa: F401
 # ── فاز ۲: دادهٔ زندهٔ گیت‌وی از طریق پل محلی ──
 # views هرگز مستقیم به live نباید وصل شوند؛ اگر به دادهٔ زندهٔ بیشتری
 # نیاز باشد، تابع تازه‌ای همین‌جا ساخته می‌شود.
-from live import live_available, live_status, live_summary  # noqa: E402,F401
+from live import live_available, live_status, live_summary, send_vibrate  # noqa: E402,F401

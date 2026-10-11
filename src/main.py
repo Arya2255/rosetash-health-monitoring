@@ -19,7 +19,7 @@ from theme import (  # noqa: E402
     BORDER, FONT, FONT_MED, FONTS, INK, PAGE_BG, TEXT_MAIN, TEXT_MUTED, WHITE,
     fa_clock, fa_date, txt,
 )
-from data import ALERTS_ACTIVE, live_available  # noqa: E402
+from data import ALERTS_ACTIVE, live_available, live_status, send_vibrate  # noqa: E402
 from components.sidebar import build_sidebar  # noqa: E402
 from views.dashboard import dashboard_view  # noqa: E402
 from views.live import live_view  # noqa: E402
@@ -76,7 +76,24 @@ class App:
     def set_siren(self, on: bool):
         self.siren_on = on
         self.snack("آژیر مرکزی فعال شد" if on else "آژیر مرکزی خاموش شد")
+        if on:
+            self._vibrate_present_band()
         self.render()
+
+    def _vibrate_present_band(self):
+        """هنگام روشن‌شدن آژیر، مچ‌بند کارکنِ در دید را می‌لرزاند.
+
+        هشدار مستقیم به خود کارکن — بهترین تلاش، بی‌صدا اگر چیزی نبود.
+        """
+        try:
+            d = live_status() or {}
+            rows = d.get("bands") or d.get("health") or d.get("vitals") or []
+            mac = rows[0].get("mac") if rows else ""
+            if mac:
+                send_vibrate(mac)
+                self.snack("مچ‌بند کارکن هم به لرزش افتاد")
+        except Exception:
+            pass
 
     def close_alert(self, alert_id):
         self.alerts_active = [a for a in self.alerts_active if a["id"] != alert_id]

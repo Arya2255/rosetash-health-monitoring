@@ -5,6 +5,8 @@
 //   B) periodic "health windows": each known band is connected in turn, a
 //      heart-rate measurement is started and its samples are collected, then
 //      the band is released (disconnected) so advertising resumes.
+//   C) remote commands on roztash/<gw>/cmd — currently "vibrate" (find-device):
+//      connect, send (05,50), the band buzzes and acks, disconnect.
 //
 // Reference docs: docs/gateway-design.md, docs/band-protocol.md.
 // Toolchain: arduino-cli + esp32 core 3.x + NimBLE-Arduino >= 2.1,
@@ -18,7 +20,7 @@
 #include "config.h"
 #include "mqtt_link.h"
 
-static const char* kFwVersion = "0.1.4-vitals";
+static const char* kFwVersion = "0.1.5-vibrate";
 
 // SpO2 + HRV stages run only every Nth health window: three PPG measurements
 // back to back on every window would drain the band's battery. Battery and
@@ -110,16 +112,41 @@ void loop() {
   }
   if (!ble.healthBusy()) {
     if (ble.jobFinished()) {
-      mqtt.publishHealth(ble);
-      mqtt.publishVitals(ble);  // battery / device info / SpO2+HRV frames
-      if (ble.state() == BleCentral::JobState::Failed)
-        mqtt.publishEvent("measure_fail", ble.jobMac(), "");
-      else if (!ble.wearingOk())
-        mqtt.publishEvent("wearing_error", ble.jobMac(), "");
+      if (ble.wasVibrate()) {
+        mqtt.publishEvent(ble.vibrated() ? "vibrated" : "vibrate_fail", ble.jobMac(),
+                          "");
+        Serial.printf("[gw] vibrate result: ack=%d\n", (int)ble.vibrated());
+      } else {
+        mqtt.publishHealth(ble);
+        mqtt.publishVitals(ble);  // battery / device info / SpO2+HRV frames
+        if (ble.state() == BleCentral::JobState::Failed)
+          mqtt.publishEvent("measure_fail", ble.jobMac(), "");
+        else if (!ble.wearingOk())
+          mqtt.publishEvent("wearing_error", ble.jobMac(), "");
+      }
       ble.clearJob();
-    } else if (window_active && !pickNextBand()) {
-      window_active = false;  // every candidate attempted
-      Serial.println("[gw] health window closed");
+    } else {
+      if (window_active && !pickNextBand()) {
+        window_active = false;  // every candidate attempted
+        Serial.println("[gw] health window closed");
+      }
+      // D) remote commands (vibrate) — run whenever no measurement is in flight
+      if (!window_active) {
+        char act[16] = {0};
+        char cmac[20] = {0};
+        if (mqtt.takeCommand(act, sizeof act, cmac, sizeof cmac)) {
+          if (strcmp(act, "vibrate") == 0 && cmac[0]) {
+            if (!ble.startVibrate(cmac))
+              mqtt.publishEvent("cmd_reject", cmac, "vibrate: not seen or busy");
+            else
+              Serial.printf("[gw] vibrate command -> %s\n", cmac);
+          } else if (strcmp(act, "vibrate") == 0) {
+            mqtt.publishEvent("cmd_reject", cmac, "vibrate: missing mac");
+          } else {
+            mqtt.publishEvent("cmd_unknown", cmac, act);
+          }
+        }
+      }
     }
   }
 

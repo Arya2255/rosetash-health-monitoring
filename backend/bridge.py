@@ -121,15 +121,22 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
                       (ts, gw, "presence", None, payload))
         elif leaf == "status":
-            c.execute(
-                "INSERT INTO gateways(gw,zone,fw,ip,rssi,uptime_s,bands_seen,adv_seen,last_seen,payload) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(gw) DO UPDATE SET zone=excluded.zone, fw=excluded.fw, "
-                "ip=excluded.ip, rssi=excluded.rssi, uptime_s=excluded.uptime_s, "
-                "bands_seen=excluded.bands_seen, adv_seen=excluded.adv_seen, "
-                "last_seen=excluded.last_seen, payload=excluded.payload",
-                (gw, doc.get("zone"), doc.get("fw"), doc.get("ip"), doc.get("rssi"),
-                 doc.get("uptime_s"), doc.get("bands_seen"), doc.get("adv_seen"), ts, payload))
+            # پیام LWT (آفلاین) نه فیلدها را بازنویسی می‌کند نه تازگی می‌سازد —
+            # وگرنه بازپخش retained بعد از ری‌استارت پل، گیت‌وی را آنلاین جلوه می‌دهد.
+            if doc.get("online") is False:
+                c.execute(
+                    "INSERT INTO gateways(gw,last_seen) VALUES(?,0.0) "
+                    "ON CONFLICT(gw) DO UPDATE SET last_seen=0.0", (gw,))
+            else:
+                c.execute(
+                    "INSERT INTO gateways(gw,zone,fw,ip,rssi,uptime_s,bands_seen,adv_seen,last_seen,payload) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(gw) DO UPDATE SET zone=excluded.zone, fw=excluded.fw, "
+                    "ip=excluded.ip, rssi=excluded.rssi, uptime_s=excluded.uptime_s, "
+                    "bands_seen=excluded.bands_seen, adv_seen=excluded.adv_seen, "
+                    "last_seen=excluded.last_seen, payload=excluded.payload",
+                    (gw, doc.get("zone"), doc.get("fw"), doc.get("ip"), doc.get("rssi"),
+                     doc.get("uptime_s"), doc.get("bands_seen"), doc.get("adv_seen"), ts, payload))
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
                       (ts, gw, "status", None, payload))
         elif leaf == "health":
@@ -274,6 +281,57 @@ def subscriber_loop() -> None:
         time.sleep(2)
 
 
+# ──────────────────────── فرمان‌های خروجی (vibrate) ────────────────────────
+
+ACTIONS = {"vibrate"}
+
+
+def publish(topic: str, payload: str) -> tuple[bool, str]:
+    """انتشار یک پیام روی بروکر — برای فرمان‌های خروجی مثل لرزاندن مچ‌بند."""
+    try:
+        p = subprocess.run(
+            ["mosquitto_pub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
+             "-t", topic, "-m", payload],
+            capture_output=True, text=True, timeout=5)
+        if p.returncode == 0:
+            return True, "sent"
+        return False, (p.stderr or p.stdout or "mosquitto_pub failed").strip()[:200]
+    except Exception as exc:  # noqa: BLE001 — هر خطای اجرا به پاسخ برمی‌گردد
+        return False, repr(exc)[:200]
+
+
+def command(doc: dict) -> tuple[bool, str, dict]:
+    """فرمان را روی roztash/<gw>/cmd منتشر می‌کند؛ گیت‌وی همان مچ‌بند را می‌فرستد.
+
+    برمی‌گرداند: (ok، متن خطا، اطلاعات مسیر). مچ‌بند ناشناس باشد، سراغ
+    تازه‌ترین گیت‌وی می‌رود.
+    """
+    action = str((doc or {}).get("action") or "").strip()
+    mac = str((doc or {}).get("mac") or "").strip().lower()
+    gw = str((doc or {}).get("gw") or "").strip()
+    if action not in ACTIONS:
+        return False, "unknown action", {}
+    with _lock:
+        if not gw:
+            row = db().execute("SELECT gw FROM bands WHERE mac = ?",
+                               (mac,)).fetchone()
+            if row:
+                gw = row["gw"]
+        if not gw:
+            row = db().execute(
+                "SELECT gw FROM gateways ORDER BY last_seen DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                gw = row["gw"]
+    if not gw:
+        return False, "no gateway known yet", {}
+    topic = f"roztash/{gw}/cmd"
+    payload = json.dumps({"action": action, "mac": mac}, ensure_ascii=False)
+    ok, detail = publish(topic, payload)
+    log(f"command {action} mac={mac or '-'} gw={gw}: {detail}")
+    return ok, ("" if ok else detail), {"gw": gw, "topic": topic, "payload": payload}
+
+
 # ───────────────────────────── HTTP ─────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
@@ -300,6 +358,21 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "events": snap["events"]})
         else:
             self._send(404, {"ok": False, "error": "not found"})
+
+    def do_POST(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        if path != "/api/command":
+            self._send(404, {"ok": False, "error": "not found"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            doc = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            self._send(400, {"ok": False, "error": "bad json body"})
+            return
+        ok, err, info = command(doc)
+        self._send(200 if ok else 400,
+                   {"ok": ok, "info": info, "error": err or None})
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002 — امضای والد
         return

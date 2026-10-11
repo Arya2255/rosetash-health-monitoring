@@ -31,6 +31,11 @@ constexpr uint8_t SUB_REALTIME_SPO2 = 0xB2;  // SpO2 result frame, payload 7 byt
 constexpr uint8_t CMD_BATTERY       = 0x04;
 constexpr uint8_t SUB_BATTERY       = 0x41;  // data = [percent, state]
 
+// find-device (vibration) — verified live 2026-10-11: sends (05,50) with an
+// empty payload, the band answers (05,50,[00]) and vibrates
+constexpr uint8_t CMD_FIND_DEVICE   = 0x05;
+constexpr uint8_t SUB_FIND_DEVICE   = 0x50;
+
 // realtime report mode (A6 05 request → A6 06 [1] ack; band pushes A6 AB / A6 AC)
 constexpr uint8_t CMD_REPORT        = 0xA6;
 constexpr uint8_t SUB_REPORT_START  = 0x05;

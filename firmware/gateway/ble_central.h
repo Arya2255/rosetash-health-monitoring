@@ -48,6 +48,10 @@ class BleCentral {
   // and HRV measurement stages after the heart-rate stage; battery and device
   // information are always read right after connecting.
   bool startHealth(const char* mac, bool vitals = false);
+  // Connects, sends (05,50) and disconnects: makes the band vibrate (find-device).
+  bool startVibrate(const char* mac);
+  bool wasVibrate() const { return vibrate_mode_; }
+  bool vibrated() const { return vibrated_; }
   void poll();                        // drives measure timeout; call from loop()
 
   // finished-job accessors — valid until clearJob()
@@ -130,7 +134,12 @@ class BleCentral {
   uint8_t stage_end_type_ = 0;
   Vitals vitals_;
 
+  // vibrate job (find-device): reuses the connect/subscribe path
+  bool vibrate_mode_ = false;
+  bool vibrated_ = false;
+
   bool sendMeasureStart(uint8_t type);
+  bool beginJob(const char* mac);   // shared connect+subscribe preamble
   void readDeviceInfo();
   void advanceStage();
   static void addRaw(RawFrame* arr, uint8_t& count, const fundo::Parsed& p);

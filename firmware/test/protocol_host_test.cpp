@@ -60,6 +60,8 @@ int main() {
       {"BA31000533EE0002A7001F0000", 0xA7, 0x1F, 0},
       // battery push: 0x47 = 71%
       {"BA310007710A470004004100024700", 0x04, 0x41, 2},
+      // ack of the find-device / vibrate command (05,50) — live 2026-10-11
+      {"BA3100060B1B0000050050000100", 0x05, 0x50, 1},
   };
   for (const auto& c : rx) {
     auto raw = fromHex(c.hex);
@@ -90,6 +92,13 @@ int main() {
   n = fundo::buildFrame(2, 0xA7, 0x1F, nullptr, 0, buf);
   expect(toHex(buf, n) == "BA21000533EE0002A7001F0000",
          "build (A7,1F) counter=2");
+
+  // find-device (vibrate) — frame verified live 2026-10-11: the band acked
+  // (05,50,[00]) and vibrated (user-confirmed)
+  n = fundo::buildFrame(0, fundo::CMD_FIND_DEVICE, fundo::SUB_FIND_DEVICE,
+                        nullptr, 0, buf);
+  expect(toHex(buf, n) == "BA2100056C9500000500500000",
+         "build (05,50) counter=0");
 
   // ---- round-trip: parse our own built frame ------------------------------
   n = fundo::buildFrame(0x123, 0x02, 0x70, hrStart, 2, buf);

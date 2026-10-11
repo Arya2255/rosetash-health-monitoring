@@ -18,7 +18,7 @@ from theme import (
     FONT, FONT_B, FONT_MED, FONT_SB, INK, OFFLINE, OK, TEXT_MAIN,
     TEXT_MUTED, WARN, fa_clock, fa_num, txt,
 )
-from data import live_status
+from data import live_status, send_vibrate
 from components.common import card, section_header
 
 CHART_LEN = 60          # ستون‌های نمودار
@@ -110,6 +110,37 @@ def _feed_row(at, kind, desc):
     ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
 
+def _device_row(dot_color, title, sub):
+    """یک ردیف دستگاه — نقطهٔ وضعیت، عنوان و شرح."""
+    return ft.Row([
+        ft.Container(width=8, height=8, border_radius=4, bgcolor=dot_color),
+        ft.Column([
+            txt(title, size=13, font=FONT_MED, color=INK),
+            txt(sub, size=11, font=FONT, color=TEXT_MUTED),
+        ], spacing=1, expand=True),
+    ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+
+def _gw_row(g):
+    """ردیف گیتوی — هر تعداد گیتوی ثبت‌شده یک ردیف می‌گیرد."""
+    online = bool(g.get("online"))
+    rssi = g.get("rssi")
+    wifi = fa_num(round(rssi)) if rssi is not None else "—"
+    sub = (f"{'آنلاین' if online else 'آفلاین'} — {g.get('zone') or '—'}"
+           f" — fw {g.get('fw') or '—'} — وای‌فای {wifi}"
+           f" — آپ‌تایم {_dur(g.get('uptime_s'))}")
+    return _device_row(OK if online else OFFLINE, str(g.get("gw") or "—"), sub)
+
+
+def _band_row(b):
+    """ردیف مچ‌بند — هر مچ‌بند در دید یک ردیف می‌گیرد."""
+    rssi = b.get("rssi")
+    rssi_txt = fa_num(round(rssi)) if rssi is not None else "—"
+    sub = (f"آنتن {rssi_txt} — {_rel(b.get('age_s'))}"
+           f" — دیده‌شده توسط {b.get('gw') or '—'}")
+    return _device_row(_rssi_color(rssi), str(b.get("mac") or "—"), sub)
+
+
 def live_view(app):
     state = app.state
     gen = state.get("live_gen", 0) + 1
@@ -130,11 +161,38 @@ def live_view(app):
     # ── کارت ۱: مچ‌بند ──
     band_value = txt("—", size=30, font=FONT, color=OFFLINE)
     band_sub = txt("در انتظار داده…", size=12, font=FONT, color=TEXT_MUTED)
-    band_card = _kpi(
-        "مچ‌بند — سیگنال", ft.Icons.WATCH, INK, "#E9EBEE",
-        ft.Row([band_value, txt("dBm", size=12, font=FONT, color=TEXT_MUTED)],
-               spacing=6, vertical_alignment=ft.CrossAxisAlignment.END),
-        band_sub)
+
+    def _on_vibrate(e):
+        """لرزاندن مچ‌بند از راه پل — فرمان از گیت‌وی به مچ‌بند می‌رسد."""
+        d = live_status(force=True) or {}
+        mac = ""
+        for key in ("bands", "health", "vitals"):
+            rows = d.get(key) or []
+            if rows and rows[0].get("mac"):
+                mac = rows[0]["mac"]
+                break
+        if not mac:
+            app.snack("مچ‌بندی در دید نیست — بعد از دیده‌شدن دوباره امتحان کن")
+            return
+        ok, msg = send_vibrate(mac)
+        gw = (d.get("gateways") or [None])[0]
+        if ok and gw is not None and not gw.get("online"):
+            msg = "فرمان رفت، ولی گیت‌وی آفلاین است — به مچ‌بند نمی‌رسد"
+        app.snack(msg if ok else f"لرزاندن نرسید — {msg}")
+
+    vib_btn = ft.IconButton(
+        icon=ft.Icons.VIBRATION, icon_size=20, icon_color=INK,
+        tooltip="لرزاندن مچ‌بند",
+        on_click=_on_vibrate,
+        style=ft.ButtonStyle(bgcolor="#E9EBEE",
+                             shape=ft.RoundedRectangleBorder(radius=10)),
+    )
+    band_row = ft.Row(
+        [band_value, txt("dBm", size=12, font=FONT, color=TEXT_MUTED),
+         ft.Container(expand=True), vib_btn],
+        spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    band_card = _kpi("مچ‌بند — سیگنال", ft.Icons.WATCH, INK, "#E9EBEE", band_row,
+                     band_sub)
 
     # ── کارت ۲: ضربان ──
     hr_value = txt("—", size=30, font=FONT, color=INK)
@@ -405,6 +463,18 @@ def live_view(app):
             if kind == "vitals":
                 entries.append((_epoch(e.get("ts")), "ok",
                                 "باتری و اطلاعات دستگاه به‌روز شد"))
+                continue
+            if kind == "vibrated":
+                entries.append((_epoch(e.get("ts")), "ok",
+                                "مچ‌بند لرزید — فرمان از سیستم"))
+                continue
+            if kind == "vibrate_fail":
+                entries.append((_epoch(e.get("ts")), "warn",
+                                "لرزاندن مچ‌بند ناموفق بود"))
+                continue
+            if kind == "cmd_reject":
+                entries.append((_epoch(e.get("ts")), "warn",
+                                "فرمان رد شد — مچ‌بند در دید گیت‌وی نبود"))
                 continue
             entries.append((_epoch(e.get("ts")), "off", str(kind)))
         entries.sort(key=lambda x: x[0], reverse=True)

@@ -27,6 +27,19 @@ void MqttLink::begin(const GatewayConfig& cfg) {
 
   mqtt_.setServer(cfg_.mqtt_host, cfg_.mqtt_port);
   mqtt_.setBufferSize(2048);  // presence batches can exceed the default 256
+
+  // Remote commands (roztash/<gw>/cmd). The callback runs inside mqtt_.loop()
+  // (single task) — parsing here and handing over via takeCommand() is safe.
+  mqtt_.setCallback([this](char* topic, uint8_t* payload, unsigned int len) {
+    JsonDocument doc;
+    if (deserializeJson(doc, payload, len)) return;
+    const char* action = doc["action"] | "";
+    if (!action[0]) return;
+    strlcpy(cmd_action_, action, sizeof cmd_action_);
+    strlcpy(cmd_mac_, doc["mac"] | "", sizeof cmd_mac_);
+    cmd_pending_ = true;
+    Serial.printf("[mqtt] command received: %s %s\n", cmd_action_, cmd_mac_);
+  });
 }
 
 // --- connection maintenance -------------------------------------------------
@@ -53,12 +66,25 @@ void MqttLink::poll() {
     if (ok) {
       Serial.printf("[mqtt] connected to %s:%u\n", cfg_.mqtt_host,
                     (unsigned)cfg_.mqtt_port);
+      char cmd_topic[48];
+      snprintf(cmd_topic, sizeof cmd_topic, "%s/cmd", base_);
+      mqtt_.subscribe(cmd_topic);
       flushQueue();
     }
     return;
   }
 
   mqtt_.loop();
+}
+
+// Consume-once read of the last received command (callback-set).
+bool MqttLink::takeCommand(char* action, size_t action_cap, char* mac,
+                           size_t mac_cap) {
+  if (!cmd_pending_) return false;
+  cmd_pending_ = false;
+  strlcpy(action, cmd_action_, action_cap);
+  strlcpy(mac, cmd_mac_, mac_cap);
+  return true;
 }
 
 // --- publishing -------------------------------------------------------------

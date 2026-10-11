@@ -78,7 +78,14 @@ def main() -> None:
     assert snap2["health"][0]["avg"] == 76.8, "TTL سلامت نباید ۱۵ دقیقه‌ای پاک شود"
 
     snap2b = bridge.snapshot(now=NOW + 220)
-    assert snap2b["gateways"][0]["online"] is False, "آستانهٔ آنلاین گیتوی کار نکرد"
+    assert snap2b["gateways"][0]["online"] is False, "آستانهٔ آنلاین گیت‌وی کار نکرد"
+
+    # پیام LWT (آفلاین) — بازپخش retained بعد از ری‌استارت پل نباید آنلاین بسازد
+    bridge.ingest(f"roztash/{GW}/status", json.dumps({"gw": GW, "online": False}),
+                  recv_ts=NOW + 230)
+    snap_lwt = bridge.snapshot(now=NOW + 231)
+    assert snap_lwt["gateways"][0]["online"] is False, "LWT نباید وضعیت آنلاین بسازد"
+    assert snap_lwt["gateways"][0]["fw"] == "0.1.3-skeleton", "LWT نباید فیلدهای گیت‌وی را پاک کند"
 
     # TTL سلامت: ۱۵ دقیقه
     snap3 = bridge.snapshot(now=NOW + 1000)
@@ -89,7 +96,28 @@ def main() -> None:
     snap4 = bridge.snapshot(now=NOW + 4000)
     assert snap4["vitals"] == [], "vitals TTL کار نکرد"
 
-    print("bridge tests PASSED — ingest/snapshot/TTL")
+    # ── فرمان خروجی: لرزاندن مچ‌بند ──
+    sent: list[tuple[str, str]] = []
+
+    def fake_publish(topic: str, payload: str) -> tuple[bool, str]:
+        sent.append((topic, payload))
+        return True, "sent"
+
+    bridge.publish = fake_publish  # type: ignore[assignment]
+
+    ok, err, info = bridge.command({"action": "vibrate", "mac": MAC.upper()})
+    assert ok and err == "", "فرمان لرزاندن باید بپذیرد"
+    assert info["topic"] == f"roztash/{GW}/cmd"
+    assert json.loads(info["payload"]) == {"action": "vibrate", "mac": MAC}
+    assert sent[-1][0] == f"roztash/{GW}/cmd", "موضوع انتشار باید cmd باشد"
+
+    ok, err, _ = bridge.command({"action": "selfdestruct"})
+    assert not ok and err == "unknown action", "فرمان ناشناس باید رد شود"
+
+    ok, err, info = bridge.command({"action": "vibrate", "mac": "aa:bb:cc:dd:ee:ff"})
+    assert ok and info["gw"] == GW, "مچ‌بند ناشناس باید سراغ تازه‌ترین گیت‌وی برود"
+
+    print("bridge tests PASSED — ingest/snapshot/TTL/command")
 
 
 if __name__ == "__main__":

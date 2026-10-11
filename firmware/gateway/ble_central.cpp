@@ -170,7 +170,10 @@ NimBLEClient* BleCentral::clientFor(const NimBLEAddress& addr) {
   return c;
 }
 
-bool BleCentral::startHealth(const char* mac, bool vitals) {
+// Shared preamble for both job kinds: take the sighting slot, connect and
+// subscribe to the notify characteristic. On any failure the job is finished
+// as Failed (so the caller only returns false).
+bool BleCentral::beginJob(const char* mac) {
   if (healthBusy()) return false;
   const int slot = findSighting(mac);
   if (slot < 0) return false;
@@ -182,13 +185,6 @@ bool BleCentral::startHealth(const char* mac, bool vitals) {
   ended_ = false;
   fail_ = Fail::None;
   state_ = JobState::Connecting;
-
-  vitals_enabled_ = vitals;
-  vitals_ = Vitals{};
-  stage_ = Stage::Hr;
-  stage_end_type_ = 0;
-  stage_settle_ms_ = 0;
-  stage_started_ms_ = millis();
 
   NimBLEAddress addr;
   portENTER_CRITICAL(&mux_);
@@ -221,7 +217,20 @@ bool BleCentral::startHealth(const char* mac, bool vitals) {
     finishJob(JobState::Failed, Fail::Subscribe);
     return false;
   }
-  Serial.printf("[ble] subscribed; sending start frame to %s\n", mac);
+  Serial.printf("[ble] subscribed; writing to %s\n", mac);
+  return true;
+}
+
+bool BleCentral::startHealth(const char* mac, bool vitals) {
+  vitals_enabled_ = vitals;
+  vitals_ = Vitals{};
+  stage_ = Stage::Hr;
+  stage_end_type_ = 0;
+  stage_settle_ms_ = 0;
+  vibrate_mode_ = false;
+  vibrated_ = false;
+
+  if (!beginJob(mac)) return false;
 
   readDeviceInfo();  // battery + device information — cheap, right after connect
 
@@ -233,6 +242,31 @@ bool BleCentral::startHealth(const char* mac, bool vitals) {
   Serial.printf("[ble] health job started: %s (vitals=%d battery=%d)\n", mac,
                 (int)vitals_enabled_,
                 vitals_.battery_ok ? (int)vitals_.battery : -1);
+  job_started_ms_ = millis();
+  stage_started_ms_ = job_started_ms_;
+  state_ = JobState::Measuring;
+  return true;
+}
+
+// Find-device (vibration): connect, send (05,50) with an empty payload, wait a
+// few seconds for the band's (05,50) ack, disconnect. Verified live 2026-10-11:
+// the band acknowledges and vibrates.
+bool BleCentral::startVibrate(const char* mac) {
+  vitals_enabled_ = false;
+  vitals_ = Vitals{};
+  vibrate_mode_ = true;
+  vibrated_ = false;
+
+  if (!beginJob(mac)) return false;
+
+  uint8_t frame[16];
+  const size_t n = fundo::buildFrame(counter_++, fundo::CMD_FIND_DEVICE,
+                                     fundo::SUB_FIND_DEVICE, nullptr, 0, frame);
+  if (!n || !write_char_ || !write_char_->writeValue(frame, n, false)) {
+    finishJob(JobState::Failed, Fail::Write);
+    return false;
+  }
+  Serial.printf("[ble] vibrate job started: %s\n", mac);
   job_started_ms_ = millis();
   stage_started_ms_ = job_started_ms_;
   state_ = JobState::Measuring;
@@ -331,6 +365,17 @@ void BleCentral::poll() {
   if (state_ != JobState::Measuring) return;
   const uint32_t now = millis();
 
+  // Vibrate jobs end as soon as the band answers (05,50) — or after a short
+  // grace window if the ack never arrives.
+  if (vibrate_mode_) {
+    if (vibrated_ || (now - stage_started_ms_) > (kStageSettleMs * 2)) {
+      finishJob(vibrated_ ? JobState::Done : JobState::Failed,
+                vibrated_ ? Fail::None : Fail::Timeout);
+      Serial.printf("[ble] vibrate %s: ack=%d\n", job_mac_, (int)vibrated_);
+    }
+    return;
+  }
+
   if (stage_ == Stage::Done) {
     const bool got_any = sample_count_ || vitals_.spo2_frames || vitals_.hrv_frames ||
                          vitals_.battery_ok;
@@ -370,6 +415,8 @@ void BleCentral::clearJob() {
   stage_ = Stage::Hr;
   stage_settle_ms_ = 0;
   vitals_enabled_ = false;
+  vibrate_mode_ = false;
+  vibrated_ = false;
   vitals_ = Vitals{};
 }
 
@@ -381,6 +428,13 @@ void BleCentral::onNotifyData(const uint8_t* data, size_t len) {
   }
   Serial.printf("[ble] notify (%02X,%02X) dlen=%u stage=%u\n", p.cmd1, p.cmd2,
                 (unsigned)p.data_len, (unsigned)stage_);
+
+  // --- find-device (vibrate) ack (05,50) -------------------------------------
+  if (p.cmd1 == fundo::CMD_FIND_DEVICE && p.cmd2 == fundo::SUB_FIND_DEVICE) {
+    vibrated_ = true;
+    Serial.println("[ble] vibrate ack");
+    return;
+  }
 
   // --- measurement control ----------------------------------------------------
   if (p.cmd1 == fundo::CMD_MEASURE && p.cmd2 == fundo::SUB_MEASURE_ACK &&
