@@ -9,7 +9,7 @@
   - پروفایل کارکنِ واقعی (شناسه = مک) مقادیر زنده را نشان می‌دهد؛
   - کارکن غایب «خارج از دید» و پل قطع پیام راهنما می‌دهد؛
   - فرم ثبت و دیالوگ حذف بدون خطا ساخته می‌شوند؛ فیلدهای تازه (شرکت بعد
-    از نام، مچ‌بند از فهرست، سن، پروندهٔ پزشکی، عکس) هم بررسی می‌شوند؛
+    از نام، مچ‌بند از فهرست، سال تولد، پروندهٔ پزشکی، عکس) هم بررسی می‌شوند؛
   - مسیر نمایشی پروفایل (شناسهٔ عددی) دست‌نخورده کار می‌کند.
 
 اجرا از ریشهٔ مخزن:
@@ -195,8 +195,12 @@ def labels_order(ctrl, out=None):
 import views.employees as v_emp  # noqa: E402
 import views.employee_detail as v_ed  # noqa: E402
 import components.employee_form as c_form  # noqa: E402
+import theme as _th  # noqa: E402
 
 fails = []
+
+_jy = _th.gregorian_to_jalali(datetime.now().year, datetime.now().month,
+                              datetime.now().day)[0]
 
 
 def check(name, cond):
@@ -352,7 +356,9 @@ check("فرم: مکِ مچ‌بند دیگران نیست",
 check("فرم: بدون ورود دستی مک", "مک مچ‌بند" not in labs9)
 check("فرم: شرکت بعد از نام",
       labs9.index("نام و نام خانوادگی") < labs9.index("شرکت"))
-check("فرم: فیلد سن", "سن" in labs9)
+check("فرم: دراپ‌دون سال تولد", "سال تولد" in labs9)
+check("فرم: گزینه‌های سال تولد",
+      _th.fa_num(str(_jy - 80)) in opts9 and _th.fa_num(str(_jy - 15)) in opts9)
 check("فرم: پروندهٔ پزشکی", norm("پروندهٔ پزشکی — اختیاری") in d9v)
 check("فرم: انتخاب عکس", norm("انتخاب عکس") in d9v)
 check("فرم: شرکت از فهرست (زیرشرکت)",
@@ -361,7 +367,7 @@ check("فرم: گزینهٔ فعلی مچ‌بند", any(MAC3 in o for o in opts
 
 d9c = norm(" || ".join(texts_visible(app9.page.dialogs[2])))
 check("فرم ویرایش: مچ‌بند قفل", norm(f"مچ‌بند {MAC1}") in d9c)
-check("فرم ویرایش: سن فعلی", "34" in d9c)
+check("فرم ویرایش: سال تولد از سن فعلی", str(_jy - 34) in d9c)
 
 # ── ۹ب) فرم بدون پل — ورود دستی مک و فیلدهای متنی ──
 c_form.live_bands = lambda force=False: None

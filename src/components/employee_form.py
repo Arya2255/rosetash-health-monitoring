@@ -8,16 +8,19 @@
     به‌جای تایپ مک؛ اگر پل نبود یا فهرست خالی بود، ورود دستی مک می‌ماند.
   - شرکت/واحد/خط/سمت از «تعاریف پایه» می‌آیند؛ ترتیب فیلدها: نام و نام
     خانوادگی، بعد شرکت (خواستهٔ کارفرما).
+  - سن از «سال تولد» شمسی حساب می‌شود — انتخاب از فهرست کشویی، بدون تایپ.
   - پروندهٔ پزشکی (بیماری‌ها، داروها) و عکس پرسنلی اختیاری‌اند؛ عکس قبل
     از ارسال با PIL کوچک می‌شود (اگر PIL نبود، همان فایل می‌رود).
 """
 
 import base64
+import datetime as _dt
 
 import flet as ft
 
 from theme import (
-    BORDER, DANGER, FONT, FONT_B, FONT_MED, INK, R_BTN, TEXT_MUTED, WHITE, txt,
+    BORDER, DANGER, FONT, FONT_B, FONT_MED, INK, R_BTN, TEXT_MUTED, WHITE,
+    fa_num, gregorian_to_jalali, txt,
 )
 from data import (
     delete_employee, live_bands, live_catalogs, photo_src, save_employee,
@@ -25,7 +28,7 @@ from data import (
 from layout import dialog_w
 
 SHIFTS = ("صبح", "عصر", "شب")
-_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+_BIRTH_YOUNGEST, _BIRTH_OLDEST = 15, 80  # بازهٔ سنی فهرست «سال تولد»
 _MAX_UP = 1_200_000  # سقف پس از کوچک‌سازی — پل تا ۱.۶ مگابایت می‌پذیرد
 
 
@@ -34,6 +37,12 @@ def _pop(app):
         app.page.pop_dialog()
     except Exception:
         pass
+
+
+def _jalali_year_now() -> int:
+    """سال شمسی جاری — مبنای فهرست «سال تولد»."""
+    d = _dt.date.today()
+    return gregorian_to_jalali(d.year, d.month, d.day)[0]
 
 
 def _dialog(app, title, controls, error_txt, on_confirm,
@@ -197,13 +206,21 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
     name_f = ft.TextField(label="نام و نام خانوادگی", value=emp.get("name") or "",
                           text_size=13, autofocus=True)
     company_f = _cat_field(catalogs, "company", "شرکت", emp.get("company"))
-    age_f = ft.TextField(
-        label="سن", value=(str(emp["age"]) if emp.get("age") else ""),
-        text_size=13, width=120, keyboard_type=ft.KeyboardType.NUMBER,
-        input_filter=ft.InputFilter(
-            allow=True, regex_string=r"[0-9۰-۹٠-٩]",
-            replacement_string=""),
-        hint_text="مثلاً ۳۴")
+    jy_now = _jalali_year_now()
+    year_keys = [str(y) for y in range(jy_now - _BIRTH_OLDEST,
+                                       jy_now - _BIRTH_YOUNGEST + 1)]
+    cur_birth = None
+    if emp.get("age"):
+        try:
+            cand = str(int(jy_now - int(emp["age"])))
+            if cand in year_keys:
+                cur_birth = cand
+        except (TypeError, ValueError):
+            cur_birth = None
+    birth_dd = ft.Dropdown(
+        label="سال تولد", value=cur_birth, text_size=13,
+        options=[ft.DropdownOption(key=k, text=fa_num(k)) for k in year_keys],
+        hint_text="انتخاب کن")
     dept_f = _cat_field(catalogs, "unit", "واحد", emp.get("dept"))
     line_f = _cat_field(catalogs, "line", "خط", emp.get("line"))
     role_f = _cat_field(catalogs, "role", "سمت", emp.get("role"))
@@ -320,7 +337,7 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
         ], spacing=2),
     ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
-    controls = [photo_block, name_f, company_f, age_f]
+    controls = [photo_block, name_f, company_f, birth_dd]
     controls += band_controls
     controls += [dept_f, line_f, role_f, shift_f, note_f,
                  ft.Divider(height=1, color=BORDER), sec_med, cond_f, med_f]
@@ -341,13 +358,9 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
                  if band_dd is not None else
                  "مک مچ‌بند لازم است — نمونه: f3:b6:d6:b7:47:d7")
             return
-        age_val = (age_f.value or "").strip().translate(_FA_DIGITS)
-        if age_val and not age_val.isdigit():
-            _err("سن باید فقط عدد باشد — مثلاً ۳۴")
-            return
-        if len(age_val) > 3:
-            _err("سن باید حداکثر ۳ رقم باشد")
-            return
+        age_val = ""
+        if birth_dd.value and birth_dd.value in year_keys:
+            age_val = str(jy_now - int(birth_dd.value))
         payload = {
             "mac": mac_val, "name": name,
             "company": (company_f.value or "").strip(),
