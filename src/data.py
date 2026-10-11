@@ -62,3 +62,17 @@ from live import (  # noqa: E402,F401
 from map_data import (  # noqa: E402,F401
     MAP_ENTRANCE, MAP_GATEWAYS, MAP_IMAGE, MAP_IMAGE_H, MAP_IMAGE_W,
 )
+
+# ── دسترسی از اینترنت — تونل کلادفلر و قفل ورود ایمیلی داخل خود برنامه ──
+from remote import (  # noqa: E402,F401
+    add_email as remote_add_email,
+    allowed_emails as remote_emails,
+    autostart as remote_autostart,
+    public_url as remote_url,
+    remove_email as remote_remove_email,
+    set_autostart as remote_set_autostart,
+    setup as remote_setup,
+    status as remote_status,
+    tunnel_down as remote_down,
+    tunnel_up as remote_up,
+)

@@ -20,7 +20,8 @@ from theme import (  # noqa: E402
     fa_clock, fa_date, txt,
 )
 from data import (  # noqa: E402
-    ALERTS_ACTIVE, live_available, live_employees, live_status, send_vibrate,
+    ALERTS_ACTIVE, live_available, live_employees, live_status,
+    remote_autostart, send_vibrate,
 )
 import applog  # noqa: E402
 from components.sidebar import build_sidebar  # noqa: E402
@@ -278,6 +279,12 @@ def main(page: ft.Page):
                 applog.app_version(), app.state["view"],
                 "موبایل" if app.mode == "phone" else "دسکتاپ",
                 os.path.basename(applog.session_path() or "—"))
+
+    # ── دسترسی از اینترنت — بالا آوردن خودکار تونل (اگر روشن باشد) ──
+    try:
+        remote_autostart()
+    except Exception:
+        applog.exception("اتصال خودکار تونل با خطا متوقف شد")
 
     # ── تورِ اسکرین‌شات خودکار (فقط در حالت توسعه) ──
     shot_dir = (os.environ.get("ROSETASH_SHOT_DIR")

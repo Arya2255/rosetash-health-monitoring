@@ -8,6 +8,10 @@ from theme import (
 )
 from components.common import card, kv_row
 from views.logs import export_logs  # noqa: E402
+from data import (
+    remote_add_email, remote_down, remote_remove_email,
+    remote_set_autostart, remote_setup, remote_status,
+)
 
 
 def _perm_chip(label):
@@ -108,6 +112,128 @@ def settings_view(app):
         ]),
     ], spacing=10), pad=18)
 
+    # ── دسترسی از اینترنت — تونل کلادفلر و قفل ورود ایمیلی ──
+    rs = remote_status() or {}
+    if rs.get("running") and rs.get("locked"):
+        net_color = "#1E8E4E"
+    elif rs.get("running"):
+        net_color = "#B26900"
+    else:
+        net_color = "#9AA0A6"
+
+    def _net_setup(e=None):
+        ok, msg = remote_setup()
+        app.snack(msg)
+        app.render()
+
+    def _net_down(e=None):
+        ok, msg = remote_down()
+        app.snack(msg)
+        app.render()
+
+    def _net_auto(e):
+        ok, msg = remote_set_autostart(bool(e.control.value))
+        app.snack(msg)
+
+    def _net_add(e=None):
+        ok, msg = remote_add_email(net_new_email.value or "")
+        app.snack(msg)
+        if ok:
+            net_new_email.value = ""
+            app.render()
+
+    def _net_rm(addr):
+        def _do(e=None):
+            ok, msg = remote_remove_email(addr)
+            app.snack(msg)
+            app.render()
+        return _do
+
+    def _net_copy(e=None):
+        url = rs.get("url") or ""
+        try:
+            svc = getattr(app.page, "services", None)
+            if svc is not None and url:
+                clip = ft.Clipboard()
+                svc.append(clip)
+                clip.set(url)
+                app.snack("آدرس کپی شد")
+            else:
+                app.snack("کپی خودکار ممکن نشد — آدرس را دستی انتخاب کن")
+        except Exception:
+            app.snack("کپی خودکار ممکن نشد — آدرس را دستی انتخاب کن")
+
+    net_new_email = ft.TextField(hint_text="ایمیل ادمین", text_size=13,
+                                 expand=True)
+
+    net_email_rows = [
+        ft.Row([
+            ft.Icon(ft.Icons.MAIL_OUTLINE, size=16, color=INK),
+            ft.Container(content=txt(addr, size=13, font=FONT, color=INK),
+                         expand=True),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=16,
+                          icon_color="#B3261E", tooltip="حذف",
+                          on_click=_net_rm(addr)),
+        ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        for addr in (rs.get("emails") or [])
+    ] or [txt("هنوز ایمیلی تعریف نشده — اولین ایمیل ادمین را اضافه کن.",
+              size=12, font=FONT, color=TEXT_MUTED)]
+
+    net_card = card(ft.Column([
+        txt("دسترسی از اینترنت", size=15, font=FONT_B, color=INK),
+        txt("پنل از بیرون با قفل ایمیلی کلادفلر باز می‌شود — فقط "
+            "ایمیل‌های زیر کد ورود می‌گیرند.",
+            size=12, font=FONT, color=TEXT_MUTED),
+        ft.Row([
+            ft.Container(width=8, height=8, border_radius=4,
+                         bgcolor=net_color),
+            txt("وضعیت: " + (rs.get("label") or "—"), size=13,
+                font=FONT_MED, color=INK),
+            ft.Container(expand=True),
+            ft.IconButton(ft.Icons.REFRESH, icon_size=18, icon_color=INK,
+                          tooltip="به‌روزرسانی",
+                          on_click=lambda e: app.render()),
+        ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        txt(rs.get("detail") or "", size=11, font=FONT, color=TEXT_MUTED),
+        ft.Row([
+            ft.Button("راه‌اندازی و اتصال", icon=ft.Icons.LINK, height=38,
+                      style=ft.ButtonStyle(
+                          bgcolor=INK, color=WHITE,
+                          shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+                      on_click=_net_setup),
+            ft.OutlinedButton("قطع اتصال", icon=ft.Icons.LINK_OFF, height=38,
+                              style=ft.ButtonStyle(
+                                  color=INK,
+                                  shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+                              on_click=_net_down),
+        ], spacing=10, wrap=True, run_spacing=8),
+        ft.Switch(label="اتصال خودکار هنگام اجرای برنامه",
+                  value=bool(rs.get("auto_start")), on_change=_net_auto),
+        ft.Divider(height=1, color=BORDER),
+        ft.Row([
+            txt("آدرس پنل:", size=12, font=FONT, color=TEXT_MUTED),
+            ft.Container(content=ft.Text(rs.get("url") or "—", size=13,
+                                         font_family=FONT, color=INK,
+                                         selectable=True), expand=True),
+            ft.IconButton(ft.Icons.COPY, icon_size=16, icon_color=INK,
+                          tooltip="کپی آدرس", on_click=_net_copy),
+        ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ft.Divider(height=1, color=BORDER),
+        txt("ایمیل‌های مجاز ورود", size=13, font=FONT_MED, color=INK),
+        *net_email_rows,
+        ft.Row([
+            net_new_email,
+            ft.Button("افزودن", icon=ft.Icons.PERSON_ADD, height=38,
+                      style=ft.ButtonStyle(
+                          bgcolor=INK, color=WHITE,
+                          shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+                      on_click=_net_add),
+        ], spacing=8),
+        txt("هر تغییر بلافاصله روی کلادفلر اعمال می‌شود؛ کد ورود به "
+            "همین ایمیل‌ها فرستاده می‌شود.",
+            size=11, font=FONT, color=TEXT_MUTED),
+    ], spacing=8), pad=18)
+
     # ── دربارهٔ سامانه ──
     about_card = card(ft.Column([
         txt("دربارهٔ سامانه", size=15, font=FONT_B, color=INK),
@@ -142,7 +268,7 @@ def settings_view(app):
 
     return ft.Column([
         ft.Row([
-            ft.Container(expand=True, content=ft.Column([backup_card, users_card], spacing=14)),
+            ft.Container(expand=True, content=ft.Column([backup_card, net_card, users_card], spacing=14)),
             ft.Container(expand=True, content=ft.Column([thresholds_card, about_card, logs_card], spacing=14)),
         ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.START),
     ], scroll=ft.ScrollMode.AUTO, expand=True)
