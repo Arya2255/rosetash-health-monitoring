@@ -26,6 +26,7 @@ from data import live_gateways, netinfo, save_gateway
 import provisioner as pv
 
 from components.common import SHADOW, card, section_header
+from layout import flow
 
 _BG_OK = "#E6F4EB"
 _BG_WARN = "#FCF0DC"
@@ -379,18 +380,21 @@ def _step2_card(app, st) -> ft.Control:
                 padding=ft.Padding.symmetric(horizontal=10, vertical=4),
                 on_click=lambda e, g=r_gw, rr=r: pick(g, rr), ink=True))
         blocks.append(ft.Row(chips, spacing=6, wrap=True))
+    # نکته: Row(wrap=True) فرزند expand=True را نمیپذیرد (خطای WrapParentData
+    # سمت Flutter)؛ ردیفهای فیلد با کمک flow ساخته میشوند — دسکتاپ Row،
+    # موبایل ستون تمامعرض (مثل صفحهٔ «لاگ برنامه»).
     blocks += [
-        ft.Row([
+        flow(app, [
             _field("شناسهٔ گیت‌وی (gw-…)", "gw_id", st, expand=1),
             _field("نام نمایشی", "label", st, expand=1),
             _field("منطقه / محل نصب", "zone", st, expand=1),
-        ], spacing=8, wrap=True),
-        ft.Row([
+        ], spacing=8),
+        flow(app, [
             _field("نام وای‌فای (SSID)", "ssid", st, expand=2),
             _field("رمز وای‌فای", "pass", st, expand=2, password=True),
             _field("آدرس بروکر MQTT", "host", st, expand=2),
             _field("پورت", "port", st, expand=1),
-        ], spacing=8, wrap=True),
+        ], spacing=8),
     ]
     return card(ft.Column(blocks, spacing=10), pad=14)
 
