@@ -19,7 +19,7 @@ from theme import (
 from data import EMPLOYEES, WEEK_HOURS, ZONE_COLORS, live_employees, live_status, send_vibrate
 from components.common import (
     ISSUE_LABELS, att_chip, avatar_circle, back_button, card, kv_row,
-    mini_caption, rel_age, rssi_quality, status_chip,
+    mini_caption, person_avatar, rel_age, rssi_quality, status_chip,
 )
 from components.employee_form import open_delete_confirm, open_employee_form
 
@@ -113,6 +113,10 @@ def _live_detail(app, mac):
     sub_v = txt("", size=12, font=FONT, color=TEXT_MUTED)
     avatar_holder = ft.Container(content=avatar_circle(emp0.get("name") or "؟", r=27))
     status_holder = ft.Container(content=status_chip(emp0.get("status") or "off"))
+    band_cap_txt = txt(f"مچ‌بند {mac}", size=12, font=FONT, color=TEXT_MUTED)
+    band_cap = ft.Row([ft.Icon(ft.Icons.WATCH, size=15, color=TEXT_MUTED),
+                       band_cap_txt], spacing=5, tight=True,
+                      vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     bat_txt = txt("باتری —", size=12, font=FONT, color=TEXT_MUTED)
     sig_txt = txt("سیگنال —", size=12, font=FONT, color=TEXT_MUTED)
@@ -128,7 +132,7 @@ def _live_detail(app, mac):
         ft.Column([
             name_v,
             sub_v,
-            ft.Row([mini_caption(ft.Icons.WATCH, f'مچ‌بند {mac}'),
+            ft.Row([band_cap,
                     _cap(ft.Icons.BATTERY_FULL, bat_txt),
                     _cap(ft.Icons.WIFI, sig_txt)], spacing=14),
         ], spacing=3, expand=True),
@@ -270,6 +274,24 @@ def _live_detail(app, mac):
         presence_sub,
     ], spacing=8), pad=18)
 
+    # ── پروندهٔ پزشکی (اختیاری) ──
+    med_cond_val = txt("ثبت نشده", size=13, font=FONT_MED, color=TEXT_MUTED)
+    med_meds_val = txt("ثبت نشده", size=13, font=FONT_MED, color=TEXT_MUTED)
+    med_hint = txt("اختیاری — از دکمهٔ ویرایش تکمیل کن", size=11, font=FONT,
+                   color=TEXT_MUTED)
+    med_card = card(ft.Column([
+        ft.Row([ft.Icon(ft.Icons.MEDICAL_INFORMATION, size=16, color=INK),
+                txt("پروندهٔ پزشکی", size=15, font=FONT_B, color=INK),
+                ft.Container(expand=True), med_hint]),
+        ft.Row([txt("بیماری‌های زمینه‌ای", size=13, font=FONT, color=TEXT_MUTED),
+                ft.Container(expand=True), med_cond_val],
+               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ft.Row([txt("داروهای خاص در حال مصرف", size=13, font=FONT,
+                    color=TEXT_MUTED),
+                ft.Container(expand=True), med_meds_val],
+               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+    ], spacing=10), pad=18)
+
     # ── کارت صادقانه برای بخش‌های بدون دادهٔ واقعی ──
     later_card = card(ft.Column([
         txt("تاریخچهٔ حضور، ساعات کار و مکان‌ها", size=15, font=FONT_B, color=INK),
@@ -295,12 +317,25 @@ def _live_detail(app, mac):
             return
         name = e.get("name") or "مچ‌بند ثبت‌نشده"
         name_v.value = name
-        avatar_holder.content = avatar_circle(e.get("name") or "؟", r=27)
-        parts = [p for p in (e.get("dept"), e.get("role")) if p]
+        avatar_holder.content = person_avatar(e, r=27)
+        label = e.get("band_label")
+        band_cap_txt.value = (f'مچ‌بند «{label}» — {mac}' if label
+                              else f'مچ‌بند {mac}')
+        parts = [p for p in (e.get("company"), e.get("dept"), e.get("line"),
+                             e.get("role")) if p]
         if e.get("shift"):
             parts.append(f'شیفت {e["shift"]}')
+        if e.get("age"):
+            parts.append(f'{fa_num(e["age"])} ساله')
         sub_v.value = (" • ".join(parts) if parts
                        else "مشخصات ثبت نشده — از دکمهٔ ویرایش تکمیل کن")
+        cond_v = (e.get("conditions") or "").strip()
+        meds_v = (e.get("medications") or "").strip()
+        med_cond_val.value = cond_v or "ثبت نشده"
+        med_cond_val.color = TEXT_MAIN if cond_v else TEXT_MUTED
+        med_meds_val.value = meds_v or "ثبت نشده"
+        med_meds_val.color = TEXT_MAIN if meds_v else TEXT_MUTED
+        med_hint.visible = not (cond_v or meds_v)
         status_holder.content = status_chip(e.get("status") or "off")
         edit_btn.content = "ویرایش" if e.get("registered") else "ثبت کارکن"
         del_btn.visible = bool(e.get("registered"))
@@ -422,7 +457,7 @@ def _live_detail(app, mac):
     _apply(doc)
     return ft.Column([
         header, actions, issues_banner, vitals_row, chart_card,
-        presence_card, later_card,
+        presence_card, med_card, later_card,
     ], spacing=14, scroll=ft.ScrollMode.AUTO, expand=True)
 
 

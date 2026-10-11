@@ -21,6 +21,8 @@ import views.employee_detail as v_detail  # noqa: E402
 import views.employees as v_employees  # noqa: E402
 import views.live as v_live  # noqa: E402
 import views.map as v_map  # noqa: E402
+import views.bands as v_bands  # noqa: E402
+import views.definitions as v_defs  # noqa: E402
 import views.management as v_management  # noqa: E402
 import views.reports as v_reports  # noqa: E402
 import views.settings as v_settings  # noqa: E402
@@ -72,6 +74,8 @@ def main():
         ("پایش زنده", lambda: v_live.live_view(app)),
         ("نقشهٔ کارخانه", lambda: v_map.map_view(app)),
         ("کارکنان", lambda: v_employees.employees_view(app)),
+        ("مچ‌بندها", lambda: v_bands.bands_view(app)),
+        ("تعاریف پایه", lambda: v_defs.definitions_view(app)),
         ("حضور و غیاب", lambda: v_attendance.attendance_view(app)),
         ("هشدارها", lambda: v_alerts.alerts_view(app)),
         ("گزارش‌ها", lambda: v_reports.reports_view(app)),
@@ -146,6 +150,9 @@ def main():
         stub = [
             {"mac": "f3:b6:d6:b7:47:d7", "registered": True, "name": "حمید نوری",
              "dept": "تولید روغن", "role": "خط روغن ۲", "shift": "صبح", "note": "",
+             "company": "موتوسل", "line": "خط روغن ۲", "age": 41,
+             "conditions": None, "medications": None, "band_label": None,
+             "photo": None,
              "present": True, "rssi": -70, "gw": "gw-test-1", "zone": "test",
              "last_seen": None, "last_seen_age_s": 5.0,
              "health": {"state": "done", "fail": "none", "wearing": True,
@@ -163,18 +170,56 @@ def main():
         ]
         orig_emp = v_employees.live_employees
         orig_detail = v_detail.live_employees
+        orig_fb = c_form.live_bands
+        orig_fc = c_form.live_catalogs
         v_employees.live_employees = lambda force=False: stub
         v_detail.live_employees = lambda force=False: stub
+        c_form.live_bands = lambda force=False: [
+            {"mac": "aa:bb:cc:dd:ee:01", "label": "مچ‌بند تست",
+             "registered": True, "in_view": True, "employee_name": None},
+        ]
+        c_form.live_catalogs = lambda force=False: {
+            "company": [{"id": 1, "name": "موتوسل", "parent_id": None}],
+            "unit": [{"id": 2, "name": "تولید"}],
+            "line": [], "role": [],
+        }
         app.state["emp"] = "f3:b6:d6:b7:47:d7"
         v_employees.employees_view(app)
         v_detail.employee_detail_view(app)
         c_form.open_employee_form(app, mac="aa:bb:cc:dd:ee:01")
         v_employees.live_employees = orig_emp
         v_detail.live_employees = orig_detail
+        c_form.live_bands = orig_fb
+        c_form.live_catalogs = orig_fc
         print("OK   — کارکنان: فهرست زنده، پروفایل و فرم (شبیه‌سازی)")
     except Exception as e:  # noqa: BLE001
         fails += 1
         print(f"FAIL — کارکنان زنده (شبیه‌سازی): {type(e).__name__}: {e}")
+
+    # ── بخش‌های «مچ‌بندها» و «تعاریف پایه» با دادهٔ شبیه‌سازی‌شده ──
+    try:
+        ob, oc = v_bands.live_bands, v_defs.live_catalogs
+        v_bands.live_bands = lambda force=False: [
+            {"mac": "f3:b6:d6:b7:47:d7", "label": "مچ‌بند تست", "note": None,
+             "registered": True, "in_view": True, "rssi": -70, "gw": "gw-test-1",
+             "zone": "test", "last_seen": None, "last_seen_age_s": 4.0,
+             "employee_name": "حمید نوری"},
+        ]
+        v_defs.live_catalogs = lambda force=False: {
+            "company": [{"id": 1, "name": "موتوسل", "parent_id": None}],
+            "unit": [], "line": [], "role": [],
+        }
+        v_bands.bands_view(app)
+        v_defs.definitions_view(app)
+        v_bands.open_band_form(app)
+        v_defs.open_cat_form(app, "company",
+                             companies=[{"id": 1, "name": "موتوسل"}])
+        v_bands.live_bands = ob
+        v_defs.live_catalogs = oc
+        print("OK   — مچ‌بندها و تعاریف پایه (شبیه‌سازی)")
+    except Exception as e:  # noqa: BLE001
+        fails += 1
+        print(f"FAIL — مچ‌بندها/تعاریف (شبیه‌سازی): {type(e).__name__}: {e}")
 
     print()
     print("نتیجه:", "همهٔ صفحه‌ها سالم" if not fails else f"{fails} خطا")

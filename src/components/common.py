@@ -8,6 +8,7 @@ from theme import (
     OFFLINE, OK, R_BTN, R_CARD, R_PILL, STATUS, TEXT_MAIN, TEXT_MUTED, WARN,
     WHITE, avatar_initials, fa_num, txt,
 )
+from data import photo_src  # noqa: E402 — فقط از لایهٔ داده، طبق قاعده
 
 # سایهٔ ملایم کارت‌ها — طبق حس HIG
 SHADOW = ft.BoxShadow(blur_radius=14, color="#0e000000")
@@ -179,3 +180,19 @@ def rssi_quality(rssi):
     if rssi >= -85:
         return "متوسط", WARN
     return "ضعیف", OFFLINE
+
+
+def person_avatar(emp, r=19, fallback_bg="#E9EBEE", fg=TEXT_MAIN):
+    """آواتار کارکن — عکس پرسنلی اگر باشد، وگرنه حرف اول نام.
+
+    emp دیکشنری کارکن از پل است (فیلد photo نشانی نسبی پل)؛ اگر رشتهٔ ساده
+    داده شود فقط دایرهٔ حرف اول ساخته می‌شود.
+    """
+    if isinstance(emp, dict):
+        url = photo_src(emp)
+        if url:
+            return ft.CircleAvatar(radius=r, foreground_image_src=url)
+        name = emp.get("name")
+    else:
+        name = emp
+    return avatar_circle(name or "؟", r=r, bg=fallback_bg, fg=fg)

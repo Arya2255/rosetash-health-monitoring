@@ -17,9 +17,9 @@ from theme import (
     BORDER, DANGER, FONT, FONT_B, FONT_MED, INK, OFFLINE, OK, R_BTN, R_CARD,
     TEXT_MAIN, TEXT_MUTED, WARN, WHITE, fa_num, txt,
 )
-from data import EMPLOYEES, live_employees
+from data import EMPLOYEES, live_employees, photo_src
 from components.common import (
-    ISSUE_LABELS, SHADOW, avatar_circle, rel_age, status_chip,
+    ISSUE_LABELS, SHADOW, avatar_circle, person_avatar, rel_age, status_chip,
 )
 from components.employee_card import STATUS_ORDER
 from components.employee_form import open_employee_form
@@ -107,7 +107,8 @@ def employees_view(app):
         h = e.get("health") or {}
         hr = h.get("avg") if (h.get("state") == "done" and h.get("n")) else None
         hr_txt = fa_num(round(hr)) if hr else "—"
-        parts = [p for p in (e.get("dept"), e.get("role")) if p]
+        parts = [p for p in (e.get("company"), e.get("dept"), e.get("line"),
+                             e.get("role")) if p]
         sub = " • ".join(parts) if parts else "بدون مشخصات — برای ویرایش کلیک کن"
         loc = e.get("zone") or e.get("gw") or "—"
         if not e.get("present"):
@@ -124,7 +125,7 @@ def employees_view(app):
                                 max_lines=1, overflow=ft.TextOverflow.ELLIPSIS))
         return ft.Container(
             content=ft.Row([
-                avatar_circle(e.get("name") or "؟", r=16),
+                person_avatar(e, r=16),
                 ft.Column(name_col, spacing=1, expand=True),
                 ft.Container(width=70, content=txt(f'شیفت {e.get("shift") or "—"}',
                                                    size=12, font=FONT,
@@ -150,10 +151,13 @@ def employees_view(app):
     def _unassigned_row(e):
         rssi = e.get("rssi")
         rssi_txt = fa_num(round(rssi)) if rssi is not None else "—"
+        label = e.get("band_label")
+        title = (f'مچ‌بند «{label}» — بدون کارکن' if label
+                 else "مچ‌بند ثبت‌نشده")
         return ft.Row([
             avatar_circle("؟", r=16, bg="#F1F2F4", fg=TEXT_MUTED),
             ft.Column([
-                txt("مچ‌بند ثبت‌نشده", size=14, font=FONT_MED, color=INK),
+                txt(title, size=14, font=FONT_MED, color=INK),
                 txt(f'{e.get("mac")} — آنتن {rssi_txt} — {rel_age(e.get("last_seen_age_s"))}',
                     size=11, font=FONT, color=TEXT_MUTED, max_lines=1,
                     overflow=ft.TextOverflow.ELLIPSIS),

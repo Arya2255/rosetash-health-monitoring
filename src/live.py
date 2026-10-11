@@ -6,7 +6,9 @@
 
 دفتر کارکنان (نگاشت مک مچ‌بند ↔ کارکن) هم روی همین پل است:
 GET/POST/DELETE /api/employees — توابع live_employees، save_employee
-و delete_employee.
+و delete_employee. دفتر مچ‌بندها (/api/bands — live_bands، save_band،
+delete_band)، تعاریف پایه (/api/catalogs — live_catalogs، save_catalog،
+delete_catalog) و عکس پرسنلی (/api/photo — photo_src) هم همین‌جا.
 
 قواعد:
   - فقط کتابخانهٔ استاندارد پایتون
@@ -128,8 +130,19 @@ def send_vibrate(mac: str | None = None, timeout: float = 2.5) -> tuple[bool, st
 # ترجمهٔ خطاهای پل به پیام فارسی برای نمایش
 _ERROR_FA = {
     "invalid mac": "مک مچ‌بند معتبر نیست — قالب درست: f3:b6:d6:b7:47:d7",
-    "name required": "نام کارکن لازم است",
-    "not found": "این کارکن در دفتر نیست",
+    "name required": "نام لازم است",
+    "not found": "این مورد در دفتر نیست",
+    "duplicate": "این مورد از قبل ثبت شده است",
+    "invalid kind": "نوع تعریف نامعتبر است",
+    "invalid parent": "شرکت والد نامعتبر است",
+    "invalid age": "سن معتبر نیست — عددی بین ۱ تا ۱۲۰ وارد کن",
+    "invalid id": "شناسهٔ تعریف نامعتبر است",
+    "has children": "این شرکت زیرشرکت دارد — اول زیرشرکت‌ها را حذف کن",
+    "assigned": "این مچ‌بند به یک کارکن تخصیص دارد — اول تخصیص کارکن را بردار",
+    "photo too large": "عکس بزرگ‌تر از حد مجاز است — عکس کوچک‌تری انتخاب کن",
+    "bad photo": "فرمت عکس پشتیبانی نمی‌شود — JPG یا PNG انتخاب کن",
+    "photo save failed": "ذخیرهٔ عکس روی پل ناموفق بود",
+    "body too large": "حجم درخواست بیش از حد مجاز است",
 }
 
 
@@ -165,19 +178,22 @@ def _post_json(path: str, payload: dict, timeout: float = 4.0) -> tuple[bool, st
 
 
 def save_employee(doc: dict) -> tuple[bool, str]:
-    """ثبت/ویرایش کارکن در دفتر پل — کلید، مک مچ‌بند است."""
+    """ثبت/ویرایش کارکن در دفتر پل — کلید، مک مچ‌بند است.
+
+    مهلت بلندتر است چون ممکن است عکس پرسنلی (base64) هم همراه باشد.
+    """
     doc = dict(doc or {})
     doc["mac"] = str(doc.get("mac") or "").strip().lower()
-    return _post_json("/api/employees", doc)
+    return _post_json("/api/employees", doc, timeout=10.0)
 
 
-def delete_employee(mac: str) -> tuple[bool, str]:
-    """حذف کارکن از دفتر پل — مچ‌بندش اگر در دید باشد «ثبت‌نشده» می‌شود."""
+def _delete_json(path: str, key: str, value, fallback: str) -> tuple[bool, str]:
+    """DELETE به پل — هرگز استثنا بیرون نمی‌دهد؛ خطای پل را فارسی برمی‌گرداند."""
     if MODE == "0":
         return False, "حالت زنده خاموش است"
-    req = urllib.request.Request(
-        BRIDGE + "/api/employees?mac=" + urllib.parse.quote(str(mac or "").strip().lower()),
-        method="DELETE")
+    url = (BRIDGE + path + "?" + key + "="
+           + urllib.parse.quote(str(value or "").strip().lower()))
+    req = urllib.request.Request(url, method="DELETE")
     try:
         with urllib.request.urlopen(req, timeout=4.0) as resp:
             doc = json.loads(resp.read().decode("utf-8"))
@@ -187,4 +203,62 @@ def delete_employee(mac: str) -> tuple[bool, str]:
         _cache["t"] = 0.0
         return True, ""
     err = str(doc.get("error") or "")
-    return False, _ERROR_FA.get(err, err or "حذف نشد")
+    return False, _ERROR_FA.get(err, err or fallback)
+
+
+def delete_employee(mac: str) -> tuple[bool, str]:
+    """حذف کارکن از دفتر پل — مچ‌بندش اگر در دید باشد «ثبت‌نشده» می‌شود."""
+    return _delete_json("/api/employees", "mac", mac, "حذف نشد")
+
+
+# ─────────────── دفتر مچ‌بندها و تعاریف پایه — روی پل ───────────────
+
+
+def live_bands(force: bool = False):
+    """فهرست ادغام‌شدهٔ مچ‌بندهای شناخته‌شده از پل — None یعنی پل نیست.
+
+    خروجی snapshot["bands_known"] است: دفتر مچ‌بندها + مچ‌بندهای در دید +
+    مچ‌بندهای تخصیص‌داده‌شده به کارکنان، هر کدام با وضعیت دید و صاحبش.
+    """
+    doc = live_status(force=force)
+    if not doc or not doc.get("ok"):
+        return None
+    return doc.get("bands_known") or []
+
+
+def live_catalogs(force: bool = False):
+    """تعاریف پایه (شرکت/واحد/خط/سمت) از پل — None یعنی پل نیست."""
+    doc = live_status(force=force)
+    if not doc or not doc.get("ok"):
+        return None
+    return doc.get("catalogs") or {}
+
+
+def photo_src(emp) -> str | None:
+    """نشانی کامل عکس پرسنلی کارکن برای ft.Image — None یعنی عکسی نیست."""
+    photo = emp.get("photo") if isinstance(emp, dict) else None
+    if not photo:
+        return None
+    return BRIDGE + str(photo)
+
+
+def save_band(doc: dict) -> tuple[bool, str]:
+    """ثبت/ویرایش مچ‌بند در دفتر پل — برچسب و یادداشت اختیاری است."""
+    doc = dict(doc or {})
+    doc["mac"] = str(doc.get("mac") or "").strip().lower()
+    return _post_json("/api/bands", doc)
+
+
+def delete_band(mac: str) -> tuple[bool, str]:
+    """حذف مچ‌بند از دفتر پل — اگر به کارکنی تخصیص دارد، رد می‌شود."""
+    return _delete_json("/api/bands", "mac", mac, "حذف نشد")
+
+
+def save_catalog(doc: dict) -> tuple[bool, str]:
+    """افزودن/ویرایش تعریف پایه (شرکت/واحد/خط/سمت) روی پل."""
+    return _post_json("/api/catalogs", dict(doc or {}))
+
+
+def delete_catalog(cid) -> tuple[bool, str]:
+    """حذف یک تعریف پایه از پل — والدی که زیرمجموعه دارد رد می‌شود."""
+    return _delete_json("/api/catalogs", "id", cid, "حذف نشد")
