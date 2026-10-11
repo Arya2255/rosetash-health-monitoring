@@ -25,3 +25,6 @@ firmware/gateway/littlefs*.bin
 
 # Live bridge runtime state (SQLite database + logs)
 backend/state/
+
+# App runtime logs (per-session log files + support zip exports)
+logs/

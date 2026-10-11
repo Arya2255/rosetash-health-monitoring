@@ -7,6 +7,7 @@ from theme import (
     BORDER, FONT, FONT_B, FONT_MED, INK, R_BTN, TEXT_MUTED, WHITE, txt,
 )
 from components.common import card, kv_row
+from views.logs import export_logs  # noqa: E402
 
 
 def _perm_chip(label):
@@ -118,9 +119,30 @@ def settings_view(app):
             font=FONT, color=TEXT_MUTED),
     ], spacing=8), pad=18)
 
+    # ── لاگ برنامه ──
+    logs_card = card(ft.Column([
+        txt("لاگ برنامه", size=15, font=FONT_B, color=INK),
+        txt("رخدادها و خطاهای خود برنامه برای عیب‌یابی — دادهٔ سلامت در لاگ "
+            "نوشته نمی‌شود.", size=12, font=FONT, color=TEXT_MUTED),
+        ft.Row([
+            ft.OutlinedButton(
+                "مشاهدهٔ لاگ", icon=ft.Icons.ARTICLE_OUTLINED, height=40,
+                style=ft.ButtonStyle(color=INK,
+                                     shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+                on_click=lambda e: app.go("logs"),
+            ),
+            ft.OutlinedButton(
+                "خروجی zip", icon=ft.Icons.DOWNLOAD, height=40,
+                style=ft.ButtonStyle(color=INK,
+                                     shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+                on_click=lambda e: export_logs(app),
+            ),
+        ], spacing=10, wrap=True, run_spacing=8),
+    ], spacing=8), pad=18)
+
     return ft.Column([
         ft.Row([
             ft.Container(expand=True, content=ft.Column([backup_card, users_card], spacing=14)),
-            ft.Container(expand=True, content=ft.Column([thresholds_card, about_card], spacing=14)),
+            ft.Container(expand=True, content=ft.Column([thresholds_card, about_card, logs_card], spacing=14)),
         ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.START),
     ], scroll=ft.ScrollMode.AUTO, expand=True)

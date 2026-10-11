@@ -46,13 +46,33 @@ CACHE_TTL = float(_env("ROZTASH_LIVE_TTL", "ROSETASH_LIVE_TTL", default="4"))
 
 _cache: dict = {"t": 0.0, "doc": None}
 _cached_once = False
+# وضعیت آخرین اتصال به پل — برای ثبت گذار (خطا/بازگشت) در لاگ بدون اسپم
+_bridge_state: dict = {"ok": None, "since": 0.0}
+
+
+def _note_bridge(ok: bool, exc: Exception | None = None) -> None:
+    """گذار وضعیت پل را در لاگ ثبت می‌کند — فقط لحظهٔ تغییر، نه هر بار."""
+    prev = _bridge_state.get("ok")
+    if ok:
+        if prev is False:
+            applog.info("پل دوباره در دسترس است — بازگشت به دادهٔ زنده")
+        _bridge_state["ok"] = True
+    elif prev is not False:
+        applog.error("اتصال به پل برقرار نشد — %s — %s: %s", BRIDGE,
+                     type(exc).__name__ if exc else "خطا",
+                     exc if exc else "بدون جزئیات")
+        _bridge_state["ok"] = False
+    _bridge_state["since"] = time.time()
 
 
 def _fetch(timeout: float = 0.9):
     try:
         with urllib.request.urlopen(BRIDGE + "/api/snapshot", timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception:
+            doc = json.loads(resp.read().decode("utf-8"))
+        _note_bridge(True)
+        return doc
+    except Exception as exc:
+        _note_bridge(False, exc)
         return None
 
 
@@ -120,11 +140,17 @@ def send_vibrate(mac: str | None = None, timeout: float = 2.5) -> tuple[bool, st
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             doc = json.loads(resp.read().decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        applog.error("فرمان لرزش نرسید — پل پاسخ نداد — %s: %s",
+                     type(exc).__name__, exc)
         return False, "پل پاسخ نداد"
     if doc.get("ok"):
+        applog.info("فرمان لرزش برای مچ‌بند %s فرستاده شد",
+                    applog.mask_mac(mac))
         return True, "فرمان لرزاندن رفت — اگر روی دست باشد می‌لرزد"
-    return False, str(doc.get("error") or "فرمان نرسید")
+    err = str(doc.get("error") or "فرمان نرسید")
+    applog.warn("فرمان لرزش رد شد — %s", err)
+    return False, err
 
 
 # ─────────────────────── دفتر کارکنان — روی پل ───────────────────────
@@ -172,12 +198,16 @@ def _post_json(path: str, payload: dict, timeout: float = 4.0) -> tuple[bool, st
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             doc = json.loads(resp.read().decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        applog.error("ارسال به پل ناموفق — %s — %s: %s", path,
+                     type(exc).__name__, exc)
         return False, "پل پاسخ نداد"
     if doc.get("ok"):
         _cache["t"] = 0.0  # دفعهٔ بعد مستقیم از سرور خوانده شود
+        applog.info("پل درخواست %s را پذیرفت", path)
         return True, ""
     err = str(doc.get("error") or "")
+    applog.warn("پل درخواست %s را رد کرد — %s", path, err or "بدون پیام")
     return False, _ERROR_FA.get(err, err or "ثبت نشد")
 
 
@@ -201,12 +231,16 @@ def _delete_json(path: str, key: str, value, fallback: str) -> tuple[bool, str]:
     try:
         with urllib.request.urlopen(req, timeout=4.0) as resp:
             doc = json.loads(resp.read().decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        applog.error("حذف از پل ناموفق — %s — %s: %s", path,
+                     type(exc).__name__, exc)
         return False, "پل پاسخ نداد"
     if doc.get("ok"):
         _cache["t"] = 0.0
+        applog.info("حذف روی پل انجام شد — %s", path)
         return True, ""
     err = str(doc.get("error") or "")
+    applog.warn("پل حذف %s را رد کرد — %s", path, err or "بدون پیام")
     return False, _ERROR_FA.get(err, err or fallback)
 
 

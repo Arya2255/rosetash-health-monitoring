@@ -22,6 +22,7 @@ from theme import (  # noqa: E402
 from data import (  # noqa: E402
     ALERTS_ACTIVE, live_available, live_employees, live_status, send_vibrate,
 )
+import applog  # noqa: E402
 from components.sidebar import build_sidebar  # noqa: E402
 from views.dashboard import dashboard_view  # noqa: E402
 from views.live import live_view  # noqa: E402
@@ -36,6 +37,7 @@ from views.alerts import alerts_view  # noqa: E402
 from views.reports import reports_view  # noqa: E402
 from views.management import management_view  # noqa: E402
 from views.settings import settings_view  # noqa: E402
+from views.logs import logs_view  # noqa: E402
 from views.provisioning import provisioning_view  # noqa: E402
 
 BUILDERS = {
@@ -53,6 +55,7 @@ BUILDERS = {
     "reports": reports_view,
     "management": management_view,
     "settings": settings_view,
+    "logs": logs_view,
 }
 
 
@@ -119,6 +122,8 @@ class App:
     def go(self, view, emp=None):
         if view == "employee":
             self.state["emp"] = emp
+        if view != self.state.get("view"):
+            applog.info("صفحه → %s", view)
         self.state["view"] = view
         self.render()
 
@@ -128,11 +133,23 @@ class App:
         self.root.controls[0] = build_sidebar(
             self.state["view"], self.go, len(self.alerts_active))
         builder = BUILDERS.get(self.state["view"], dashboard_view)
-        self.content_holder.content = builder(self)
+        try:
+            self.content_holder.content = builder(self)
+        except Exception:
+            # هیچ خطایی بی‌صدا نماند — با رد کامل در فایل لاگ می‌نشیند
+            applog.exception("ساخت صفحهٔ «%s» با خطا متوقف شد",
+                             self.state["view"])
+            raise
         self.page.update()
 
 
 def main(page: ft.Page):
+    # ── لاگ فایلی برنامه ──
+    # از همین‌جا فعال می‌شود تا راه‌اندازی صفحه و خود لاگ هم ثبت شوند؛
+    # قلاب سراسری، خطاهای نادیده‌گرفته‌شده را هم به فایل می‌برد.
+    applog.setup()
+    applog.install_hooks()
+
     page.title = "پایش سلامت کارکنان — روزتاش"
     page.rtl = True
     page.padding = 0
@@ -204,7 +221,63 @@ def main(page: ft.Page):
     ], spacing=0, expand=True, vertical_alignment=ft.CrossAxisAlignment.STRETCH)
 
     page.add(app.root)
+
+    # ── ثبت چرخهٔ عمر اپ: خطای رابط، قطع اتصال و بسته شدن پنجره ──
+    def _ui_error(e):
+        applog.error("خطای رسیدگینشدهٔ رابط کاربری — %s",
+                     getattr(e, "data", None) or str(e))
+
+    try:
+        page.on_error = _ui_error
+    except Exception:
+        pass
+
+    def _closed(reason):
+        applog.info("برنامه بسته شد — %s", reason)
+
+    try:
+        page.on_disconnect = lambda e: _closed("قطع اتصال نشست")
+    except Exception:
+        pass
+
+    # پایان پردازه با سیگنال (بستن ترمینال/خاموشی سیستم) هم در لاگ بیاید
+    try:
+        import signal
+
+        _prev_sig = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
+
+        def _on_signal(signum, _frame):
+            _closed("سیگنال " + getattr(signal.Signals(signum), "name", str(signum)))
+            try:
+                prev = _prev_sig.get(signum)
+                signal.signal(signum, prev if callable(prev) else signal.SIG_DFL)
+                os.kill(os.getpid(), signum)   # رفتار قبلی (پایان پردازه) جاری شود
+            except Exception:
+                sys.exit(0)
+
+        for _sig in _prev_sig:
+            if callable(_prev_sig[_sig]) or _prev_sig[_sig] is signal.SIG_DFL:
+                signal.signal(_sig, _on_signal)
+    except Exception:
+        pass
+
+    def _win_event(e):
+        try:
+            if getattr(e, "type", None) == ft.WindowEventType.CLOSE:
+                _closed("بسته شدن پنجره")
+        except Exception:
+            pass
+
+    try:
+        page.window.on_event = _win_event
+    except Exception:
+        pass
+
     app.render()
+    applog.info("برنامه باز شد — نسخه %s — صفحه %s — چیدمان %s — لاگ %s",
+                applog.app_version(), app.state["view"],
+                "موبایل" if app.mode == "phone" else "دسکتاپ",
+                os.path.basename(applog.session_path() or "—"))
 
     # ── تورِ اسکرین‌شات خودکار (فقط در حالت توسعه) ──
     shot_dir = (os.environ.get("ROSETASH_SHOT_DIR")
@@ -222,7 +295,7 @@ def main(page: ft.Page):
             for v in ("map", "gateways", "provisioning", "dashboard", "live",
                       "bands", "employees", "definitions", "attendance",
                       "employee", "alerts", "reports", "management",
-                      "settings"):
+                      "settings", "logs"):
                 if v == "employee":
                     app.go("employee", 1)
                 else:
@@ -262,7 +335,8 @@ def main(page: ft.Page):
                     conn_txt.color = "#1E8E4E" if online else TEXT_MUTED
                     conn_chip.bgcolor = "#E6F4EB" if online else "#F1F2F4"
                     conn_chip.update()
-            except Exception:
+            except Exception as exc:
+                applog.info("حلقهٔ ساعت/اتصال پایان یافت — %s", exc)
                 return
             await asyncio.sleep(1)
 

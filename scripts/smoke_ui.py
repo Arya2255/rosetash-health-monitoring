@@ -28,6 +28,7 @@ import views.provisioning as v_prov  # noqa: E402
 import views.management as v_management  # noqa: E402
 import views.reports as v_reports  # noqa: E402
 import views.settings as v_settings  # noqa: E402
+import views.logs as v_logs  # noqa: E402
 
 
 class FakePage:
@@ -85,6 +86,7 @@ def main():
         ("گزارش‌ها", lambda: v_reports.reports_view(app)),
         ("مدیریت", lambda: v_management.management_view(app)),
         ("تنظیمات", lambda: v_settings.settings_view(app)),
+        ("لاگ برنامه", lambda: v_logs.logs_view(app)),
     ]
     for eid in (1, 2, 13, 18):
         def make(eid=eid):
@@ -110,6 +112,7 @@ def main():
         assert "map" in app_main.BUILDERS
         assert "gateways" in app_main.BUILDERS
         assert "provisioning" in app_main.BUILDERS
+        assert "logs" in app_main.BUILDERS
         print("OK   — فایل اصلی (main.py)")
     except Exception as e:  # noqa: BLE001
         fails += 1
