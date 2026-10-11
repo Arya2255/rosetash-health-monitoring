@@ -84,6 +84,7 @@
     python3 tests/test_bridge.py          # بدون شبکه: ingest، snapshot، TTL
     uv run python scripts/smoke_ui.py     # ساخت همهٔ صفحه‌ها بدون GUI — با و بدون پل
     ROZTASH_LIVE=0 uv run python scripts/smoke_ui.py
+    uv run python tests/test_multidev_ui.py   # چند-دستگاهی: دو گیت‌وی و دو مچ‌بند ساختگی
 
 ## دمو بدون مچ‌بند
 
