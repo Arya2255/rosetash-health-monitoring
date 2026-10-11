@@ -5,6 +5,8 @@
 مصرف‌کننده‌ها:
   - src/data.py — حالت زندهٔ برنامهٔ فلت با GET /api/snapshot
   - ابزارهای دمو و عیب‌یابی با GET /health و /api/events
+  - بخش «کارکنان» برنامه — دفتر کارکنان با GET/POST/DELETE /api/employees
+    و ادغام زندهٔ آن‌ها در snapshot["employees"]
 
 قواعد طراحی:
   - فقط کتابخانهٔ استاندارد پایتون
@@ -13,6 +15,8 @@
   - TTL سلامت ۱۵ دقیقه — برای نمایش آخرین اندازه‌گیری
   - TTL حیاتی‌ها ۱ ساعت — باتری و اطلاعات دستگاه دیرتر کهنه می‌شوند
   - گیتوی آنلاین اگر status آن کمتر از ۱۸۰ ثانیه پیش رسیده باشد
+  - دفتر کارکنان: نگاشت مک مچ‌بند ↔ کارکن (کلید = مک)؛ snapshot هر کارکن
+    ثبت‌شده و هر مچ‌بند ثبت‌نشدهٔ در دید را با دادهٔ زنده ادغام می‌کند
 """
 from __future__ import annotations
 
@@ -20,10 +24,12 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, unquote, urlparse
 
 MQTT_HOST = os.environ.get("ROZTASH_MQTT_HOST", "127.0.0.1")
 MQTT_PORT = os.environ.get("ROZTASH_MQTT_PORT", "1884")
@@ -40,6 +46,15 @@ GATEWAY_ONLINE_TTL = float(os.environ.get("ROZTASH_GATEWAY_ONLINE_TTL", "180"))
 EVENTS_KEEP = 3000
 HEALTH_KEEP = 5000
 VITALS_KEEP = 2000
+
+# آستانه‌های وضعیت کارکن — پیش‌فرض محافظه‌کارانه، در آینده قابل تنظیم
+HR_WARN_HIGH = 105.0     # ضربان میانگین بالای این عدد → هشدار
+HR_WARN_LOW = 50.0       # ضربان میانگین زیر این عدد → هشدار
+HR_DANGER_HIGH = 120.0   # از این عدد به بعد → اضطراری
+HR_DANGER_LOW = 45.0     # تا این عدد → اضطراری
+SPO2_WARN = 94           # اکسیژن ≤ ۹۴ → هشدار
+SPO2_DANGER = 92         # اکسیژن < ۹۲ → اضطراری
+BATTERY_WARN = 20        # درصد باتری مچ‌بند ≤ این عدد → هشدار
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events(
@@ -62,6 +77,9 @@ CREATE TABLE IF NOT EXISTS vitals(
   dev_maker TEXT, spo2_ack INTEGER, hrv_ack INTEGER, steps INTEGER,
   spo2_raw TEXT, hrv_raw TEXT, payload TEXT);
 CREATE INDEX IF NOT EXISTS idx_vitals_ts ON vitals(ts);
+CREATE TABLE IF NOT EXISTS employees(
+  mac TEXT PRIMARY KEY, name TEXT NOT NULL, dept TEXT, role TEXT, shift TEXT,
+  note TEXT, created_at REAL, updated_at REAL);
 """
 
 _lock = threading.Lock()
@@ -170,6 +188,226 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
         c.commit()
 
 
+# ─────────────────── دفتر کارکنان — نگاشت مک مچ‌بند ↔ کارکن ───────────────────
+# رابطهٔ هر مچ‌بند با صاحبش این‌جاست: کلید = مک مچ‌بند. ثبت، ویرایش و حذف
+# از برنامه (بخش «کارکنان») یا با curl انجام می‌شود؛ snapshot دفتر را با
+# دادهٔ زنده ادغام می‌کند تا بخش کارکنان برنامه از دادهٔ نمایشی جدا شود.
+
+_MAC_HEX = set("0123456789abcdef")
+
+
+def _norm_mac(raw) -> str:
+    """یکسان‌سازی مک — حروف کوچک، شش بایت با جداکنندهٔ دونقطه."""
+    s = str(raw or "").strip().lower().replace("-", ":").replace(" ", "")
+    if ":" not in s and len(s) == 12:  # f3b6d6b747d7 → f3:b6:…
+        s = ":".join(s[i:i + 2] for i in range(0, 12, 2))
+    return s
+
+
+def _valid_mac(s: str) -> bool:
+    parts = s.split(":")
+    return (len(parts) == 6 and
+            all(len(p) == 2 and all(ch in _MAC_HEX for ch in p) for p in parts))
+
+
+def upsert_employee(doc: dict) -> tuple[bool, str]:
+    """ثبت یا ویرایش کارکن — کلید، مک مچ‌بند است؛ فقط نام الزامی است.
+
+    ویرایش جزئی است: هر فیلدی که در درخواست نیامده باشد مقدار قبلی‌اش
+    می‌ماند؛ فرستادن رشتهٔ خالی یعنی پاک‌کردن همان فیلد.
+    """
+    doc = dict(doc or {})
+    mac = _norm_mac(doc.get("mac"))
+    name = str(doc.get("name") or "").strip()
+    if not _valid_mac(mac):
+        return False, "invalid mac"
+    if not name:
+        return False, "name required"
+    now = time.time()
+    with _lock:
+        c = db()
+        row = c.execute("SELECT * FROM employees WHERE mac=?", (mac,)).fetchone()
+
+        def pick(key: str) -> str:
+            if key in doc:
+                return str(doc.get(key) or "").strip()
+            return str((row[key] if row is not None else "") or "").strip()
+
+        c.execute(
+            "INSERT INTO employees(mac,name,dept,role,shift,note,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(mac) DO UPDATE SET name=excluded.name, dept=excluded.dept, "
+            "role=excluded.role, shift=excluded.shift, note=excluded.note, "
+            "updated_at=excluded.updated_at",
+            (mac, name, pick("dept"), pick("role"), pick("shift"), pick("note"),
+             now, now))
+        c.commit()
+    log(f"employee saved mac={mac} name={name!r}")
+    return True, ""
+
+
+def remove_employee(mac) -> tuple[bool, str]:
+    """حذف کارکن از دفتر — مچ‌بندش اگر در دید باشد به «ثبت‌نشده» برمی‌گردد."""
+    mac = _norm_mac(mac)
+    if not _valid_mac(mac):
+        return False, "invalid mac"
+    with _lock:
+        c = db()
+        cur = c.execute("DELETE FROM employees WHERE mac=?", (mac,))
+        c.commit()
+    if cur.rowcount == 0:
+        return False, "not found"
+    log(f"employee removed mac={mac}")
+    return True, ""
+
+
+def employees_list() -> list[dict]:
+    """دفتر خام کارکنان — بدون ادغام دادهٔ زنده (برای API)."""
+    with _lock:
+        rows = db().execute("SELECT * FROM employees ORDER BY name").fetchall()
+    return [dict(r) for r in rows]
+
+
+def _decode_spo2(spo2_raw) -> int | None:
+    """اکسیژن خون از نخستین بایت فریم خام (0A,B2) — همان قاعدهٔ SDK خود اپ."""
+    for raw in spo2_raw or []:
+        try:
+            first = int(str(raw).split(":", 1)[1][0:2], 16)
+        except Exception:
+            continue
+        if 70 <= first <= 100:
+            return first
+    return None
+
+
+def _employee_status(present: bool, health: dict | None, vitals: dict | None):
+    """وضعیت کارکن از دادهٔ واقعی — (status، فهرست کدهای مشکل).
+
+    off = مچ‌بند در دید هیچ گیت‌ویی نیست؛ warn/danger از ضربان، اکسیژن،
+    باتری و وضعیت اندازه‌گیری می‌آید. «قرمز فقط برای وضعیت اضطراری».
+    """
+    if not present:
+        return "off", []
+    issues: list[str] = []
+    avg = None
+    if health and health.get("state") == "done" and health.get("n"):
+        raw_avg = health.get("avg")
+        if raw_avg is not None:
+            try:
+                avg = float(raw_avg)
+            except (TypeError, ValueError):
+                avg = None
+    spo2 = (vitals or {}).get("spo2")
+    battery = (vitals or {}).get("battery")
+    if avg is not None and avg >= HR_WARN_HIGH:
+        issues.append("hr_high")
+    if avg is not None and avg <= HR_WARN_LOW:
+        issues.append("hr_low")
+    if spo2 is not None and spo2 <= SPO2_WARN:
+        issues.append("spo2_low")
+    if battery is not None and battery <= BATTERY_WARN:
+        issues.append("battery_low")
+    if (health and health.get("state") == "done"
+            and health.get("wearing") is False):
+        issues.append("not_wearing")
+    if (health and health.get("state") != "done"
+            and str(health.get("fail") or "none") != "none"):
+        issues.append("measure_fail")
+    danger = ((spo2 is not None and spo2 < SPO2_DANGER)
+              or (avg is not None and avg >= HR_DANGER_HIGH)
+              or (avg is not None and avg <= HR_DANGER_LOW))
+    if danger:
+        return "danger", issues
+    return ("warn" if issues else "ok"), issues
+
+
+def _employee_vitals(c: sqlite3.Connection, v, now: float) -> dict | None:
+    """حیاتی‌های آخرین پنجرهٔ مچ‌بند — با پُر کردن اکسیژن/HRV از پنجرهٔ قبل.
+
+    مثل بخش vitals در snapshot: پنجره‌های بدون مرحله نباید قرائت قبلی را
+    پاک کنند.
+    """
+    if v is None:
+        return None
+    spo2_raw = json.loads(v["spo2_raw"] or "[]")
+    hrv_raw = json.loads(v["hrv_raw"] or "[]")
+    spo2_ack, hrv_ack = bool(v["spo2_ack"]), bool(v["hrv_ack"])
+    readings_ts = v["ts"]
+    if not (spo2_raw or hrv_raw or spo2_ack or hrv_ack):
+        back = c.execute(
+            "SELECT * FROM vitals WHERE gw=? AND mac=? AND "
+            "(spo2_ack=1 OR hrv_ack=1 OR spo2_raw != '[]' OR hrv_raw != '[]') "
+            "ORDER BY ts DESC LIMIT 1", (v["gw"], v["mac"])).fetchone()
+        if back:
+            spo2_ack, hrv_ack = bool(back["spo2_ack"]), bool(back["hrv_ack"])
+            spo2_raw = json.loads(back["spo2_raw"] or "[]")
+            hrv_raw = json.loads(back["hrv_raw"] or "[]")
+            readings_ts = back["ts"]
+    return {
+        "battery": v["battery"], "dev_fw": v["dev_fw"],
+        "spo2": _decode_spo2(spo2_raw), "spo2_ack": spo2_ack,
+        "hrv_ack": hrv_ack, "hrv_frames": len(hrv_raw),
+        "ts": _iso(v["ts"]), "age_s": round(now - v["ts"], 1),
+        "readings_age_s": round(now - readings_ts, 1),
+    }
+
+
+def _employees_view(c: sqlite3.Connection, now: float) -> list[dict]:
+    """ادغام دفتر کارکنان با دادهٔ زنده — خوراک بخش «کارکنان» برنامه.
+
+    مبنای فهرست: همهٔ کارکنان ثبت‌شده + مچ‌بندهای ثبت‌نشدهٔ در دید.
+    """
+    reg = {r["mac"]: r for r in c.execute("SELECT * FROM employees")}
+    seen = {r["mac"]: r for r in c.execute("SELECT * FROM bands")}
+    zones = {r["gw"]: r["zone"] for r in c.execute("SELECT gw, zone FROM gateways")}
+    health_latest = {}
+    for r in c.execute("SELECT * FROM health WHERE ts >= ? ORDER BY ts DESC",
+                       (now - HEALTH_TTL,)):
+        health_latest.setdefault(r["mac"], r)
+    vitals_latest = {}
+    for r in c.execute("SELECT * FROM vitals WHERE ts >= ? ORDER BY ts DESC",
+                       (now - VITALS_TTL,)):
+        vitals_latest.setdefault(r["mac"], r)
+
+    fresh = {m for m, b in seen.items() if b["seen_at"] >= now - PRESENCE_TTL}
+    rows = []
+    for mac in sorted(set(reg) | fresh):
+        e = reg.get(mac)
+        b = seen.get(mac)
+        present = mac in fresh
+        h = health_latest.get(mac)
+        health = None
+        if h:
+            health = {
+                "state": h["state"], "fail": h["fail"],
+                "wearing": bool(h["wearing"]), "ended": bool(h["ended"]),
+                "bpm": json.loads(h["bpm"] or "[]"), "n": h["n"], "avg": h["avg"],
+                "ts": _iso(h["ts"]), "age_s": round(now - h["ts"], 1),
+            }
+        vitals = _employee_vitals(c, vitals_latest.get(mac), now)
+        status, issues = _employee_status(present, health, vitals)
+        rows.append({
+            "mac": mac,
+            "registered": e is not None,
+            "name": e["name"] if e else None,
+            "dept": e["dept"] if e else None,
+            "role": e["role"] if e else None,
+            "shift": e["shift"] if e else None,
+            "note": e["note"] if e else None,
+            "present": present,
+            "rssi": b["rssi"] if b else None,
+            "gw": b["gw"] if b else None,
+            "zone": zones.get(b["gw"]) if b else None,
+            "last_seen": _iso(b["seen_at"]) if b else None,
+            "last_seen_age_s": round(now - b["seen_at"], 1) if b else None,
+            "health": health,
+            "vitals": vitals,
+            "status": status,
+            "issues": issues,
+        })
+    return rows
+
+
 # ───────────────────────────── snapshot ─────────────────────────────
 
 def snapshot(now: float | None = None) -> dict:
@@ -240,11 +478,13 @@ def snapshot(now: float | None = None) -> dict:
                     v["vitals_ts"] = _iso(back["ts"])
                     v["vitals_age_s"] = round(now - back["ts"], 1)
             vitals.append(v)
+        employees = _employees_view(c, now)
     return {
         "ok": True, "fetched_at": _iso(now), "now": now,
         "presence_ttl": PRESENCE_TTL, "health_ttl": HEALTH_TTL,
         "vitals_ttl": VITALS_TTL,
         "gateways": gws, "bands": bands, "health": health, "vitals": vitals,
+        "employees": employees,
         "events": events,
     }
 
@@ -334,8 +574,20 @@ def command(doc: dict) -> tuple[bool, str, dict]:
 
 # ───────────────────────────── HTTP ─────────────────────────────
 
+class Server(ThreadingHTTPServer):
+    """سرور HTTP — خطای قطع ناگهانی کلاینت را یک‌خطی لاگ می‌کند.
+
+    مرورگر وقتی تب را می‌بندد وسط پاسخ سوکت را قطع می‌کند؛ بدون این،
+    هر بار یک traceback کامل وارد لاگ می‌شود.
+    """
+
+    def handle_error(self, request, client_address) -> None:  # noqa: N802 — امضای والد
+        exc = sys.exc_info()[1]
+        log(f"client error from {client_address[0]}: {type(exc).__name__}: {exc}")
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "roztash-bridge/0.1"
+    server_version = "roztash-bridge/0.2"
 
     def _send(self, code: int, doc: dict) -> None:
         body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
@@ -356,12 +608,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/events":
             snap = snapshot()
             self._send(200, {"ok": True, "events": snap["events"]})
+        elif path == "/api/employees":
+            self._send(200, {"ok": True, "employees": employees_list()})
         else:
             self._send(404, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        if path != "/api/command":
+        if path not in ("/api/command", "/api/employees"):
             self._send(404, {"ok": False, "error": "not found"})
             return
         try:
@@ -370,9 +624,28 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(400, {"ok": False, "error": "bad json body"})
             return
-        ok, err, info = command(doc)
-        self._send(200 if ok else 400,
-                   {"ok": ok, "info": info, "error": err or None})
+        if path == "/api/command":
+            ok, err, info = command(doc)
+            self._send(200 if ok else 400,
+                       {"ok": ok, "info": info, "error": err or None})
+        else:
+            ok, err = upsert_employee(doc)
+            self._send(200 if ok else 400, {"ok": ok, "error": err or None})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        # دو سبک پذیرفته می‌شود: /api/employees?mac=… و /api/employees/<mac>
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/api/employees/"):
+            mac = unquote(path[len("/api/employees/"):])
+        elif path == "/api/employees":
+            qs = parse_qs(urlparse(self.path).query)
+            mac = (qs.get("mac") or [""])[0]
+        else:
+            self._send(404, {"ok": False, "error": "not found"})
+            return
+        ok, err = remove_employee(mac)
+        code = 200 if ok else (400 if err == "invalid mac" else 404)
+        self._send(code, {"ok": ok, "error": err or None})
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002 — امضای والد
         return
@@ -381,7 +654,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     threading.Thread(target=subscriber_loop, daemon=True).start()
-    srv = ThreadingHTTPServer((HTTP_HOST, HTTP_PORT), Handler)
+    srv = Server((HTTP_HOST, HTTP_PORT), Handler)
     log(f"http on http://{HTTP_HOST}:{HTTP_PORT}  db={DB_PATH}")
     try:
         srv.serve_forever()

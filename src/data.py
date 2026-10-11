@@ -7,8 +7,11 @@
 فاز ۱ — داده از mock_data می‌آید (نمایشی).
 فاز ۲ (شروع‌شده) — حالت زنده: پل محلی دادهٔ واقعی گیت‌وی را سرو می‌کند و
 views فقط از همین ماژول می‌پرسند. اگر پل در دسترس نباشد، برنامه بدون خطا
-به دادهٔ نمایشی برمی‌گردد. هیچ فایلی از views و components عوض نشد؛
-فقط نوار زندهٔ داشبورد اضافه شد.
+به دادهٔ نمایشی برمی‌گردد.
+
+بخش «کارکنان» از فاز ۲ واقعی شده است: live_employees دفتر واقعی کارکنان را
+از پل می‌آورد و save_employee/delete_employee ثبت و حذف می‌کنند؛ فهرست
+نمونه فقط وقتی جای آن را می‌گیرد که پل در دسترس نباشد.
 """
 
 from mock_data import (  # noqa: F401
@@ -31,7 +34,15 @@ from mock_data import (  # noqa: F401
 # ── فاز ۲: دادهٔ زندهٔ گیت‌وی از طریق پل محلی ──
 # views هرگز مستقیم به live نباید وصل شوند؛ اگر به دادهٔ زندهٔ بیشتری
 # نیاز باشد، تابع تازه‌ای همین‌جا ساخته می‌شود.
-from live import live_available, live_status, live_summary, send_vibrate  # noqa: E402,F401
+from live import (  # noqa: E402,F401
+    delete_employee,
+    live_available,
+    live_employees,
+    live_status,
+    live_summary,
+    save_employee,
+    send_vibrate,
+)
 
 # ── نقشهٔ کارخانه — تصویر پایه و موقعیت نشانگرها ──
 from map_data import (  # noqa: E402,F401

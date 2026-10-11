@@ -5,8 +5,8 @@ import flet as ft
 
 from theme import (
     ATT_STATUS, BORDER, BRAND_RED, FONT, FONT_B, FONT_MED, FONT_SB, INK,
-    R_BTN, R_CARD, R_PILL, STATUS, TEXT_MAIN, TEXT_MUTED, WHITE,
-    avatar_initials, txt,
+    OFFLINE, OK, R_BTN, R_CARD, R_PILL, STATUS, TEXT_MAIN, TEXT_MUTED, WARN,
+    WHITE, avatar_initials, fa_num, txt,
 )
 
 # سایهٔ ملایم کارت‌ها — طبق حس HIG
@@ -143,3 +143,39 @@ def back_button(on_click):
         icon_color=INK, tooltip="بازگشت",
         style=ft.ButtonStyle(bgcolor=WHITE, shape=ft.RoundedRectangleBorder(radius=R_BTN)),
     )
+
+
+# ═══════════ کمک‌های بخش «کارکنان» — دادهٔ زندهٔ پل ═══════════
+
+# برچسب فارسی کدهای مشکل — خروجی issues پل (backend/bridge.py)
+ISSUE_LABELS = {
+    "hr_high": "ضربان بالاتر از حد مجاز",
+    "hr_low": "ضربان پایین‌تر از حد مجاز",
+    "spo2_low": "افت اکسیژن خون",
+    "battery_low": "شارژ مچ‌بند کم است",
+    "measure_fail": "اندازه‌گیری ضربان ناموفق بود",
+    "not_wearing": "مچ‌بند روی دست نیست",
+}
+
+
+def rel_age(seconds):
+    """سن رؤیت به متن کوتاه — «۷ ثانیه پیش»."""
+    if seconds is None:
+        return "—"
+    seconds = int(max(0, seconds))
+    if seconds < 60:
+        return f"{fa_num(seconds)} ثانیه پیش"
+    if seconds < 3600:
+        return f"{fa_num(seconds // 60)} دقیقه پیش"
+    return f"{fa_num(seconds // 3600)} ساعت پیش"
+
+
+def rssi_quality(rssi):
+    """کیفیت سیگنال مچ‌بند از RSSI — (برچسب، رنگ)."""
+    if rssi is None:
+        return "—", TEXT_MUTED
+    if rssi >= -75:
+        return "خوب", OK
+    if rssi >= -85:
+        return "متوسط", WARN
+    return "ضعیف", OFFLINE

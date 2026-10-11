@@ -4,6 +4,10 @@
 پل زنده در backend/bridge.py پیام‌های گیت‌وی را روی MQTT می‌گیرد و
 به شکل JSON سرو می‌کند: http://127.0.0.1:8726/api/snapshot
 
+دفتر کارکنان (نگاشت مک مچ‌بند ↔ کارکن) هم روی همین پل است:
+GET/POST/DELETE /api/employees — توابع live_employees، save_employee
+و delete_employee.
+
 قواعد:
   - فقط کتابخانهٔ استاندارد پایتون
   - هرگز استثنا به بیرون نمی‌دهد؛ اگر پل نبود None برمی‌گرداند
@@ -18,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.parse
 import urllib.request
 
 
@@ -116,3 +121,70 @@ def send_vibrate(mac: str | None = None, timeout: float = 2.5) -> tuple[bool, st
     if doc.get("ok"):
         return True, "فرمان لرزاندن رفت — اگر روی دست باشد می‌لرزد"
     return False, str(doc.get("error") or "فرمان نرسید")
+
+
+# ─────────────────────── دفتر کارکنان — روی پل ───────────────────────
+
+# ترجمهٔ خطاهای پل به پیام فارسی برای نمایش
+_ERROR_FA = {
+    "invalid mac": "مک مچ‌بند معتبر نیست — قالب درست: f3:b6:d6:b7:47:d7",
+    "name required": "نام کارکن لازم است",
+    "not found": "این کارکن در دفتر نیست",
+}
+
+
+def live_employees(force: bool = False):
+    """فهرست ادغام‌شدهٔ کارکنان از پل — None یعنی پل در دسترس نیست.
+
+    خروجی snapshot["employees"] است: هر کارکن ثبت‌شده + هر مچ‌بند
+    ثبت‌نشدهٔ در دید، با وضعیت و حیاتی‌های واقعی.
+    """
+    doc = live_status(force=force)
+    if not doc or not doc.get("ok"):
+        return None
+    return doc.get("employees") or []
+
+
+def _post_json(path: str, payload: dict, timeout: float = 4.0) -> tuple[bool, str]:
+    """POST به پل — هرگز استثنا بیرون نمی‌دهد؛ خطای پل را فارسی برمی‌گرداند."""
+    if MODE == "0":
+        return False, "حالت زنده خاموش است"
+    req = urllib.request.Request(
+        BRIDGE + path, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            doc = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return False, "پل پاسخ نداد"
+    if doc.get("ok"):
+        _cache["t"] = 0.0  # دفعهٔ بعد مستقیم از سرور خوانده شود
+        return True, ""
+    err = str(doc.get("error") or "")
+    return False, _ERROR_FA.get(err, err or "ثبت نشد")
+
+
+def save_employee(doc: dict) -> tuple[bool, str]:
+    """ثبت/ویرایش کارکن در دفتر پل — کلید، مک مچ‌بند است."""
+    doc = dict(doc or {})
+    doc["mac"] = str(doc.get("mac") or "").strip().lower()
+    return _post_json("/api/employees", doc)
+
+
+def delete_employee(mac: str) -> tuple[bool, str]:
+    """حذف کارکن از دفتر پل — مچ‌بندش اگر در دید باشد «ثبت‌نشده» می‌شود."""
+    if MODE == "0":
+        return False, "حالت زنده خاموش است"
+    req = urllib.request.Request(
+        BRIDGE + "/api/employees?mac=" + urllib.parse.quote(str(mac or "").strip().lower()),
+        method="DELETE")
+    try:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            doc = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return False, "پل پاسخ نداد"
+    if doc.get("ok"):
+        _cache["t"] = 0.0
+        return True, ""
+    err = str(doc.get("error") or "")
+    return False, _ERROR_FA.get(err, err or "حذف نشد")

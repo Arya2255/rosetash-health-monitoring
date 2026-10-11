@@ -117,7 +117,78 @@ def main() -> None:
     ok, err, info = bridge.command({"action": "vibrate", "mac": "aa:bb:cc:dd:ee:ff"})
     assert ok and info["gw"] == GW, "مچ‌بند ناشناس باید سراغ تازه‌ترین گیت‌وی برود"
 
-    print("bridge tests PASSED — ingest/snapshot/TTL/command")
+    # ── دفتر کارکنان — ثبت، ادغام زنده، وضعیت و حذف ──
+    ok, err = bridge.upsert_employee({"mac": MAC.upper(), "name": "رضا محمدی",
+                                      "dept": "تولید روغن", "role": "خط روغن ۲",
+                                      "shift": "صبح", "note": ""})
+    assert ok, err
+    ok, err = bridge.upsert_employee({"mac": "aa-11-bb-22-cc-33", "name": "مهدی کریمی"})
+    assert ok, err
+    macs = sorted(e["mac"] for e in bridge.employees_list())
+    assert macs == ["aa:11:bb:22:cc:33", MAC], f"یکسان‌سازی مک کار نکرد: {macs}"
+    # ویرایش جزئی نباید بقیهٔ فیلدها را پاک کند
+    ok, err = bridge.upsert_employee({"mac": MAC, "name": "رضا محمدی ۲"})
+    assert ok, err
+    row = next(r for r in bridge.employees_list() if r["mac"] == MAC)
+    assert row["dept"] == "تولید روغن", f"ویرایش جزئی دپارتمان را پاک کرد: {row}"
+    ok, err = bridge.upsert_employee({"mac": MAC, "name": "رضا محمدی"})
+    assert ok, err
+    ok, err = bridge.upsert_employee({"mac": "zz:zz:zz:zz:zz:zz", "name": "x"})
+    assert not ok and err == "invalid mac", "مک نامعتبر باید رد شود"
+    ok, err = bridge.upsert_employee({"mac": MAC, "name": "   "})
+    assert not ok and err == "name required", "نام خالی باید رد شود"
+
+    # حضور تازه: مک اصلی با RSSI تازه + مچ‌بند دومِ ثبت‌نشده
+    bridge.ingest(f"roztash/{GW}/presence", json.dumps({
+        "gw": GW, "ts": 1020, "bands": [{"mac": MAC, "rssi": -70},
+                                        {"mac": "aa:bb:cc:dd:ee:01", "rssi": -80}]}),
+        recv_ts=NOW - 4)
+
+    snap_e = bridge.snapshot(now=NOW)
+    emps = {e["mac"]: e for e in snap_e["employees"]}
+    assert set(emps) == {MAC, "aa:11:bb:22:cc:33", "aa:bb:cc:dd:ee:01"}, \
+        f"ترکیب کارکنان غلط: {sorted(emps)}"
+    e = emps[MAC]
+    assert e["registered"] is True and e["name"] == "رضا محمدی"
+    assert e["present"] is True and e["status"] == "ok", (e["status"], e["issues"])
+    assert e["rssi"] == -70 and e["gw"] == GW and e["zone"] == "test"
+    assert e["health"]["avg"] == 76.8 and e["health"]["n"] == 5
+    assert e["vitals"]["battery"] == 90
+    assert e["vitals"]["spo2_ack"] is True, "پُر شدن اکسیژن از پنجرهٔ قبل کار نکرد"
+    assert e["vitals"]["spo2"] is None, "فریم با بایت صفر نباید قرائت معتبر بدهد"
+    u = emps["aa:bb:cc:dd:ee:01"]
+    assert u["registered"] is False and u["name"] is None and u["present"] is True
+    n = emps["aa:11:bb:22:cc:33"]
+    assert n["registered"] is True and n["present"] is False and n["status"] == "off"
+
+    # وضعیت اضطراری: ضربان ۱۳۰٫۵، اکسیژن ۸۵، باتری ۱۵
+    bridge.ingest(f"roztash/{GW}/health", json.dumps({
+        "gw": GW, "mac": MAC, "state": "done", "fail": "none", "wearing": True,
+        "ended": True, "bpm": [128, 130, 132], "n": 3, "avg": 130.5}),
+        recv_ts=NOW - 3)
+    bridge.ingest(f"roztash/{GW}/vitals", json.dumps({
+        "gw": GW, "mac": MAC, "battery": 15, "dev_fw": "2.0.2.3",
+        "spo2_ack": True, "hrv_ack": False, "spo2_raw": ["0AB2:551A0A0B"],
+        "hrv_raw": []}), recv_ts=NOW - 2)
+    e = {x["mac"]: x for x in bridge.snapshot(now=NOW)["employees"]}[MAC]
+    assert e["status"] == "danger", e["status"]
+    assert "hr_high" in e["issues"] and "spo2_low" in e["issues"]
+    assert "battery_low" in e["issues"]
+    assert e["vitals"]["spo2"] == 85, e["vitals"]["spo2"]
+
+    # حذف: مک در دید می‌ماند ولی «ثبت‌نشده» می‌شود
+    ok, err = bridge.remove_employee(MAC)
+    assert ok, err
+    ok, err = bridge.remove_employee(MAC)
+    assert not ok and err == "not found", "حذف دوم باید not found بدهد"
+    e = {x["mac"]: x for x in bridge.snapshot(now=NOW)["employees"]}[MAC]
+    assert e["registered"] is False and e["name"] is None and e["present"] is True
+
+    # پس از پایان TTL حضور: ثبت‌شده‌های غایب می‌مانند، ثبت‌نشده‌های کهنه می‌روند
+    stale = [x["mac"] for x in bridge.snapshot(now=NOW + 120)["employees"]]
+    assert stale == ["aa:11:bb:22:cc:33"], f"هرَس کارکنان غلط: {stale}"
+
+    print("bridge tests PASSED — ingest/snapshot/TTL/command/employees")
 
 
 if __name__ == "__main__":

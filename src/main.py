@@ -19,7 +19,9 @@ from theme import (  # noqa: E402
     BORDER, FONT, FONT_MED, FONTS, INK, PAGE_BG, TEXT_MAIN, TEXT_MUTED, WHITE,
     fa_clock, fa_date, txt,
 )
-from data import ALERTS_ACTIVE, live_available, live_status, send_vibrate  # noqa: E402
+from data import (  # noqa: E402
+    ALERTS_ACTIVE, live_available, live_employees, live_status, send_vibrate,
+)
 from components.sidebar import build_sidebar  # noqa: E402
 from views.dashboard import dashboard_view  # noqa: E402
 from views.live import live_view  # noqa: E402
@@ -217,6 +219,16 @@ def main(page: ft.Page):
                     app.go(v)
                 await asyncio.sleep(2.0)
                 await _save(v)
+                if v == "employees":
+                    # کارکن واقعی — پروفایل زندهٔ نخستین کارکن دفتر (اگر باشد)
+                    try:
+                        live = live_employees() or []
+                        if live:
+                            app.go("employee", live[0]["mac"])
+                            await asyncio.sleep(2.0)
+                            await _save("employee_live")
+                    except Exception:
+                        pass
 
         page.run_task(shot_tour)
 

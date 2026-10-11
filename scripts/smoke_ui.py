@@ -135,6 +135,43 @@ def main():
         fails += 1
         print(f"FAIL — دادهٔ نقشهٔ کارخانه: {type(e).__name__}: {e}")
 
+    # ── بخش «کارکنان» با دادهٔ زندهٔ شبیه‌سازی‌شده ──
+    try:
+        import components.employee_form as c_form
+
+        stub = [
+            {"mac": "f3:b6:d6:b7:47:d7", "registered": True, "name": "حمید نوری",
+             "dept": "تولید روغن", "role": "خط روغن ۲", "shift": "صبح", "note": "",
+             "present": True, "rssi": -70, "gw": "gw-test-1", "zone": "test",
+             "last_seen": None, "last_seen_age_s": 5.0,
+             "health": {"state": "done", "fail": "none", "wearing": True,
+                        "ended": True, "bpm": [75, 76, 77], "n": 3, "avg": 76.0,
+                        "ts": None, "age_s": 25.0},
+             "vitals": {"battery": 90, "dev_fw": "2.0.2.3", "spo2": 99,
+                        "spo2_ack": True, "hrv_ack": False, "hrv_frames": 0,
+                        "ts": None, "age_s": 30.0, "readings_age_s": 30.0},
+             "status": "ok", "issues": []},
+            {"mac": "aa:bb:cc:dd:ee:01", "registered": False, "name": None,
+             "dept": None, "role": None, "shift": None, "note": None, "present": True,
+             "rssi": -80, "gw": "gw-test-1", "zone": "test", "last_seen": None,
+             "last_seen_age_s": 9.0, "health": None, "vitals": None,
+             "status": "ok", "issues": []},
+        ]
+        orig_emp = v_employees.live_employees
+        orig_detail = v_detail.live_employees
+        v_employees.live_employees = lambda force=False: stub
+        v_detail.live_employees = lambda force=False: stub
+        app.state["emp"] = "f3:b6:d6:b7:47:d7"
+        v_employees.employees_view(app)
+        v_detail.employee_detail_view(app)
+        c_form.open_employee_form(app, mac="aa:bb:cc:dd:ee:01")
+        v_employees.live_employees = orig_emp
+        v_detail.live_employees = orig_detail
+        print("OK   — کارکنان: فهرست زنده، پروفایل و فرم (شبیه‌سازی)")
+    except Exception as e:  # noqa: BLE001
+        fails += 1
+        print(f"FAIL — کارکنان زنده (شبیه‌سازی): {type(e).__name__}: {e}")
+
     print()
     print("نتیجه:", "همهٔ صفحه‌ها سالم" if not fails else f"{fails} خطا")
     return 1 if fails else 0
