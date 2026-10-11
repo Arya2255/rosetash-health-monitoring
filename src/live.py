@@ -292,3 +292,22 @@ def delete_gateway(gw: str) -> tuple[bool, str]:
     """حذف گیت‌وی از دفتر پل — اگر دوباره در شبکه دیده شود، «تعریف‌نشده» می‌ماند."""
     return _delete_json("/api/gateways", "gw", str(gw or "").strip().lower(),
                         "حذف نشد")
+
+
+def netinfo(include_pass: bool = False):
+    """وای‌فای و آدرس پیشنهادی همین سیستم از پل — None یعنی پل در دسترس نیست.
+
+    خروجی مثل {'ssid', 'mqtt_host', 'mqtt_port', 'candidates', ...}؛
+    include_pass=True رمز وای‌فای هم می‌آید (برای صفحهٔ آماده‌سازی گیتوی —
+    پل فقط روی 127.0.0.1 سرو می‌کند).
+    """
+    if MODE == "0":
+        return None
+    suffix = "?include_pass=1" if include_pass else ""
+    try:
+        with urllib.request.urlopen(BRIDGE + "/api/netinfo" + suffix,
+                                    timeout=4.0) as resp:
+            doc = json.loads(resp.read().decode("utf-8"))
+        return doc if doc.get("ok") else None
+    except Exception:
+        return None

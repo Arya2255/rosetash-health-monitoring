@@ -13,6 +13,8 @@
   - بخش «گیت‌وی‌ها» — دفتر گیت‌وی‌ها با GET/POST/DELETE /api/gateways و
     ادغامش با وضعیت زنده در snapshot["map_gateways"] (تعریف و چیدمان روی نقشه)
   - عکس پرسنلی کارکنان — GET /api/photo/<mac>؛ فایل‌ها در state/photos/
+  - آماده‌سازی گیتوی — GET /api/netinfo: وای‌فای فعلی سیستم + پیشنهاد آدرس MQTT
+    (include_pass=1 رمز وای‌فای را هم می‌دهد؛ فقط روی 127.0.0.1 سرو می‌شود)
 
 قواعد طراحی:
   - فقط کتابخانهٔ استاندارد پایتون
@@ -35,6 +37,7 @@ import base64
 import json
 import os
 import re
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -105,7 +108,7 @@ CREATE TABLE IF NOT EXISTS catalogs(
   created_at REAL, updated_at REAL);
 CREATE TABLE IF NOT EXISTS gateway_registry(
   gw TEXT PRIMARY KEY, label TEXT, zone TEXT, kind TEXT,
-  x REAL, y REAL, note TEXT, created_at REAL, updated_at REAL);
+  x REAL, y REAL, note TEXT, mac TEXT, created_at REAL, updated_at REAL);
 """
 
 _lock = threading.Lock()
@@ -133,6 +136,10 @@ def db() -> sqlite3.Connection:
                              ("line", "TEXT"), ("age", "INTEGER")):
             if col not in cols:
                 _db.execute(f"ALTER TABLE employees ADD COLUMN {col} {coltype}")
+        gcols = {r[1] for r in _db.execute("PRAGMA table_info(gateway_registry)")}
+        if "mac" not in gcols:
+            # مک برد گیت‌وی — برای تشخیص «برد اشتباه» در آماده‌سازی
+            _db.execute("ALTER TABLE gateway_registry ADD COLUMN mac TEXT")
         _db.commit()
         os.makedirs(PHOTOS_DIR, exist_ok=True)
     return _db
@@ -660,13 +667,14 @@ def upsert_gateway(doc: dict) -> tuple[bool, str]:
         kind = kind_new or str((row["kind"] if row is not None else "") or "") or "proposed"
         x_val = (row["x"] if row is not None else None) if x_new is _POS_UNSET else x_new
         y_val = (row["y"] if row is not None else None) if y_new is _POS_UNSET else y_new
+        mac = pick("mac").lower()
         c.execute(
-            "INSERT INTO gateway_registry(gw,label,zone,kind,x,y,note,"
-            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) "
+            "INSERT INTO gateway_registry(gw,label,zone,kind,x,y,note,mac,"
+            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(gw) DO UPDATE SET label=excluded.label, "
             "zone=excluded.zone, kind=excluded.kind, x=excluded.x, y=excluded.y, "
-            "note=excluded.note, updated_at=excluded.updated_at",
-            (gw, label, pick("zone"), kind, x_val, y_val, pick("note"), now, now))
+            "note=excluded.note, mac=excluded.mac, updated_at=excluded.updated_at",
+            (gw, label, pick("zone"), kind, x_val, y_val, pick("note"), mac, now, now))
         c.commit()
     log(f"gateway saved gw={gw} label={label!r}")
     return True, ""
@@ -712,7 +720,7 @@ def _gateways_view(c: sqlite3.Connection, now: float) -> list[dict]:
         age = (now - lv["last_seen"]) if (lv is not None and lv["last_seen"]) else None
         rows.append({
             "gw": gw, "label": r["label"], "zone": r["zone"], "kind": r["kind"],
-            "x": r["x"], "y": r["y"], "note": r["note"],
+            "mac": r["mac"], "x": r["x"], "y": r["y"], "note": r["note"],
             "registered": True,
             "live": lv is not None,
             "online": bool(lv is not None and age is not None
@@ -727,7 +735,7 @@ def _gateways_view(c: sqlite3.Connection, now: float) -> list[dict]:
         age = (now - lv["last_seen"]) if lv["last_seen"] else None
         rows.append({
             "gw": gw, "label": None, "zone": lv["zone"], "kind": "installed",
-            "x": None, "y": None, "note": None,
+            "mac": None, "x": None, "y": None, "note": None,
             "registered": False,
             "live": True,
             "online": bool(age is not None and age <= GATEWAY_ONLINE_TTL),
@@ -736,6 +744,140 @@ def _gateways_view(c: sqlite3.Connection, now: float) -> list[dict]:
             "age_s": round(age, 1) if age is not None else None,
         })
     return rows
+
+
+# ───────── آمادهسازی گیتوی — وایفای و آدرس سیستم ─────────
+# خوراک صفحهٔ «آمادهسازی گیتوی»: ssid (و اختیاری رمز) وایفای همین سیستم +
+# پیشنهاد آدرس MQTT که گیتوی تازه باید بشناسد. همه‌چیز «بهترین تلاش» است —
+# نبود ابزار سیستمی یعنی رشتهٔ خالی، نه خطا.
+
+
+def _run_cmd(args: list[str], timeout: float = 8.0) -> str | None:
+    """اجرای یک فرمان سیستمی کوتاه — متن یا None؛ هرگز استثنا نمی‌دهد."""
+    try:
+        res = subprocess.run(args, capture_output=True, timeout=timeout)
+        return (res.stdout or b"").decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def _current_wifi() -> dict:
+    """ssid/رمز وایفای فعال سیستم — nmcli روی لینوکس، netsh روی ویندوز."""
+    ssid, psk, source = "", "", ""
+    if sys.platform.startswith("win"):
+        out = _run_cmd(["netsh", "wlan", "show", "interfaces"])
+        if out:
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("SSID") and not line.startswith("BSSID") \
+                        and ":" in line:
+                    ssid = line.split(":", 1)[1].strip()
+                    break
+        if ssid:
+            source = "netsh"
+            prof = _run_cmd(["netsh", "wlan", "show", "profile",
+                             f"name={ssid}", "key=clear"])
+            if prof:
+                for line in prof.splitlines():
+                    line = line.strip()
+                    if line.startswith("Key Content") and ":" in line:
+                        psk = line.split(":", 1)[1].strip()
+                        break
+    else:
+        act = _run_cmd(["nmcli", "-t", "-f", "ACTIVE,SSID,DEVICE",
+                        "dev", "wifi"])
+        if act:
+            for line in act.splitlines():
+                if not line.startswith("yes:"):
+                    continue
+                ssid = line.split(":", 1)[1].rsplit(":", 1)[0]
+                break
+        if ssid:
+            source = "nmcli"
+            conn = _run_cmd(["nmcli", "-t", "-f", "NAME,TYPE,ACTIVE",
+                             "connection", "show", "--active"])
+            name = ""
+            if conn:
+                for line in conn.splitlines():
+                    if ":802-11-wireless:yes" in line:
+                        name = line.split(":", 1)[0]
+                        break
+            if name:
+                psk = (_run_cmd(["nmcli", "-s", "-g",
+                                 "802-11-wireless-security.psk",
+                                 "connection", "show", name]) or "").strip()
+    return {"ssid": ssid, "pass": psk, "source": source}
+
+
+def _host_ip_candidates() -> list[dict]:
+    """آدرس‌های IPv4 محلی این سیستم — حدس آدرس وصل‌شدن گیتوی‌ها."""
+    cands: list[dict] = []
+    out = _run_cmd(["ip", "-o", "-4", "addr", "show"])
+    if out:
+        for line in out.splitlines():
+            parts = line.split()
+            try:
+                iface = parts[1].rstrip(":")
+                addr = parts[3]
+                ip, prefix = addr.split("/", 1)
+            except (IndexError, ValueError):
+                continue
+            if iface == "lo" or ip.startswith("127."):
+                continue
+            cands.append({"iface": iface, "ip": ip, "prefix": prefix})
+    # مسیر پیش‌فرض — کارساز روی همهٔ OSها (از جمله ویندوز)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith("127.") and all(c["ip"] != ip for c in cands):
+            cands.append({"iface": "default", "ip": ip, "prefix": ""})
+    except Exception:
+        pass
+    return cands
+
+
+def _suggest_mqtt_host(cands: list[dict]) -> str:
+    """آدرسی که این سیستم از دید گیتوی دارد — هم‌سابنتِ گیتوی‌های زندهٔ اخیر."""
+    try:
+        with _lock:
+            rows = db().execute(
+                "SELECT ip FROM gateways WHERE ip IS NOT NULL AND last_seen > ? "
+                "ORDER BY last_seen DESC LIMIT 5",
+                (time.time() - 3600,)).fetchall()
+    except Exception:
+        rows = []
+    for r in rows:
+        gw_ip = str(r["ip"] or "")
+        if gw_ip.count(".") != 3:
+            continue
+        net = gw_ip.rsplit(".", 1)[0]
+        for c in cands:
+            if c["ip"].rsplit(".", 1)[0] == net:
+                return c["ip"]
+    for c in cands:
+        if c.get("iface") == "default":
+            return c["ip"]
+    return cands[0]["ip"] if cands else ""
+
+
+def netinfo(include_pass: bool = False) -> dict:
+    """وای‌فای سیستم + پیشنهاد آدرس MQTT برای صفحهٔ آماده‌سازی گیتوی."""
+    wifi = _current_wifi()
+    cands = _host_ip_candidates()
+    doc = {
+        "ok": True,
+        "hostname": socket.gethostname(),
+        "ssid": wifi["ssid"],
+        "wifi_source": wifi["source"],
+        "mqtt_host": _suggest_mqtt_host(cands),
+        "mqtt_port": MQTT_PORT,
+        "candidates": cands,
+    }
+    if include_pass:
+        doc["pass"] = wifi["pass"]
+    return doc
 
 
 def _decode_spo2(spo2_raw) -> int | None:
@@ -1138,6 +1280,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "catalogs": catalogs_list()})
         elif path == "/api/gateways":
             self._send(200, {"ok": True, "gateways": gateways_registry_list()})
+        elif path == "/api/netinfo":
+            qs = parse_qs(urlparse(self.path).query)
+            self._send(200, netinfo(include_pass=qs.get(
+                "include_pass", ["0"])[0] == "1"))
         elif path.startswith("/api/photo/"):
             self._send_photo(unquote(path[len("/api/photo/"):]))
         else:

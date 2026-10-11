@@ -1,0 +1,85 @@
+{
+  "schema": "roztash-gateway-bundle/v1",
+  "built_at": "2026-10-11T16:49:52+03:30",
+  "fw_version": "0.2.1-setup",
+  "fqbn": "esp32:esp32:esp32:PartitionScheme=min_spiffs",
+  "core": "esp32:esp32 3.3.12",
+  "flash": {
+    "baud": 460800,
+    "mode": "dio",
+    "freq": "80m",
+    "size": "4MB",
+    "files": [
+      {
+        "addr": "0x1000",
+        "file": "firmware/bootloader.bin",
+        "sha256": "47bbbfca119fe87190f63a67af9d85adff6433bcf3812ec92a9b9c9416a53ad1",
+        "size": 24992
+      },
+      {
+        "addr": "0x8000",
+        "file": "firmware/partitions.bin",
+        "sha256": "0a8b5720e7b77ff11f1462458c3a509dee79224e5279898f26d6a2e3ae0517b7",
+        "size": 3072
+      },
+      {
+        "addr": "0x10000",
+        "file": "firmware/app.bin",
+        "sha256": "587626bf177a68fb23233f106108727950a130f699bdccb8f2fe5dcafe434b12",
+        "size": 1284336
+      },
+      {
+        "addr": "0xe000",
+        "file": "firmware/boot_app0.bin",
+        "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0",
+        "size": 8192
+      },
+      {
+        "addr": "0x3D0000",
+        "file": "firmware/littlefs-blank.bin",
+        "sha256": "1622e43d9ca154849f27df896ba16d0abdeff95e8888e60dd909a268c967a302",
+        "size": 131072
+      }
+    ]
+  },
+  "littlefs": {
+    "offset": "0x3D0000",
+    "size": 131072,
+    "page": 256,
+    "block": 4096
+  },
+  "tools": {
+    "windows-amd64": {
+      "esptool.exe": {
+        "sha256": "33df5f7e172531ea70307c37d82c4eafaa3e03cb86d4ccdeaf0287084d21d102",
+        "size": 14875936
+      },
+      "mklittlefs.exe": {
+        "sha256": "1d56e70f074a56d7016c8f8ba56759ac9021be1f6c9749243426fb711228242b",
+        "size": 1203200
+      },
+      "libwinpthread-1.dll": {
+        "sha256": "3eaccc6167049ce7c080e61834cf51797a5a972002dfe8b16218e13a3fff2e62",
+        "size": 64403
+      },
+      "LICENSE.esptool.txt": {
+        "sha256": "189b1af95d661151e054cea10c91b3d754e4de4d3fecfb074c1fb29476f7167b",
+        "size": 18431
+      },
+      "LICENSE.mklittlefs.txt": {
+        "sha256": "66de3091aa039c7e6189acbf3e2625b9f0b81d1f24659e412a20736badf313b6",
+        "size": 1108
+      }
+    },
+    "linux-x86_64": {
+      "mklittlefs": {
+        "sha256": "e2f30a746d6da9a3a39ad90d222639333e8a75de6679fe8fb4ceffb3dc5c2865",
+        "size": 121168
+      }
+    }
+  },
+  "notes": [
+    "littlefs-blank.bin has no /config.json: the board boots into its setup AP (RoztashGw-XXXXXX) for phone configuration.",
+    "The app generates a per-gateway LittleFS image at flash time (mklittlefs, same geometry as littlefs-blank.bin)."
+  ]
+}

@@ -49,6 +49,7 @@ from live import (  # noqa: E402,F401
     live_gateways,
     live_status,
     live_summary,
+    netinfo,
     photo_src,
     save_band,
     save_catalog,

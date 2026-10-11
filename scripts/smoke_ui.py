@@ -24,6 +24,7 @@ import views.map as v_map  # noqa: E402
 import views.bands as v_bands  # noqa: E402
 import views.definitions as v_defs  # noqa: E402
 import views.gateways as v_gateways  # noqa: E402
+import views.provisioning as v_prov  # noqa: E402
 import views.management as v_management  # noqa: E402
 import views.reports as v_reports  # noqa: E402
 import views.settings as v_settings  # noqa: E402
@@ -75,6 +76,7 @@ def main():
         ("پایش زنده", lambda: v_live.live_view(app)),
         ("نقشهٔ کارخانه", lambda: v_map.map_view(app)),
         ("گیت‌وی‌ها", lambda: v_gateways.gateways_view(app)),
+        ("آماده‌سازی گیتوی", lambda: v_prov.provisioning_view(app)),
         ("کارکنان", lambda: v_employees.employees_view(app)),
         ("مچ‌بندها", lambda: v_bands.bands_view(app)),
         ("تعاریف پایه", lambda: v_defs.definitions_view(app)),
@@ -107,6 +109,7 @@ def main():
         assert "attendance" in app_main.BUILDERS
         assert "map" in app_main.BUILDERS
         assert "gateways" in app_main.BUILDERS
+        assert "provisioning" in app_main.BUILDERS
         print("OK   — فایل اصلی (main.py)")
     except Exception as e:  # noqa: BLE001
         fails += 1

@@ -7,8 +7,12 @@
 //      the band is released (disconnected) so advertising resumes.
 //   C) remote commands on roztash/<gw>/cmd — currently "vibrate" (find-device):
 //      connect, send (05,50), the band buzzes and acks, disconnect.
+//   D) wifi setup portal: when wifi config is missing or the station fails to
+//      connect, an open AP "RoztashGw-XXXXXX" serves a phone setup page
+//      (setup_portal.{h,cpp}) — config only; firmware itself needs one USB flash.
 //
-// Reference docs: docs/gateway-design.md, docs/band-protocol.md.
+// Reference docs: docs/gateway-design.md, docs/band-protocol.md,
+//                 docs/gateway-provisioning.md.
 // Toolchain: arduino-cli + esp32 core 3.x + NimBLE-Arduino >= 2.1,
 //            PubSubClient, ArduinoJson >= 7.
 #include <Arduino.h>
@@ -19,8 +23,9 @@
 #include "ble_central.h"
 #include "config.h"
 #include "mqtt_link.h"
+#include "setup_portal.h"
 
-static const char* kFwVersion = "0.1.5-vibrate";
+const char* kFwVersion = "0.2.1-setup";
 
 // SpO2 + HRV stages run only every Nth health window: three PPG measurements
 // back to back on every window would drain the band's battery. Battery and
@@ -63,20 +68,7 @@ static void setupWatchdog() {
   esp_task_wdt_add(NULL);
 }
 
-void setup() {
-  Serial.begin(115200);
-  delay(200);
-  Serial.printf("\n[gw] boot — fw %s\n", kFwVersion);
-
-  configLoad(cfg);
-
-  WiFi.begin(cfg.wifi_ssid, cfg.wifi_pass);
-  const uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) delay(250);
-  Serial.printf("[gw] wifi: %s\n",
-                WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str()
-                                              : "not connected (continuing)");
-
+static void normalBegin() {
   configTime(0, 0, "pool.ntp.org", "time.google.com");  // UTC; backend localizes
 
   ble.begin(cfg.scan_interval_ms, cfg.scan_window_ms,
@@ -84,12 +76,58 @@ void setup() {
   mqtt.begin(cfg);
 
   window_started_ms = millis();
-  setupWatchdog();
+  last_presence_ms = millis();
+  last_status_ms = millis();
   Serial.println("[gw] ready");
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+  Serial.printf("\n[gw] boot — fw %s\n", kFwVersion);
+
+  configLoad(cfg);
+  setupWatchdog();
+
+  // wifi: connect when configured; otherwise — or when the station fails —
+  // open the setup portal (AP + web page) so the gateway can be configured
+  // from a phone. The portal keeps retrying and hands over transparently.
+  bool wifi_ok = false;
+  if (cfg.wifi_ssid[0]) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(cfg.wifi_ssid, cfg.wifi_pass);
+    const uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) {
+      delay(250);
+      esp_task_wdt_reset();
+    }
+    wifi_ok = WiFi.status() == WL_CONNECTED;
+  }
+  Serial.printf("[gw] wifi: %s\n",
+                wifi_ok ? WiFi.localIP().toString().c_str()
+                        : (cfg.wifi_ssid[0] ? "connect failed — setup mode"
+                                            : "no config — setup mode"));
+  if (!wifi_ok) {
+    setupPortalBegin(cfg);
+  } else {
+    normalBegin();
+  }
 }
 
 void loop() {
   const uint32_t now = millis();
+
+  // Setup portal: serve the config page; the station retries in the
+  // background and we fall through to normal operation once it connects.
+  if (setupPortalActive()) {
+    if (setupPortalPoll()) {
+      WiFi.setAutoReconnect(true);
+      normalBegin();
+    }
+    esp_task_wdt_reset();
+    delay(10);
+    return;
+  }
 
   mqtt.poll();
   ble.poll();
