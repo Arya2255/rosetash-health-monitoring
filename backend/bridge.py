@@ -47,6 +47,11 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
+# Auto-discovery for zero-config networking
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from tools.discovery_udp import DiscoveryServer
+
 MQTT_HOST = os.environ.get("ROZTASH_MQTT_HOST", "127.0.0.1")
 MQTT_PORT = os.environ.get("ROZTASH_MQTT_PORT", "1884")
 MQTT_TOPIC = os.environ.get("ROZTASH_MQTT_TOPIC", "roztash/#")
@@ -1397,12 +1402,19 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    
+    # Start discovery server for zero-config networking
+    discovery_server = DiscoveryServer(MQTT_HOST, int(MQTT_PORT))
+    threading.Thread(target=discovery_server.start, daemon=True).start()
+    log(f"discovery server started on port 19198")
+    
     threading.Thread(target=subscriber_loop, daemon=True).start()
     srv = Server((HTTP_HOST, HTTP_PORT), Handler)
     log(f"http on http://{HTTP_HOST}:{HTTP_PORT}  db={DB_PATH}")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
+        discovery_server.stop()
         log("bye")
 
 
