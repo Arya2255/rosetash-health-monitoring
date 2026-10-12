@@ -23,9 +23,10 @@
 #include "ble_central.h"
 #include "config.h"
 #include "mqtt_link.h"
+#include "discovery.h"
 #include "setup_portal.h"
 
-const char* kFwVersion = "0.2.1-setup";
+const char* kFwVersion = "0.3.0-discovery";
 
 // SpO2 + HRV stages run only every Nth health window: three PPG measurements
 // back to back on every window would drain the band's battery. Battery and
@@ -42,6 +43,22 @@ static uint32_t window_started_ms = 0;
 static bool window_active = false;
 static uint16_t window_gen = 1;
 static uint16_t attempted_gen[BleCentral::kMaxBands];  // per-sighting-slot
+static DiscoveryClient discovery;
+static char resolved_mqtt_host[48] = {0};
+static uint16_t resolved_mqtt_port = 1883;
+
+// Resolve MQTT host via discovery, fallback to config
+static void resolveMqttHost() {
+  // Use discovery to find the server
+  bool discovered = discovery.discover(cfg.mqtt_host, cfg.mqtt_port,
+                                        resolved_mqtt_host, sizeof(resolved_mqtt_host),
+                                        &resolved_mqtt_port);
+  if (discovered) {
+    Serial.printf("[gw] Discovery: using %s:%u\n", resolved_mqtt_host, resolved_mqtt_port);
+  } else {
+    Serial.printf("[gw] Discovery: fallback to config %s:%u\n", cfg.mqtt_host, cfg.mqtt_port);
+  }
+}
 
 // Picks the next band not yet measured in this window.
 static bool pickNextBand() {
@@ -71,6 +88,13 @@ static void setupWatchdog() {
 static void normalBegin() {
   configTime(0, 0, "pool.ntp.org", "time.google.com");  // UTC; backend localizes
 
+  // Resolve MQTT server via discovery (auto-find the PC)
+  resolveMqttHost();
+  
+  // Override config with discovered values
+  strncpy(cfg.mqtt_host, resolved_mqtt_host, sizeof(cfg.mqtt_host) - 1);
+  cfg.mqtt_port = resolved_mqtt_port;
+  
   ble.begin(cfg.scan_interval_ms, cfg.scan_window_ms,
             (uint32_t)cfg.measure_timeout_s * 1000UL);
   mqtt.begin(cfg);
