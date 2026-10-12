@@ -32,7 +32,9 @@ jobs:
 
       - name: Build Windows executable
         run: |
-          uv run flet build windows -o ./dist
+          $env:PYTHONIOENCODING = "utf-8"
+          chcp 65001
+          uv run flet build windows -o ./dist --yes
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
