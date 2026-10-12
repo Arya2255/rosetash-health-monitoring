@@ -34,13 +34,16 @@ jobs:
         run: |
           $env:PYTHONIOENCODING = "utf-8"
           chcp 65001
-          uv run flet build windows -o ./dist --yes
+          # Install flet-cli globally then build
+          uv pip install flet-cli
+          flet build windows -o ./dist --yes --verbose
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: roztash-windows
-          path: ./dist/*.exe
+          path: ./dist/
+          retention-days: 30
 
       - name: Create Release
         if: github.ref == 'refs/heads/main'
