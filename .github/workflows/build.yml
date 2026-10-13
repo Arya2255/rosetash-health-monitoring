@@ -34,8 +34,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install flet
-          uv sync
+          pip install -r requirements.txt
 
       - name: Build Windows app
         run: |
