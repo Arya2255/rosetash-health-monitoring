@@ -25,6 +25,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
       - name: Install uv
         run: |
           pip install uv
@@ -32,11 +35,11 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync
+          uv pip install flet
 
-      - name: Build Windows executable
+      - name: Build Windows app
         run: |
-          uv run pip install pyinstaller
-          uv run pyinstaller src/main.py --name "RosetashHealthMonitoring" --windowed --onefile --distpath ./dist
+          flet build windows -o ./dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
