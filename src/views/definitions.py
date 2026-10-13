@@ -17,6 +17,7 @@ from theme import (
     TEXT_MUTED, WHITE, fa_num, txt,
 )
 from data import delete_catalog, live_catalogs, save_catalog
+from layout import dialog_w, is_phone, list_card, page_scroll
 from components.common import SHADOW
 
 KIND_FA = {"company": "شرکت", "unit": "واحد", "line": "خط", "role": "سمت"}
@@ -26,7 +27,7 @@ KIND_ORDER = ("company", "unit", "line", "role")
 DEMO_CATALOGS = {
     "company": [
         {"id": 1, "name": "موتوسل", "parent_id": None},
-        {"id": 2, "name": "روزتاش", "parent_id": 1},
+        {"id": 2, "name": "رزتاش", "parent_id": 1},
         {"id": 3, "name": "پلاستیک‌سازی", "parent_id": 1},
     ],
     "unit": [{"id": 4, "name": "تولید"}, {"id": 5, "name": "کنترل کیفیت"}],
@@ -49,7 +50,7 @@ def _dialog(app, title, controls, error_txt, on_confirm,
         modal=True,
         title=txt(title, size=16, font=FONT_B, color=INK),
         content=ft.Container(
-            width=380,
+            width=dialog_w(app),
             content=ft.Column([*controls, error_txt], spacing=10, tight=True),
         ),
         actions=[
@@ -156,6 +157,7 @@ def open_cat_delete(app, kind, item, on_done=None):
 
 def definitions_view(app):
     state = app.state
+    phone = is_phone(app)
     gen = state.get("def_gen", 0) + 1
     state["def_gen"] = gen
     state.setdefault("def_tab", 0)
@@ -309,7 +311,7 @@ def definitions_view(app):
             panels[kind].controls = ([_cat_row(kind, it, items)
                                       for it in ordered] or [
                 ft.Container(
-                    height=70, alignment=ft.Alignment.CENTER,
+                    height=70, alignment=ft.alignment.Alignment(0, 0),
                     content=txt(f"هنوز {KIND_FA[kind]}ی تعریف نشده — با دکمهٔ "
                                 "افزودن شروع کن", size=13, font=FONT,
                                 color=TEXT_MUTED))])
@@ -337,13 +339,22 @@ def definitions_view(app):
 
     _apply(live_catalogs())
 
-    header = ft.Row([
-        txt("تعاریف پایه", size=20, font=FONT_B, color=INK),
-        count_text,
-        ft.Container(expand=True),
-        add_btn,
-        mode_chip,
-    ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    if phone:
+        header = ft.Column([
+            ft.Row([txt("تعاریف پایه", size=20, font=FONT_B, color=INK),
+                    ft.Container(expand=True), mode_chip],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            count_text,
+            ft.Row([add_btn], spacing=10),
+        ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+    else:
+        header = ft.Row([
+            txt("تعاریف پایه", size=20, font=FONT_B, color=INK),
+            count_text,
+            ft.Container(expand=True),
+            add_btn,
+            mode_chip,
+        ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     table_card = ft.Container(
         content=tabs,
@@ -365,5 +376,5 @@ def definitions_view(app):
     if hasattr(app.page, "run_task"):
         app.page.run_task(_loop)
 
-    return ft.Column([header, demo_banner, table_card],
-                     spacing=14, expand=True)
+    list_card(app, table_card, h=440)
+    return page_scroll(app, [header, demo_banner, table_card])

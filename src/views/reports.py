@@ -8,12 +8,14 @@ from theme import (
     fa_num, txt,
 )
 from data import WEEK_HOURS, dept_summary
+from layout import is_phone, table_scroll
 from components.common import card
 
 
 def reports_view(app):
     state = app.state
     state.setdefault("report_tab", "هفتگی")
+    phone = is_phone(app)
 
     tabs = ["ساعتی", "روزانه", "هفتگی", "ماهانه", "سالیانه"]
     pills_map = {}
@@ -41,41 +43,53 @@ def reports_view(app):
         pills_map[name] = (c, t_)
         tab_controls.append(c)
 
-    filter_card = card(ft.Row([
-        ft.Row(tab_controls, spacing=8),
-        ft.Container(expand=True),
-        ft.Dropdown(
-            width=150, text_size=13,
-            options=[ft.dropdown.Option(key="all", text="همهٔ واحدها"),
-                     ft.dropdown.Option(key="oil", text="تولید روغن"),
-                     ft.dropdown.Option(key="plastic", text="تولید پلاستیک"),
-                     ft.dropdown.Option(key="pack", text="خط بسته‌بندی"),
-                     ft.dropdown.Option(key="store", text="انبار")],
-            value="all",
-        ),
-        ft.Button(
-            "تهیه گزارش", icon=ft.Icons.REFRESH, height=42,
-            style=ft.ButtonStyle(bgcolor=INK, color=WHITE,
-                                 shape=ft.RoundedRectangleBorder(radius=R_BTN)),
-            on_click=lambda e: app.snack(f'گزارش «{state["report_tab"]}» به‌روزرسانی شد'),
-        ),
-        ft.OutlinedButton(
-            "خروجی اکسل", icon=ft.Icons.DOWNLOAD, height=42,
-            style=ft.ButtonStyle(color=INK,
-                                 shape=ft.RoundedRectangleBorder(radius=R_BTN)),
-            on_click=lambda e: app.snack("فایل اکسل نمونه ساخته شد — در فاز ۲ به داده واقعی متصل می‌شود"),
-        ),
-    ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER), pad=14)
+    unit_dd = ft.Dropdown(
+        width=150 if not phone else 128, text_size=13,
+        options=[ft.dropdown.Option(key="all", text="همهٔ واحدها"),
+                 ft.dropdown.Option(key="oil", text="تولید روغن"),
+                 ft.dropdown.Option(key="plastic", text="تولید پلاستیک"),
+                 ft.dropdown.Option(key="pack", text="خط بسته‌بندی"),
+                 ft.dropdown.Option(key="store", text="انبار")],
+        value="all",
+    )
+    refresh_btn = ft.Button(
+        "تهیه گزارش", icon=ft.Icons.REFRESH, height=42,
+        style=ft.ButtonStyle(bgcolor=INK, color=WHITE,
+                             shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+        on_click=lambda e: app.snack(f'گزارش «{state["report_tab"]}» به‌روزرسانی شد'),
+    )
+    export_btn = ft.OutlinedButton(
+        "خروجی اکسل", icon=ft.Icons.DOWNLOAD, height=42,
+        style=ft.ButtonStyle(color=INK,
+                             shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+        on_click=lambda e: app.snack("فایل اکسل نمونه ساخته شد — در فاز ۲ به داده واقعی متصل می‌شود"),
+    )
+    if phone:
+        # موبایل: قرص‌ها در یک ردیف می‌پیچند و فیلترها زیرشان می‌آیند
+        filter_card = card(ft.Column([
+            ft.Row(tab_controls, spacing=8, wrap=True, run_spacing=8),
+            ft.Row([unit_dd, refresh_btn, export_btn], spacing=8,
+                   wrap=True, run_spacing=8),
+        ], spacing=10), pad=14)
+    else:
+        filter_card = card(ft.Row([
+            ft.Row(tab_controls, spacing=8),
+            ft.Container(expand=True),
+            unit_dd,
+            refresh_btn,
+            export_btn,
+        ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER), pad=14)
 
     # ── نمودار ساعات کار هفته ──
     today_name = fa_date().split()[0]
     bars = []
+    bw = 26 if phone else 40
     for day, h in WEEK_HOURS:
         bh = max(4, int((h / 10) * 150))
         is_today = day == today_name
         bars.append(ft.Column([
             txt(f'{fa_num(h)} س', size=11, font=FONT_MED, color=TEXT_MUTED),
-            ft.Container(width=40, height=bh, border_radius=ft.BorderRadius.only(top_left=6, top_right=6),
+            ft.Container(width=bw, height=bh, border_radius=ft.BorderRadius.only(top_left=6, top_right=6),
                          bgcolor=INK if is_today else "#CDD2D7"),
             txt(day, size=11, font=FONT_MED if is_today else FONT,
                 color=INK if is_today else TEXT_MUTED),
@@ -89,29 +103,36 @@ def reports_view(app):
         ]),
         ft.Container(
             height=215, alignment=ft.Alignment.BOTTOM_CENTER,
-            content=ft.Row(bars, spacing=24, alignment=ft.MainAxisAlignment.CENTER,
+            content=ft.Row(bars, spacing=12 if phone else 24,
+                           alignment=ft.MainAxisalignment.Alignment(0, 0),
                            vertical_alignment=ft.CrossAxisAlignment.END),
         ),
     ], spacing=14), pad=18)
 
     # ── خلاصهٔ واحدها ──
-    header = ft.Row([
-        ft.Container(expand=True, content=txt("واحد", size=12, font=FONT_MED, color=TEXT_MUTED)),
+    def _dept_cell(text_ctrl):
+        """سلول نام واحد — موبایل: عرض ثابت و کشیدن افقی."""
+        if phone:
+            return ft.Container(width=130, content=text_ctrl)
+        return ft.Container(expand=True, content=text_ctrl)
+
+    header = table_scroll(app, ft.Row([
+        _dept_cell(txt("واحد", size=12, font=FONT_MED, color=TEXT_MUTED)),
         ft.Container(width=80, content=txt("نفرات", size=12, font=FONT_MED, color=TEXT_MUTED)),
         ft.Container(width=130, content=txt("میانگین ساعات", size=12, font=FONT_MED, color=TEXT_MUTED)),
         ft.Container(width=110, content=txt("حوادث امروز", size=12, font=FONT_MED, color=TEXT_MUTED)),
-    ], spacing=10)
+    ], spacing=10))
     rows = [header]
     for r in dept_summary():
         rows.append(ft.Container(
-            content=ft.Row([
-                ft.Container(expand=True, content=txt(r["dept"], size=13, font=FONT_MED, color=INK)),
+            content=table_scroll(app, ft.Row([
+                _dept_cell(txt(r["dept"], size=13, font=FONT_MED, color=INK)),
                 ft.Container(width=80, content=txt(fa_num(r["n"]), size=13, font=FONT, color=INK)),
                 ft.Container(width=130, content=txt(f'{fa_num(r["avg_h"])} ساعت', size=13, font=FONT, color=INK)),
                 ft.Container(width=110, content=txt(
                     fa_num(r["inc"]) if r["inc"] else "—", size=13, font=FONT_MED,
                     color="#E30613" if r["inc"] else TEXT_MUTED)),
-            ], spacing=10),
+            ], spacing=10)),
             padding=ft.Padding.symmetric(vertical=9),
             border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
         ))

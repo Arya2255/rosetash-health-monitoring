@@ -88,7 +88,7 @@ def _gw_card_row(item, on_edit=None, on_delete=None, on_map=None, actions=True):
     return card(ft.Row([
         ft.Container(
             width=34, height=34, border_radius=10, bgcolor=_BG_GRAY,
-            alignment=ft.Alignment.CENTER,
+            alignment=ft.alignment.Alignment(0, 0),
             content=ft.Icon(ft.Icons.ROUTER, size=18,
                             color=OK if item.get("online") else TEXT_MUTED),
         ),
@@ -238,7 +238,7 @@ def gateways_view(app):
                 content=ft.Row([
                     ft.Container(
                         width=34, height=34, border_radius=10, bgcolor=_BG_GRAY,
-                        alignment=ft.Alignment.CENTER,
+                        alignment=ft.alignment.Alignment(0, 0),
                         content=ft.Icon(ft.Icons.WIFI_TETHERING, size=18,
                                         color=_DISCOVERED),
                     ),

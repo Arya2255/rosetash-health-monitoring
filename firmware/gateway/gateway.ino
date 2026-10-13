@@ -45,19 +45,15 @@ static uint16_t window_gen = 1;
 static uint16_t attempted_gen[BleCentral::kMaxBands];  // per-sighting-slot
 static DiscoveryClient discovery;
 static char resolved_mqtt_host[48] = {0};
-static uint16_t resolved_mqtt_port = 1883;
+static uint16_t resolved_mqtt_port = 1884;
 
 // Resolve MQTT host via discovery, fallback to config
 static void resolveMqttHost() {
-  // Use discovery to find the server
-  bool discovered = discovery.discover(cfg.mqtt_host, cfg.mqtt_port,
-                                        resolved_mqtt_host, sizeof(resolved_mqtt_host),
-                                        &resolved_mqtt_port);
-  if (discovered) {
-    Serial.printf("[gw] Discovery: using %s:%u\n", resolved_mqtt_host, resolved_mqtt_port);
-  } else {
-    Serial.printf("[gw] Discovery: fallback to config %s:%u\n", cfg.mqtt_host, cfg.mqtt_port);
-  }
+  // DEBUG: Skip discovery - use config directly
+  strncpy(resolved_mqtt_host, cfg.mqtt_host, sizeof(resolved_mqtt_host) - 1);
+  resolved_mqtt_port = cfg.mqtt_port;
+  
+  Serial.printf("[gw] Discovery: DISABLED, using config %s:%u\n", resolved_mqtt_host, resolved_mqtt_port);
 }
 
 // Picks the next band not yet measured in this window.
@@ -121,8 +117,9 @@ void setup() {
     WiFi.mode(WIFI_STA);
     WiFi.begin(cfg.wifi_ssid, cfg.wifi_pass);
     const uint32_t t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) {
-      delay(250);
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 90000) {
+      delay(500);
+      Serial.print(".");
       esp_task_wdt_reset();
     }
     wifi_ok = WiFi.status() == WL_CONNECTED;

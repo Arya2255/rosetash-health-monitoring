@@ -216,7 +216,7 @@ def _bundle_card(st) -> ft.Control:
     ]
     return card(ft.Row([
         ft.Container(width=34, height=34, border_radius=10, bgcolor=_BG_GRAY,
-                     alignment=ft.Alignment.CENTER,
+                     alignment=ft.alignment.Alignment(0, 0),
                      content=ft.Icon(ft.Icons.INVENTORY_2, size=18, color=OK)),
         ft.Column([
             txt("بستهٔ همراه برنامه", size=13.5, font=FONT_MED, color=INK),

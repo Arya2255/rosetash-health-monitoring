@@ -8,6 +8,7 @@ from theme import (
     fa_num, txt,
 )
 from data import EMPLOYEES
+from layout import is_phone, list_card, page_scroll
 from components.common import SHADOW, avatar_circle, card, status_chip
 
 TABS = [
@@ -38,28 +39,43 @@ def _placeholder(icon, title, desc, items):
 
 
 def _staff_panel(app):
+    phone = is_phone(app)
     list_holder = ft.ListView(expand=True, spacing=0)
-    head = ft.Container(
-        content=ft.Row([
-            ft.Container(expand=True, content=txt("کارکن", size=12, font=FONT_MED, color=TEXT_MUTED)),
-            ft.Container(width=120, content=txt("واحد", size=12, font=FONT_MED, color=TEXT_MUTED)),
-            ft.Container(width=70, content=txt("شیفت", size=12, font=FONT_MED, color=TEXT_MUTED)),
-            ft.Container(width=105, content=txt("مچ‌بند", size=12, font=FONT_MED, color=TEXT_MUTED)),
-            ft.Container(width=65, content=txt("باتری", size=12, font=FONT_MED, color=TEXT_MUTED)),
-            ft.Container(width=95, content=txt("وضعیت", size=12, font=FONT_MED, color=TEXT_MUTED)),
-            ft.Container(width=40, content=txt("", size=12)),
-        ], spacing=12),
-        padding=ft.Padding.symmetric(horizontal=14, vertical=10),
-        border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
-    )
+    if phone:
+        # موبایل: ستون‌های کلیدی — جزئیات در پروفایل
+        head = ft.Container(
+            content=ft.Row([
+                ft.Container(expand=True, content=txt("کارکن", size=12, font=FONT_MED, color=TEXT_MUTED)),
+                ft.Container(width=95, content=txt("وضعیت", size=12, font=FONT_MED, color=TEXT_MUTED)),
+                ft.Container(width=40, content=txt("", size=12)),
+            ], spacing=12),
+            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+            border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
+        )
+    else:
+        head = ft.Container(
+            content=ft.Row([
+                ft.Container(expand=True, content=txt("کارکن", size=12, font=FONT_MED, color=TEXT_MUTED)),
+                ft.Container(width=120, content=txt("واحد", size=12, font=FONT_MED, color=TEXT_MUTED)),
+                ft.Container(width=70, content=txt("شیفت", size=12, font=FONT_MED, color=TEXT_MUTED)),
+                ft.Container(width=105, content=txt("مچ‌بند", size=12, font=FONT_MED, color=TEXT_MUTED)),
+                ft.Container(width=65, content=txt("باتری", size=12, font=FONT_MED, color=TEXT_MUTED)),
+                ft.Container(width=95, content=txt("وضعیت", size=12, font=FONT_MED, color=TEXT_MUTED)),
+                ft.Container(width=40, content=txt("", size=12)),
+            ], spacing=12),
+            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+            border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
+        )
 
     for i, emp in enumerate(EMPLOYEES):
-        list_holder.controls.append(ft.Container(
-            content=ft.Row([
-                ft.Row([
-                    avatar_circle(emp["name"], r=15),
-                    txt(emp["name"], size=13, font=FONT_MED, color=INK),
-                ], spacing=8, expand=True),
+        cells = [
+            ft.Row([
+                avatar_circle(emp["name"], r=15),
+                txt(emp["name"], size=13, font=FONT_MED, color=INK),
+            ], spacing=8, expand=True),
+        ]
+        if not phone:
+            cells += [
                 ft.Container(width=120, content=txt(emp["dept"], size=12, font=FONT,
                                                     color=TEXT_MUTED, max_lines=1,
                                                     overflow=ft.TextOverflow.ELLIPSIS)),
@@ -69,12 +85,16 @@ def _staff_panel(app):
                                                     color=TEXT_MUTED)),
                 ft.Container(width=65, content=txt(f'{fa_num(emp["battery"])}٪', size=12,
                                                    font=FONT, color=TEXT_MUTED)),
-                ft.Container(width=95, content=status_chip(emp["status"])),
-                ft.Container(width=40, content=ft.IconButton(
-                    ft.Icons.EDIT_OUTLINED, icon_size=17, icon_color=TEXT_MUTED,
-                    tooltip="ویرایش — فاز ۲",
-                    on_click=lambda e: app.snack("ویرایش پروفایل — در فاز ۲ فعال می‌شود"))),
-            ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ]
+        cells += [
+            ft.Container(width=95, content=status_chip(emp["status"])),
+            ft.Container(width=40, content=ft.IconButton(
+                ft.Icons.EDIT_OUTLINED, icon_size=17, icon_color=TEXT_MUTED,
+                tooltip="ویرایش — فاز ۲",
+                on_click=lambda e: app.snack("ویرایش پروفایل — در فاز ۲ فعال می‌شود"))),
+        ]
+        list_holder.controls.append(ft.Container(
+            content=ft.Row(cells, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=14, vertical=7),
             border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)) if i < len(EMPLOYEES) - 1 else None,
         ))
@@ -166,5 +186,6 @@ def management_view(app):
     ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     render_tab()
-    return ft.Column([header, ft.Row(tabs_row, spacing=8), holder],
-                     spacing=14, expand=True)
+    list_card(app, holder, h=430)
+    return page_scroll(app, [header, ft.Row(tabs_row, spacing=8, wrap=True, run_spacing=8),
+                             holder])

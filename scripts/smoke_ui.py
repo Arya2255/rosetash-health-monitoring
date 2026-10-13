@@ -35,6 +35,8 @@ class FakePage:
     def __init__(self):
         self.overlay = []
         self.dialogs = []
+        self.width = None  # None = دسکتاپ؛ تست موبایل آن را ۳۹۰ می‌کند
+        self.height = 800
 
     def update(self):
         pass
@@ -69,6 +71,18 @@ class FakeApp:
         self.state["view"] = view
 
 
+def run_checks(app, checks, label):
+    fails = 0
+    for name, fn in checks:
+        try:
+            fn()
+            print(f"OK   — [{label}] {name}")
+        except Exception as e:  # noqa: BLE001
+            fails += 1
+            print(f"FAIL — [{label}] {name}: {type(e).__name__}: {e}")
+    return fails
+
+
 def main():
     app = FakeApp()
     checks = [
@@ -77,7 +91,7 @@ def main():
         ("پایش زنده", lambda: v_live.live_view(app)),
         ("نقشهٔ کارخانه", lambda: v_map.map_view(app)),
         ("گیت‌وی‌ها", lambda: v_gateways.gateways_view(app)),
-        ("آماده‌سازی گیتوی", lambda: v_prov.provisioning_view(app)),
+        ("آماده‌سازی گیت‌وی", lambda: v_prov.provisioning_view(app)),
         ("کارکنان", lambda: v_employees.employees_view(app)),
         ("مچ‌بندها", lambda: v_bands.bands_view(app)),
         ("تعاریف پایه", lambda: v_defs.definitions_view(app)),
@@ -94,14 +108,11 @@ def main():
             return v_detail.employee_detail_view(app)
         checks.append((f"پروفایل کارکن {eid}", make))
 
-    fails = 0
-    for name, fn in checks:
-        try:
-            fn()
-            print(f"OK   — {name}")
-        except Exception as e:  # noqa: BLE001
-            fails += 1
-            print(f"FAIL — {name}: {type(e).__name__}: {e}")
+    fails = run_checks(app, checks, "دسکتاپ")
+    # ── گذر دوم: چیدمان موبایل (عرض ۳۹۰px) — همان صفحه‌ها باید سالم ساخته شوند ──
+    app.page.width = 390
+    fails += run_checks(app, checks, "موبایل ۳۹۰px")
+    app.page.width = None
 
     # فایل اصلی هم باید بدون خطا ایمپورت شود
     try:

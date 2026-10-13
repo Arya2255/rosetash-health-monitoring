@@ -47,8 +47,8 @@ _M_CHIP_W = 58     # عرض برچسب «≈ فاصله» زیر نقطهٔ مچ
 #     فاصله ≈ ۱۰ به‌توان ((A − RSSI) / ۱۰×n)
 # A سیگنال مرجع روی ۱ متر و n ضریب محیط است. عدد فقط تخمین است؛ دیوار،
 # بدن و شلوغی رادیویی آن را کم و زیاد می‌کند — برای تست میدانی برد.
-_PATH_A = -59.0
-_PATH_N = 2.5
+_PATH_A = -82.0  # Calibrated: RSSI at 1 meter
+_PATH_N = 2.5     # Indoor path loss exponent
 _STALE_AGE = 30.0  # از این سن، دیدن کهنه است و نقطه کم‌رنگ می‌شود (TTL پل: ۶۰ ثانیه)
 
 
@@ -144,7 +144,7 @@ def _gw_marker(n, item, W, H, spot=None):
         width=_PIN, height=_PIN, border_radius=_PIN // 2, bgcolor=color,
         border=ft.Border.all(2.5, WHITE),
         shadow=ft.BoxShadow(blur_radius=7, color="#40000000"),
-        alignment=ft.Alignment.CENTER,
+        alignment=ft.alignment.Alignment(0, 0),
         content=txt(fa_num(n), size=13, font=FONT_B, color=WHITE),
     )
     col = ft.Column(
@@ -263,7 +263,7 @@ def _gw_row(n, item):
     return ft.Row([
         ft.Container(
             width=22, height=22, border_radius=11, bgcolor=color,
-            alignment=ft.Alignment.CENTER,
+            alignment=ft.alignment.Alignment(0, 0),
             content=txt(fa_num(n), size=11, font=FONT_B, color=WHITE),
         ),
         ft.Column([
@@ -601,7 +601,7 @@ def map_view(app):
 
     header = section_header(
         "نقشهٔ کارخانه",
-        "پلان کارخانه روزتاش — گیت‌وی‌ها از دفتر پل می‌آیند و مچ‌بندهای در دید "
+        "پلان کارخانه رزتاش — گیت‌وی‌ها از دفتر پل می‌آیند و مچ‌بندهای در دید "
         "هر ۲ ثانیه زیر گیت‌وی مربوطه نقطه می‌گیرند؛ با «چیدن روی نقشه» "
         "پین‌ها را جابه‌جا کن.",
     )
@@ -610,7 +610,7 @@ def map_view(app):
         # موبایل: نقشهٔ تمام‌عرض بالا، کارت‌ها زیر آن — یک ستون اسکرول‌دار
         return ft.Column([
             header,
-            ft.Container(content=plan_card, alignment=ft.Alignment.CENTER),
+            ft.Container(content=plan_card, alignment=ft.alignment.Alignment(0, 0)),
             *panel_controls,
         ], spacing=14, expand=True, scroll=ft.ScrollMode.AUTO)
 
@@ -620,7 +620,7 @@ def map_view(app):
         header,
         ft.Row([
             ft.Container(content=plan_card, expand=True,
-                         alignment=ft.Alignment.CENTER),
+                         alignment=ft.alignment.Alignment(0, 0)),
             panel,
         ], spacing=14, expand=True, vertical_alignment=ft.CrossAxisAlignment.START),
     ], spacing=14, expand=True)

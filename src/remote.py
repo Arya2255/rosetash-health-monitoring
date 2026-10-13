@@ -527,7 +527,7 @@ def set_allowed_emails(emails: list[str]) -> tuple[bool, str]:
     cfg = config()
     if not cfg.get("zone_id"):
         cfg = ensure_config()
-    if not cfg.get("ok"):
+    if not cfg.get("zone_id"):
         return False, cfg.get("err") or "تنظیمات کلادفلر کامل نشد"
 
     clean: list[str] = []

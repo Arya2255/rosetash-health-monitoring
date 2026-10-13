@@ -8,6 +8,7 @@ from theme import (
 )
 from components.common import card, kv_row
 from views.logs import export_logs  # noqa: E402
+from layout import flow
 from data import (
     remote_add_email, remote_down, remote_remove_email,
     remote_set_autostart, remote_setup, remote_status,
@@ -73,7 +74,7 @@ def settings_view(app):
             th("ضربان بالا", "120"),
             th("ضربان پایین", "50"),
             th("کمینهٔ اکسیژن (٪)", "92"),
-        ], spacing=10),
+        ], spacing=10, wrap=True, run_spacing=10),
         ft.Row([
             txt("حساسیت تشخیص سقوط", size=13, font=FONT, color=TEXT_MUTED),
             ft.Container(expand=True),
@@ -238,7 +239,7 @@ def settings_view(app):
     about_card = card(ft.Column([
         txt("دربارهٔ سامانه", size=15, font=FONT_B, color=INK),
         kv_row("نسخه", "۰٫۱ — نمونهٔ اولیهٔ رابط کاربری"),
-        kv_row("برند", "موتوسل — کارخانه روزتاش"),
+        kv_row("برند", "موتوسل — کارخانه رزتاش"),
         kv_row("فناوری", "Flet — دسکتاپ اتاق HSE"),
         kv_row("وضعیت داده‌ها", "نمایشی — اتصال به بک‌اند در فاز ۲"),
         txt("مستندات کامل طراحی در فایل DESIGN.md مخزن پروژه", size=11,
@@ -267,8 +268,8 @@ def settings_view(app):
     ], spacing=8), pad=18)
 
     return ft.Column([
-        ft.Row([
+        flow(app, [
             ft.Container(expand=True, content=ft.Column([backup_card, net_card, users_card], spacing=14)),
             ft.Container(expand=True, content=ft.Column([thresholds_card, about_card, logs_card], spacing=14)),
-        ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.START),
+        ], spacing=14, row_kw={"vertical_alignment": ft.CrossAxisAlignment.START}),
     ], scroll=ft.ScrollMode.AUTO, expand=True)

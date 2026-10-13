@@ -19,6 +19,7 @@ from theme import (
     TEXT_MUTED, WARN, fa_clock, fa_num, txt,
 )
 from data import live_status, send_vibrate
+from layout import flow, is_phone
 from components.common import card, section_header
 
 CHART_LEN = 60          # ستون‌های نمودار
@@ -216,7 +217,7 @@ def live_view(app):
     win_card = _kpi("پنجرهٔ سلامت", ft.Icons.FACT_CHECK, INK, "#E9EBEE",
                     win_value, win_sub)
 
-    kpi_row = ft.Row([
+    kpi_row = flow(app, [
         ft.Container(expand=True, content=band_card),
         ft.Container(expand=True, content=hr_card),
         ft.Container(expand=True, content=gw_card),
@@ -255,7 +256,7 @@ def live_view(app):
                spacing=6, vertical_alignment=ft.CrossAxisAlignment.END),
         step_sub)
 
-    vitals_row = ft.Row([
+    vitals_row = flow(app, [
         ft.Container(expand=True, content=bat_card),
         ft.Container(expand=True, content=spo2_card),
         ft.Container(expand=True, content=hrv_card),
@@ -272,7 +273,7 @@ def live_view(app):
             ft.Container(expand=True),
             devices_count,
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        ft.Row([
+        flow(app, [
             ft.Container(expand=True, content=ft.Column([
                 txt("گیت‌وی‌ها", size=12, font=FONT_MED, color=TEXT_MUTED),
                 gw_list_col,
@@ -281,19 +282,27 @@ def live_view(app):
                 txt("مچ‌بندها", size=12, font=FONT_MED, color=TEXT_MUTED),
                 band_list_col,
             ], spacing=6)),
-        ], spacing=18, vertical_alignment=ft.CrossAxisAlignment.START),
+        ], spacing=18, row_kw={"vertical_alignment": ft.CrossAxisAlignment.START}),
     ], spacing=10))
 
     # ── نمودار سیگنال ──
     bars_row = ft.Row([], spacing=2, height=64,
                       vertical_alignment=ft.CrossAxisAlignment.END)
-    chart_card = card(ft.Column([
-        ft.Row([
-            txt("نمودار سیگنال مچ‌بند", size=15, font=FONT_SB, color=INK),
+    chart_title = txt("نمودار سیگنال مچ‌بند", size=15, font=FONT_SB, color=INK)
+    if is_phone(app):
+        chart_head = ft.Column([
+            chart_title,
+            txt("هر ستون یک بستهٔ حضور", size=11, font=FONT, color=TEXT_MUTED),
+        ], spacing=2)
+    else:
+        chart_head = ft.Row([
+            chart_title,
             ft.Container(expand=True),
             txt("از لحظهٔ باز شدن صفحه پر می‌شود — هر ستون یک بستهٔ حضور",
                 size=11, font=FONT, color=TEXT_MUTED),
-        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    chart_card = card(ft.Column([
+        chart_head,
         ft.Container(content=bars_row, padding=ft.Padding.only(top=6)),
     ], spacing=8))
 
@@ -477,7 +486,8 @@ def live_view(app):
 
         # نمودار سیگنال
         bars = []
-        for _, rssi in state.get("live_hist", [])[-CHART_LEN:]:
+        n_bars = 40 if is_phone(app) else CHART_LEN
+        for _, rssi in state.get("live_hist", [])[-n_bars:]:
             if rssi is None:
                 bars.append(ft.Container(width=5, height=5, border_radius=2,
                                          bgcolor="#D8DADD"))

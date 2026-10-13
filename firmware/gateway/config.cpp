@@ -32,10 +32,16 @@ void configLoad(GatewayConfig& cfg) {
   copyStr(cfg.wifi_pass, sizeof cfg.wifi_pass, doc["wifi_pass"] | "");
   copyStr(cfg.mqtt_host, sizeof cfg.mqtt_host, doc["mqtt_host"] | "192.168.1.10");
   cfg.mqtt_port = doc["mqtt_port"] | 1883;
+  
+  // DEBUG: Force port to 1884
+  cfg.mqtt_port = 1884;
+  
   cfg.health_interval_s = doc["health_interval_s"] | 600;
   cfg.scan_interval_ms = doc["scan_interval_ms"] | 160;
   cfg.scan_window_ms = doc["scan_window_ms"] | 80;
   cfg.measure_timeout_s = doc["measure_timeout_s"] | 45;
-  Serial.printf("[cfg] loaded: gw=%s zone=%s broker=%s:%u\n", cfg.gw_id,
-                cfg.zone, cfg.mqtt_host, (unsigned)cfg.mqtt_port);
+  Serial.printf("[cfg] loaded: gw=%s zone=%s broker=%s:%u wifi_ssid=%s\n",
+                cfg.gw_id,
+                cfg.zone, cfg.mqtt_host, (unsigned)cfg.mqtt_port,
+                cfg.wifi_ssid);
 }

@@ -17,6 +17,7 @@ from theme import (
     OK, R_BTN, R_CARD, TEXT_MAIN, TEXT_MUTED, WARN, WHITE, fa_hours, fa_num, txt,
 )
 from data import EMPLOYEES, WEEK_HOURS, ZONE_COLORS, live_employees, live_status, send_vibrate
+from layout import flow, is_phone, table_scroll
 from components.common import (
     ISSUE_LABELS, att_chip, avatar_circle, back_button, card, kv_row,
     mini_caption, person_avatar, rel_age, rssi_quality, status_chip,
@@ -34,7 +35,7 @@ def _find(emp_id):
 def _hr_chart(series):
     if all(v is None for v in series):
         return ft.Container(
-            height=140, alignment=ft.Alignment.CENTER,
+            height=140, alignment=ft.alignment.Alignment(0, 0),
             content=txt("دستگاهی متصل نیست — داده‌ای برای نمایش وجود ندارد",
                         size=13, font=FONT, color=TEXT_MUTED),
         )
@@ -134,7 +135,8 @@ def _live_detail(app, mac):
             sub_v,
             ft.Row([band_cap,
                     _cap(ft.Icons.BATTERY_FULL, bat_txt),
-                    _cap(ft.Icons.WIFI, sig_txt)], spacing=14),
+                    _cap(ft.Icons.WIFI, sig_txt)], spacing=14,
+                   wrap=True, run_spacing=6),
         ], spacing=3, expand=True),
         status_holder,
     ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER), pad=18)
@@ -175,16 +177,25 @@ def _live_detail(app, mac):
                                 style=ft.ButtonStyle(color=DANGER,
                                                      shape=ft.RoundedRectangleBorder(radius=R_BTN)))
 
-    actions = card(ft.Row([
-        ft.Button("لرزاندن مچ‌بند", icon=ft.Icons.VIBRATION, height=40,
-                  on_click=_on_vibrate,
-                  style=ft.ButtonStyle(bgcolor=INK, color=WHITE,
-                                       shape=ft.RoundedRectangleBorder(radius=R_BTN))),
-        edit_btn,
-        del_btn,
-        ft.Container(expand=True),
-        conn_chip,
-    ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER), pad=12)
+    btn_vib = ft.Button("لرزاندن مچ‌بند", icon=ft.Icons.VIBRATION, height=40,
+                        on_click=_on_vibrate,
+                        style=ft.ButtonStyle(bgcolor=INK, color=WHITE,
+                                             shape=ft.RoundedRectangleBorder(radius=R_BTN)))
+    if is_phone(app):
+        # موبایل: دکمه‌ها زیر هم — چیپ اتصال در ردیف خودش
+        actions = card(ft.Column([
+            ft.Row([conn_chip], alignment=ft.MainAxisAlignment.END),
+            ft.Row([btn_vib, edit_btn, del_btn], spacing=10,
+                   wrap=True, run_spacing=8),
+        ], spacing=10), pad=12)
+    else:
+        actions = card(ft.Row([
+            btn_vib,
+            edit_btn,
+            del_btn,
+            ft.Container(expand=True),
+            conn_chip,
+        ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER), pad=12)
 
     # ── بنر مشکلات (وضعیت هشدار/اضطرار) ──
     issues_icon = ft.Icon(ft.Icons.ERROR_OUTLINE, size=18, color=WARN)
@@ -224,7 +235,7 @@ def _live_detail(app, mac):
     seen_card, seen_value, seen_sub = _live_vital(
         "آخرین ارتباط", ft.Icons.SCHEDULE, "#E9EBEE", value_size=22)
 
-    vitals_row = ft.Row([
+    vitals_row = flow(app, [
         ft.Container(expand=True, content=hr_card),
         ft.Container(expand=True, content=spo2_card),
         ft.Container(expand=True, content=bat_card),
@@ -234,13 +245,19 @@ def _live_detail(app, mac):
     # ── نمودار ضربان آخرین پنجره ──
     chart_holder = ft.Container(height=140, alignment=ft.Alignment.BOTTOM_LEFT)
     chart_card = card(ft.Column([
-        ft.Row([
+        (ft.Column([
+            txt("ضربان قلب — آخرین پنجرهٔ اندازه‌گیری", size=15,
+                font=FONT_B, color=INK),
+            txt("نمونه‌های همان پنجره — نه تاریخچهٔ روز", size=11,
+                font=FONT, color=TEXT_MUTED),
+        ], spacing=2)
+         if is_phone(app) else ft.Row([
             txt("ضربان قلب — آخرین پنجرهٔ اندازه‌گیری", size=15,
                 font=FONT_B, color=INK),
             ft.Container(expand=True),
             txt("نمونه‌های همان پنجره — نه تاریخچهٔ روز", size=11,
                 font=FONT, color=TEXT_MUTED),
-        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)),
         chart_holder,
     ], spacing=12), pad=18)
 
@@ -248,7 +265,7 @@ def _live_detail(app, mac):
         bpm = (health or {}).get("bpm") or []
         if not bpm:
             chart_holder.content = ft.Container(
-                height=140, alignment=ft.Alignment.CENTER,
+                height=140, alignment=ft.alignment.Alignment(0, 0),
                 content=txt("هنوز اندازه‌گیری موفقی ثبت نشده — در انتظار پنجرهٔ سلامت…",
                             size=13, font=FONT, color=TEXT_MUTED))
             return
@@ -484,7 +501,7 @@ def employee_detail_view(app):
                 mini_caption(ft.Icons.WATCH, emp["band"]),
                 mini_caption(ft.Icons.BATTERY_FULL, f'{fa_num(emp["battery"])}٪ باتری'),
                 mini_caption(ft.Icons.WIFI, f'سیگنال {emp["signal"]}'),
-            ], spacing=14),
+            ], spacing=14, wrap=True, run_spacing=6),
         ], spacing=3, expand=True),
         status_chip(emp["status"]),
     ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER), pad=18)
@@ -515,11 +532,11 @@ def employee_detail_view(app):
                                          shape=ft.RoundedRectangleBorder(radius=R_BTN)),
                     on_click=lambda e: app.snack("اقدام ثبت و رویداد بسته شد"),
                 ),
-            ], spacing=10),
+            ], spacing=10, wrap=True, run_spacing=8),
         ], spacing=10), bg=DANGER_BG, border_color=DANGER)
 
     # ── علائم حیاتی ──
-    vitals = ft.Row([
+    vitals = flow(app, [
         ft.Container(expand=True, content=_vital_card(
             "ضربان قلب", fa_num(emp["hr"]) if emp["hr"] else "—", "ضربه/دقیقه",
             "حد مجاز: ۵۰ تا ۱۲۰", ft.Icons.MONITOR_HEART,
@@ -542,7 +559,16 @@ def employee_detail_view(app):
     if vals:
         avg = round(sum(vals) / len(vals))
     chart_card = card(ft.Column([
-        ft.Row([
+        (ft.Column([
+            txt("ضربان قلب — امروز", size=15, font=FONT_B, color=INK),
+            ft.Row([
+                mini_caption(ft.Icons.CIRCLE, "بالاتر از حد", color=DANGER, size=11),
+                mini_caption(ft.Icons.CIRCLE, "محدودهٔ نرمال", color=BAR_BLUE, size=11),
+                txt(f'میانگین: {fa_num(avg)}' if avg else "", size=11,
+                    font=FONT, color=TEXT_MUTED),
+            ], spacing=14, wrap=True, run_spacing=6),
+        ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.START)
+         if is_phone(app) else ft.Row([
             txt("ضربان قلب — امروز", size=15, font=FONT_B, color=INK),
             ft.Container(expand=True),
             ft.Row([
@@ -551,7 +577,7 @@ def employee_detail_view(app):
                 txt(f'میانگین: {fa_num(avg)}' if avg else "", size=11,
                     font=FONT, color=TEXT_MUTED),
             ], spacing=14),
-        ]),
+        ])),
         _hr_chart(series),
     ], spacing=12), pad=18)
 
@@ -642,6 +668,7 @@ def employee_detail_view(app):
                                                    font=FONT, color=TEXT_MAIN)),
                 txt(seg["gw"], size=11, font=FONT, color="#9B9FA3"),
             ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER))
+        seg_rows = [table_scroll(app, r) for r in seg_rows]
         location_card = card(ft.Column([
             loc_head,
             bar,
@@ -655,7 +682,7 @@ def employee_detail_view(app):
                else "امروز حضور ثبتی برای این کارکن وجود ندارد")
         location_card = card(ft.Column([
             loc_head,
-            ft.Container(height=46, alignment=ft.Alignment.CENTER,
+            ft.Container(height=46, alignment=ft.alignment.Alignment(0, 0),
                          content=txt(msg, size=13, font=FONT, color=TEXT_MUTED)),
         ], spacing=10), pad=18)
 
@@ -665,7 +692,7 @@ def employee_detail_view(app):
     controls += [
         vitals,
         chart_card,
-        ft.Row([
+        flow(app, [
             ft.Container(expand=True, content=work_card),
             ft.Container(expand=True, content=attendance_card),
         ], spacing=14),

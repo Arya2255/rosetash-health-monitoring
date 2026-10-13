@@ -30,12 +30,22 @@ class DiscoveryServer:
         
     def _get_local_ip(self) -> str:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except:
+            # Get actual network interface IP - prefer 192.168.x.x over 10.x.x.x
+            import subprocess
+            result = subprocess.run(
+                ["ip", "-4", "addr", "show"],
+                capture_output=True, text=True
+            )
+            best_ip = None
+            for line in result.stdout.split('\n'):
+                if 'inet ' in line and not line.strip().startswith('inet 127'):
+                    ip = line.strip().split()[1].split('/')[0]
+                    if ip.startswith('192.168.'):
+                        return ip
+                    if not best_ip:
+                        best_ip = ip
+            return best_ip or "127.0.0.1"
+        except Exception:
             return "127.0.0.1"
     
     def start(self):

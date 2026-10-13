@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""نوار کناری ناوبری — در چیدمان راست‌به‌چپ، ابتدای صفحه."""
+"""نوار کناری ناوبری — در چیدمان راست‌به‌چپ، ابتدای صفحه.
+
+روی موبایل نوار کناری داخل «منوی کشویی» (drawer) نمایش داده می‌شود؛
+همان آیتم‌ها، همان ظاهر تیره — فقط بدون عرض ثابت.
+"""
 
 import flet as ft
 
@@ -25,7 +29,8 @@ NAV_ITEMS = [
 ]
 
 
-def build_sidebar(active, on_nav, alert_count=0):
+def _nav_column(active, on_nav, alert_count=0):
+    """ستون آیتم‌های ناوبری — مشترک بین نوار کناری و منوی کشویی موبایل."""
     items = []
     for key, label, icon in NAV_ITEMS:
         is_active = key == active
@@ -60,7 +65,7 @@ def build_sidebar(active, on_nav, alert_count=0):
     brand = ft.Column([
         ft.Image(src="logo-white.png", height=30, fit=ft.BoxFit.CONTAIN),
         txt("پایش سلامت کارکنان", size=13, font=FONT_B, color=WHITE),
-        txt("کارخانه روزتاش", size=10, font=FONT, color=SIDE_MUTED),
+        txt("کارخانه رزتاش", size=10, font=FONT, color=SIDE_MUTED),
     ], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
     user = ft.Row([
@@ -72,27 +77,50 @@ def build_sidebar(active, on_nav, alert_count=0):
         ], spacing=1),
     ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
+    return ft.Column(
+        [
+            brand,
+            ft.Container(height=10),
+            ft.Divider(height=1, thickness=1, color="#2A2D30"),
+            ft.Container(height=4),
+            *items,
+            ft.Container(expand=True),
+            ft.Divider(height=1, thickness=1, color="#2A2D30"),
+            user,
+            ft.Container(
+                content=txt("نسخهٔ ۰٫۱ — نمونهٔ اولیه", size=10, font=FONT, color="#5A5E62"),
+                alignment=ft.alignment.Alignment(0, 0),
+                padding=ft.Padding.only(top=6),
+            ),
+        ],
+        spacing=6,
+        expand=True,
+    )
+
+
+def build_sidebar(active, on_nav, alert_count=0):
+    """نوار کناری دسکتاپ — عرض ثابت تیره."""
     return ft.Container(
         width=236,
         bgcolor=SIDE_BG,
         padding=ft.Padding.symmetric(vertical=18, horizontal=12),
-        content=ft.Column(
-            [
-                brand,
-                ft.Container(height=10),
-                ft.Divider(height=1, thickness=1, color="#2A2D30"),
-                ft.Container(height=4),
-                *items,
-                ft.Container(expand=True),
-                ft.Divider(height=1, thickness=1, color="#2A2D30"),
-                user,
-                ft.Container(
-                    content=txt("نسخهٔ ۰٫۱ — نمونهٔ اولیه", size=10, font=FONT, color="#5A5E62"),
-                    alignment=ft.Alignment.CENTER,
-                    padding=ft.Padding.only(top=6),
-                ),
-            ],
-            spacing=6,
-            expand=True,
-        ),
+        content=_nav_column(active, on_nav, alert_count),
+    )
+
+
+def build_drawer(active, on_nav, alert_count=0):
+    """منوی کشویی موبایل — همان آیتم‌های نوار کناری روی پنل تیره.
+
+    انتخاب هر آیتم، هم منو را می‌بندد و هم صفحه را عوض می‌کند
+    (بستن در لایهٔ اصلی برنامه انجام می‌شود).
+    """
+    return ft.NavigationDrawer(
+        bgcolor=SIDE_BG,
+        width=272,
+        controls=[
+            ft.Container(
+                content=_nav_column(active, on_nav, alert_count),
+                padding=ft.Padding.symmetric(vertical=18, horizontal=12),
+            ),
+        ],
     )

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""سامانه پایش سلامت کارکنان — کارخانه روزتاش (نمونهٔ اولیهٔ رابط کاربری).
+"""سامانه پایش سلامت کارکنان — کارخانه رزتاش (نمونهٔ اولیهٔ رابط کاربری).
 
 اجرا:
     uv run flet run            (دسکتاپ)
@@ -24,7 +24,8 @@ from data import (  # noqa: E402
     remote_autostart, send_vibrate,
 )
 import applog  # noqa: E402
-from components.sidebar import build_sidebar  # noqa: E402
+from layout import is_phone  # noqa: E402
+from components.sidebar import build_drawer, build_sidebar  # noqa: E402
 from views.dashboard import dashboard_view  # noqa: E402
 from views.live import live_view  # noqa: E402
 from views.map import map_view  # noqa: E402
@@ -40,8 +41,10 @@ from views.management import management_view  # noqa: E402
 from views.settings import settings_view  # noqa: E402
 from views.logs import logs_view  # noqa: E402
 from views.provisioning import provisioning_view  # noqa: E402
+from views.login import login_view  # noqa: E402
 
 BUILDERS = {
+    "login": login_view,
     "map": map_view,
     "gateways": gateways_view,
     "provisioning": provisioning_view,
@@ -65,22 +68,78 @@ class App:
 
     def __init__(self, page: ft.Page):
         self.page = page
-        # پیش‌فرض «نقشهٔ کارخانه» است — صفحهٔ ورود برنامه
+        # پیش‌فرض «ورود» است — صفحهٔ لاگین
         # ROZTASH_VIEW=live → برنامه روی نمای پایش زنده باز می‌شود
         # (برای نمایشگر کنار خط تولید که همیشه باید همان نما را نشان دهد)
         # املای ROSETASH_VIEW هم پذیرفته می‌شود
         initial = (os.environ.get("ROZTASH_VIEW")
-                   or os.environ.get("ROSETASH_VIEW") or "map")
+                   or os.environ.get("ROSETASH_VIEW") or "login")
         if initial not in BUILDERS:
             initial = "dashboard"
         self.state = {
             "view": initial, "emp": None, "filter": "all",
             "search": "", "back_to": "dashboard",
+            "logged_in": False, "admin_email": None,
         }
         self.alerts_active = [dict(a) for a in ALERTS_ACTIVE]
         self.siren_on = True
         self.content_holder = ft.Container(expand=True)
         self.root = None
+        # ── چیدمان ریسپانسیو ──
+        # mode: "desktop" یا "phone" — از روی عرض واقعی صفحه تعیین می‌شود.
+        # ui مراجع کنترل‌های پوسته (نوار کناری، دکمهٔ منو، پدینگ محتوا…) را
+        # نگه می‌دارد تا هنگام تغییر عرض، بدون بازساختن کل پنجره فقط همان‌ها
+        # به‌روز شوند.
+        self.mode = "desktop"
+        self.ui = {}
+
+    # ── چیدمان ریسپانسیو ──
+    def detect_mode(self):
+        return "phone" if is_phone(self) else "desktop"
+
+    def _apply_chrome(self):
+        """پوستهٔ برنامه را با حالت فعلی (موبایل/دسکتاپ) هماهنگ می‌کند."""
+        phone = self.mode == "phone"
+        ui = self.ui
+        if ui.get("sidebar") is not None:
+            ui["sidebar"].visible = not phone
+        if ui.get("menu_btn") is not None:
+            ui["menu_btn"].visible = phone
+        if ui.get("user_box") is not None:
+            ui["user_box"].visible = not phone
+        if ui.get("pad") is not None:
+            ui["pad"].padding = ft.Padding.all(10 if phone else 22)
+        if ui.get("topbar") is not None:
+            ui["topbar"].padding = ft.Padding.symmetric(
+                horizontal=14 if phone else 22, vertical=9)
+
+    def on_resize(self, e=None):
+        """رویداد تغییر اندازهٔ پنجره/صفحه — فقط وقتی طبقهٔ چیدمان عوض شود."""
+        mode = self.detect_mode()
+        if mode != self.mode:
+            self.mode = mode
+            self._apply_chrome()
+            self.render()
+
+    def open_menu(self, e=None):
+        """منوی کشویی موبایل — با آیتم‌های همیشگی و وضعیت فعال جاری."""
+        def _nav(key):
+            try:
+                self.page.run_task(self.page.close_drawer)
+            except Exception:
+                pass
+            self.go(key)
+
+        try:
+            self.page.drawer = build_drawer(
+                self.state["view"], _nav, len(self.alerts_active))
+            self.page.update()
+        except Exception:
+            pass
+        try:
+            self.page.run_task(self.page.show_drawer)
+        except Exception:
+            pass
 
     # ── اقدام‌های مشترک ──
     def snack(self, msg):
@@ -131,8 +190,21 @@ class App:
     def render(self):
         if self.root is None:
             return
-        self.root.controls[0] = build_sidebar(
-            self.state["view"], self.go, len(self.alerts_active))
+        # ── محافظت از صفحه‌ها — اگر لاگین نکرده باشه، برگرد به لاگین
+        current_view = self.state.get("view", "login")
+        if current_view != "login" and not self.state.get("logged_in", False):
+            self.state["view"] = "login"
+            current_view = "login"
+        # اگر عرض صفحه از آخرین رندر عوض شده باشد، پوسته را هماهنگ کن
+        mode = self.detect_mode()
+        if mode != self.mode:
+            self.mode = mode
+            self._apply_chrome()
+        if self.mode == "desktop":
+            holder = self.ui.get("sidebar")
+            if holder is not None:
+                holder.content = build_sidebar(
+                    self.state["view"], self.go, len(self.alerts_active))
         builder = BUILDERS.get(self.state["view"], dashboard_view)
         try:
             self.content_holder.content = builder(self)
@@ -151,7 +223,7 @@ def main(page: ft.Page):
     applog.setup()
     applog.install_hooks()
 
-    page.title = "پایش سلامت کارکنان — روزتاش"
+    page.title = "پایش سلامت کارکنان — رزتاش"
     page.rtl = True
     page.padding = 0
     page.spacing = 0
@@ -166,10 +238,11 @@ def main(page: ft.Page):
     )
 
     # ── اندازهٔ پیش‌فرض پنجره (دسکتاپ) ──
-    # در حالت تور اسکرین‌شات می‌توان با ROSETASH_SHOT_H ارتفاع را بلندتر گرفت
-    # (املای ROZTASH_SHOT_H هم پذیرفته می‌شود)
+    # در حالت تور اسکرین‌شات می‌توان با ROSETASH_SHOT_W عرض موبایل گرفت
+    # و با ROSETASH_SHOT_H ارتفاع را بلندتر کرد (املای ROZTASH_* هم پذیرفته می‌شود)
     try:
-        page.window.width = 1340
+        page.window.width = int(os.environ.get("ROSETASH_SHOT_W")
+                                or os.environ.get("ROZTASH_SHOT_W") or "1340")
         page.window.height = int(os.environ.get("ROSETASH_SHOT_H")
                                  or os.environ.get("ROZTASH_SHOT_H") or "720")
     except Exception:
@@ -197,11 +270,19 @@ def main(page: ft.Page):
         ], spacing=0),
     ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
+    menu_btn = ft.IconButton(
+        ft.Icons.MENU, icon_color=INK, tooltip="منو", visible=False,
+        on_click=app.open_menu,
+        style=ft.ButtonStyle(bgcolor=WHITE,
+                             shape=ft.RoundedRectangleBorder(radius=10)),
+    )
+
     topbar = ft.Container(
         bgcolor=WHITE,
         padding=ft.Padding.symmetric(horizontal=22, vertical=9),
         border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
         content=ft.Row([
+            menu_btn,
             ft.Column([time_txt, date_txt], spacing=0),
             ft.Container(expand=True),
             conn_chip,
@@ -210,18 +291,28 @@ def main(page: ft.Page):
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
     )
 
-    body = ft.Column([
-        topbar,
-        ft.Container(content=app.content_holder, expand=True,
-                     padding=ft.Padding.all(22)),
-    ], spacing=0, expand=True)
+    pad_holder = ft.Container(content=app.content_holder, expand=True,
+                              padding=ft.Padding.all(22))
+    body = ft.Column([topbar, pad_holder], spacing=0, expand=True)
+
+    sidebar_holder = ft.Container()  # نوار کناری — در render پر می‌شود
+    app.ui.update({
+        "sidebar": sidebar_holder, "menu_btn": menu_btn,
+        "user_box": user_box, "pad": pad_holder, "topbar": topbar,
+    })
+    app.mode = app.detect_mode()
+    app._apply_chrome()
 
     app.root = ft.Row([
-        ft.Container(),  # نوار کناری — در render پر می‌شود
+        sidebar_holder,
         ft.Container(content=body, expand=True),
     ], spacing=0, expand=True, vertical_alignment=ft.CrossAxisAlignment.STRETCH)
 
     page.add(app.root)
+    try:
+        page.on_resize = app.on_resize
+    except Exception:
+        pass
 
     # ── ثبت چرخهٔ عمر اپ: خطای رابط، قطع اتصال و بسته شدن پنجره ──
     def _ui_error(e):
@@ -335,10 +426,19 @@ def main(page: ft.Page):
                 now = time.time()
                 if now - last_check >= 5:
                     last_check = now
+                    # تورِ اطمینانِ چیدمان — اگر عرض صفحه بی‌رویداد عوض شده
+                    # باشد (مثلاً نسخهٔ وب)، این‌جا تشخیص داده و هماهنگ می‌شود
+                    try:
+                        app.on_resize()
+                    except Exception:
+                        pass
                     online = live_available()
                     conn_dot.bgcolor = "#1E8E4E" if online else "#9AA0A6"
-                    conn_txt.value = ("گیت‌وی آنلاین — دادهٔ زنده" if online
-                                      else "گیت‌وی در دسترس نیست")
+                    if app.mode == "phone":
+                        conn_txt.value = "آنلاین" if online else "آفلاین"
+                    else:
+                        conn_txt.value = ("گیت‌وی آنلاین — دادهٔ زنده" if online
+                                          else "گیت‌وی در دسترس نیست")
                     conn_txt.color = "#1E8E4E" if online else TEXT_MUTED
                     conn_chip.bgcolor = "#E6F4EB" if online else "#F1F2F4"
                     conn_chip.update()

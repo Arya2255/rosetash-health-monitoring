@@ -113,7 +113,7 @@ def logs_view(app):
                        state.get("logs_level", "all") != "all")
                    else "هنوز خطی در لاگ ثبت نشده — با شروع کارکرد برنامه پر می‌شود")
             lines_col.controls = [ft.Container(
-                height=80, alignment=ft.Alignment.CENTER,
+                height=80, alignment=ft.alignment.Alignment(0, 0),
                 content=txt(msg, size=13, font=FONT, color=TEXT_MUTED))]
         count_txt.value = f"{fa_num(len(items))} خط — تازه‌ترین خط بالا"
         return items

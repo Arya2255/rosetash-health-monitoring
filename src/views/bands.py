@@ -18,6 +18,7 @@ from theme import (
     TEXT_MAIN, TEXT_MUTED, WHITE, fa_num, txt,
 )
 from data import delete_band, live_bands, save_band
+from layout import dialog_w, is_phone, list_card, page_scroll
 from components.common import SHADOW, rel_age
 from components.employee_form import open_employee_form
 
@@ -52,7 +53,7 @@ def _dialog(app, title, controls, error_txt, on_confirm,
         modal=True,
         title=txt(title, size=16, font=FONT_B, color=INK),
         content=ft.Container(
-            width=380,
+            width=dialog_w(app),
             content=ft.Column([*controls, error_txt], spacing=10, tight=True),
         ),
         actions=[
@@ -170,6 +171,7 @@ def open_band_delete(app, band: dict, on_done=None):
 
 def bands_view(app):
     state = app.state
+    phone = is_phone(app)
     gen = state.get("bands_gen", 0) + 1
     state["bands_gen"] = gen
 
@@ -236,11 +238,22 @@ def bands_view(app):
             sub_bits.append(b["note"])
         sub = " — ".join(sub_bits) if sub_bits else "هنوز در دید هیچ گیت‌ویی نبوده"
         emp_name = b.get("employee_name")
+        if phone:
+            # موبایل: وضعیت دید و کارکن در خط دوم — ستون‌های جدا حذف می‌شوند
+            head = "در دید" if b.get("in_view") else "از دید خارج"
+            head += f" — {emp_name}" if emp_name else " — بی‌صاحب"
+            sub = f"{head} — {sub}" if sub else head
         actions = []
         if not emp_name:
-            actions.append(ft.TextButton(
-                "ثبت کارکن", icon=ft.Icons.PERSON_ADD,
-                on_click=lambda ev, bb=b: _register_emp(bb)))
+            if phone:
+                actions.append(ft.IconButton(
+                    ft.Icons.PERSON_ADD, tooltip="ثبت کارکن", icon_size=18,
+                    icon_color=INK,
+                    on_click=lambda ev, bb=b: _register_emp(bb)))
+            else:
+                actions.append(ft.TextButton(
+                    "ثبت کارکن", icon=ft.Icons.PERSON_ADD,
+                    on_click=lambda ev, bb=b: _register_emp(bb)))
         actions.append(ft.IconButton(
             ft.Icons.EDIT, tooltip="ویرایش برچسب", icon_size=18,
             icon_color=TEXT_MUTED, on_click=lambda ev, bb=b: _edit_band(bb)))
@@ -248,26 +261,29 @@ def bands_view(app):
             actions.append(ft.IconButton(
                 ft.Icons.DELETE_OUTLINE, tooltip="حذف از دفتر", icon_size=18,
                 icon_color=DANGER, on_click=lambda ev, bb=b: _delete_band(bb)))
+        cells = [
+            ft.Container(
+                content=ft.Icon(ft.Icons.WATCH, size=20,
+                                color=INK if b.get("registered") else TEXT_MUTED),
+                bgcolor="#F1F2F4", border_radius=12,
+                padding=ft.Padding.all(9)),
+            ft.Column([
+                txt(title, size=14, font=FONT_MED, color=INK),
+                txt(sub, size=11, font=FONT, color=TEXT_MUTED,
+                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+            ], spacing=1, expand=True),
+        ]
+        if not phone:
+            cells.append(ft.Container(width=110, content=_view_chip(b.get("in_view"))))
+            cells.append(ft.Container(width=170, content=txt(
+                emp_name or "بی‌صاحب", size=12,
+                font=FONT_MED if emp_name else FONT,
+                color=INK if emp_name else TEXT_MUTED,
+                max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)))
+        cells += actions
         return ft.Container(
-            content=ft.Row([
-                ft.Container(
-                    content=ft.Icon(ft.Icons.WATCH, size=20,
-                                    color=INK if b.get("registered") else TEXT_MUTED),
-                    bgcolor="#F1F2F4", border_radius=12,
-                    padding=ft.Padding.all(9)),
-                ft.Column([
-                    txt(title, size=14, font=FONT_MED, color=INK),
-                    txt(sub, size=11, font=FONT, color=TEXT_MUTED,
-                        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                ], spacing=1, expand=True),
-                ft.Container(width=110, content=_view_chip(b.get("in_view"))),
-                ft.Container(width=170, content=txt(
-                    emp_name or "بی‌صاحب", size=12,
-                    font=FONT_MED if emp_name else FONT,
-                    color=INK if emp_name else TEXT_MUTED,
-                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)),
-                *actions,
-            ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            content=ft.Row(cells, spacing=10,
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=14, vertical=8),
             border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
         )
@@ -281,7 +297,7 @@ def bands_view(app):
             return
         list_holder.controls = [_band_row(b) for b in doc] or [
             ft.Container(
-                height=80, alignment=ft.Alignment.CENTER,
+                height=80, alignment=ft.alignment.Alignment(0, 0),
                 content=txt("هنوز مچ‌بندی شناخته نشده — با «ثبت مچ‌بند» یا "
                             "با روشن‌شدن گیت‌وی‌ها پر می‌شود",
                             size=13, font=FONT, color=TEXT_MUTED))]
@@ -312,13 +328,22 @@ def bands_view(app):
 
     _apply(live_bands())
 
-    header = ft.Row([
-        txt("مچ‌بندها", size=20, font=FONT_B, color=INK),
-        count_text,
-        ft.Container(expand=True),
-        add_btn,
-        mode_chip,
-    ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    if phone:
+        header = ft.Column([
+            ft.Row([txt("مچ‌بندها", size=20, font=FONT_B, color=INK),
+                    ft.Container(expand=True), mode_chip],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            count_text,
+            ft.Row([add_btn], spacing=10),
+        ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+    else:
+        header = ft.Row([
+            txt("مچ‌بندها", size=20, font=FONT_B, color=INK),
+            count_text,
+            ft.Container(expand=True),
+            add_btn,
+            mode_chip,
+        ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     table_card = ft.Container(
         content=list_holder,
@@ -327,6 +352,7 @@ def bands_view(app):
         border=ft.Border.all(1, BORDER), shadow=SHADOW,
         expand=True,
     )
+    list_card(app, table_card, h=460)
 
     async def _loop():
         while state.get("view") == "bands" and state.get("bands_gen") == gen:
@@ -340,5 +366,4 @@ def bands_view(app):
     if hasattr(app.page, "run_task"):
         app.page.run_task(_loop)
 
-    return ft.Column([header, demo_banner, table_card],
-                     spacing=14, expand=True)
+    return page_scroll(app, [header, demo_banner, table_card])

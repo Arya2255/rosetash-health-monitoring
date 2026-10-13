@@ -18,6 +18,7 @@ from theme import (
     TEXT_MAIN, TEXT_MUTED, WARN, WHITE, fa_num, txt,
 )
 from data import EMPLOYEES, live_employees, photo_src
+from layout import is_phone, list_card, page_scroll
 from components.common import (
     ISSUE_LABELS, SHADOW, avatar_circle, person_avatar, rel_age, status_chip,
 )
@@ -30,6 +31,7 @@ STATUS_RANK = {"danger": 0, "warn": 1, "ok": 2, "off": 3}
 def employees_view(app):
     state = app.state
     state.setdefault("emp_search", "")
+    phone = is_phone(app)
     gen = state.get("emp_gen", 0) + 1
     state["emp_gen"] = gen
 
@@ -127,19 +129,23 @@ def employees_view(app):
             content=ft.Row([
                 person_avatar(e, r=16),
                 ft.Column(name_col, spacing=1, expand=True),
-                ft.Container(width=70, content=txt(f'شیفت {e.get("shift") or "—"}',
-                                                   size=12, font=FONT,
-                                                   color=TEXT_MUTED)),
-                ft.Container(width=80, content=txt(f'{hr_txt} ضربه', size=12,
-                                                   font=FONT_MED, color=INK)),
-                ft.Container(width=140, content=txt(loc, size=12, font=FONT,
-                                                    color=TEXT_MUTED,
-                                                    max_lines=1,
-                                                    overflow=ft.TextOverflow.ELLIPSIS)),
-                ft.Container(width=140, content=status_chip(st)),
-                ft.Container(width=110, content=txt(
-                    rel_age(e.get("last_seen_age_s")), size=11, font=FONT,
-                    color=TEXT_MUTED)),
+                *([] if phone else [
+                    ft.Container(width=70, content=txt(f'شیفت {e.get("shift") or "—"}',
+                                                       size=12, font=FONT,
+                                                       color=TEXT_MUTED)),
+                    ft.Container(width=80, content=txt(f'{hr_txt} ضربه', size=12,
+                                                       font=FONT_MED, color=INK)),
+                    ft.Container(width=140, content=txt(loc, size=12, font=FONT,
+                                                        color=TEXT_MUTED,
+                                                        max_lines=1,
+                                                        overflow=ft.TextOverflow.ELLIPSIS)),
+                ]),
+                ft.Container(width=None if phone else 140, content=status_chip(st)),
+                *([] if phone else [
+                    ft.Container(width=110, content=txt(
+                        rel_age(e.get("last_seen_age_s")), size=11, font=FONT,
+                        color=TEXT_MUTED)),
+                ]),
                 ft.Icon(ft.Icons.CHEVRON_LEFT, size=18, color="#B9BEC3"),
             ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=14, vertical=10),
@@ -162,7 +168,7 @@ def employees_view(app):
                     size=11, font=FONT, color=TEXT_MUTED, max_lines=1,
                     overflow=ft.TextOverflow.ELLIPSIS),
             ], spacing=1, expand=True),
-            ft.Container(width=140, content=status_chip("ok")),
+            *([] if phone else [ft.Container(width=140, content=status_chip("ok"))]),
             ft.TextButton("ثبت کارکن", icon=ft.Icons.PERSON_ADD,
                           on_click=lambda ev, m=e["mac"]: _register_band(m)),
         ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
@@ -183,14 +189,16 @@ def employees_view(app):
                             color=TEXT_MUTED, max_lines=1,
                             overflow=ft.TextOverflow.ELLIPSIS),
                     ], spacing=1, expand=True),
-                    ft.Container(width=90, content=txt(f'شیفت {emp["shift"]}', size=12,
-                                                       font=FONT, color=TEXT_MUTED)),
-                    ft.Container(width=80, content=txt(f'{hr_txt} ضربه', size=12,
-                                                       font=FONT_MED, color=INK)),
-                    ft.Container(width=150, content=txt(emp["location"], size=12,
-                                                        font=FONT, color=TEXT_MUTED,
-                                                        max_lines=1,
-                                                        overflow=ft.TextOverflow.ELLIPSIS)),
+                    *([] if phone else [
+                        ft.Container(width=90, content=txt(f'شیفت {emp["shift"]}', size=12,
+                                                           font=FONT, color=TEXT_MUTED)),
+                        ft.Container(width=80, content=txt(f'{hr_txt} ضربه', size=12,
+                                                           font=FONT_MED, color=INK)),
+                        ft.Container(width=150, content=txt(emp["location"], size=12,
+                                                            font=FONT, color=TEXT_MUTED,
+                                                            max_lines=1,
+                                                            overflow=ft.TextOverflow.ELLIPSIS)),
+                    ]),
                     status_chip(emp["status"]),
                     ft.Icon(ft.Icons.CHEVRON_LEFT, size=18, color="#B9BEC3"),
                 ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -229,7 +237,7 @@ def employees_view(app):
                    "هنوز کارکنی ثبت نشده — با «افزودن کارکن» یا دکمهٔ ثبت "
                    "روی مچ‌بندهای در دید شروع کن")
             list_holder.controls = [ft.Container(
-                height=80, alignment=ft.Alignment.CENTER,
+                height=80, alignment=ft.alignment.Alignment(0, 0),
                 content=txt(msg, size=13, font=FONT, color=TEXT_MUTED))]
         count_text.value = (f'{fa_num(len(reg))} کارکن ثبت‌شده'
                             + (f' — {fa_num(len(uns))} مچ‌بند ثبت‌نشده'
@@ -261,21 +269,32 @@ def employees_view(app):
 
     search = ft.TextField(
         hint_text="جستجوی نام یا مک…", prefix_icon=ft.Icons.SEARCH,
-        width=250, height=44, text_size=13, value=state.get("emp_search", ""),
+        width=None if phone else 250, height=44, text_size=13, value=state.get("emp_search", ""),
         on_change=lambda e: (state.update({"emp_search": e.control.value}),
                              _render(), app.page.update()),
     )
 
     _apply(live_employees())
 
-    header = ft.Row([
-        txt("کارکنان", size=20, font=FONT_B, color=INK),
-        count_text,
-        ft.Container(expand=True),
-        add_btn,
-        search,
-        mode_chip,
-    ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    if phone:
+        # موبایل: سربرگ دو ردیفی — دکمه و جستجو زیر عنوان
+        header = ft.Column([
+            ft.Row([txt("کارکنان", size=20, font=FONT_B, color=INK),
+                    ft.Container(expand=True), mode_chip],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            count_text,
+            ft.Row([add_btn], spacing=10),
+            search,
+        ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+    else:
+        header = ft.Row([
+            txt("کارکنان", size=20, font=FONT_B, color=INK),
+            count_text,
+            ft.Container(expand=True),
+            add_btn,
+            search,
+            mode_chip,
+        ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     table_card = ft.Container(
         content=list_holder,
@@ -284,6 +303,7 @@ def employees_view(app):
         border=ft.Border.all(1, BORDER), shadow=SHADOW,
         expand=True,
     )
+    list_card(app, table_card, h=460)
 
     async def _loop():
         while state.get("view") == "employees" and state.get("emp_gen") == gen:
@@ -297,5 +317,4 @@ def employees_view(app):
     if hasattr(app.page, "run_task"):
         app.page.run_task(_loop)
 
-    return ft.Column([header, demo_banner, unassigned_card, table_card],
-                     spacing=14, expand=True)
+    return page_scroll(app, [header, demo_banner, unassigned_card, table_card])

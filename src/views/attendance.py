@@ -8,6 +8,7 @@ from theme import (
     fa_date, fa_hours, fa_num, txt,
 )
 from data import EMPLOYEES, attendance_summary
+from layout import filter_row, flow, is_phone, list_card, page_scroll
 from components.common import SHADOW, att_chip, avatar_circle, pill, stat_card
 
 ATT_FILTERS = [
@@ -33,10 +34,11 @@ def _matches(emp, key):
 def attendance_view(app):
     state = app.state
     state.setdefault("att_filter", "all")
+    phone = is_phone(app)
     k = attendance_summary()
 
-    # ── شاخص‌های کلیدی ──
-    kpi_row = ft.Row([
+    # ── شاخص‌های کلیدی — موبایل: زیر هم ──
+    kpi_row = flow(app, [
         ft.Container(expand=True, content=stat_card(
             "حاضر در کارخانه", f'{fa_num(k["present"])} نفر',
             "ثبت خودکار از طریق مچ‌بند", ft.Icons.HOW_TO_REG, "#1E8E4E", "#E6F4EB")),
@@ -83,16 +85,27 @@ def attendance_view(app):
             place = a["last_zone"] or (emp["location"] if emp["location"] != "—" else "—")
             if a["status"] == "present" and a["last_zone"]:
                 place = f'{a["last_zone"]} • اکنون'
-            rows.append(ft.Container(
+            name_cell = ft.Container(
+                width=None if phone else 250, expand=phone,
                 content=ft.Row([
-                    ft.Container(width=250, content=ft.Row([
-                        avatar_circle(emp["name"], r=16),
-                        ft.Column([
-                            txt(emp["name"], size=14, font=FONT_MED, color=INK),
-                            txt(f'{emp["dept"]} • {emp["line"]}', size=11, font=FONT,
-                                color=TEXT_MUTED, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                        ], spacing=1, expand=True),
-                    ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)),
+                    avatar_circle(emp["name"], r=16),
+                    ft.Column([
+                        txt(emp["name"], size=14, font=FONT_MED, color=INK),
+                        txt(f'{emp["dept"]} • {emp["line"]}', size=11, font=FONT,
+                            color=TEXT_MUTED, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ], spacing=1, expand=True),
+                ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER))
+            if phone:
+                # موبایل: ستون‌های کلیدی — بقیهٔ جزئیات در پروفایل کارکن
+                cells = [
+                    name_cell,
+                    ft.Container(width=64, content=txt(entered, size=13, font=FONT_MED, color=INK)),
+                    ft.Container(content=att_chip(a["status"], a["coverage"])),
+                    ft.Icon(ft.Icons.CHEVRON_LEFT, size=18, color="#B9BEC3"),
+                ]
+            else:
+                cells = [
+                    name_cell,
                     ft.Container(width=64, content=txt(entered, size=13, font=FONT_MED, color=INK)),
                     ft.Container(width=110, content=txt(exited, size=12, font=FONT, color=exit_color)),
                     ft.Container(width=110, content=txt(work, size=12, font=FONT, color=TEXT_MUTED)),
@@ -104,7 +117,9 @@ def attendance_view(app):
                             max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                     ], spacing=5, tight=True)),
                     ft.Icon(ft.Icons.CHEVRON_LEFT, size=18, color="#B9BEC3"),
-                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ]
+            rows.append(ft.Container(
+                content=ft.Row(cells, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=ft.Padding.symmetric(horizontal=14, vertical=10),
                 border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)) if i < len(emps) - 1 else None,
                 on_click=lambda e, eid=emp["id"]: open_emp(eid),
@@ -131,7 +146,7 @@ def attendance_view(app):
 
     search = ft.TextField(
         hint_text="جستجوی نام کارکن…", prefix_icon=ft.Icons.SEARCH,
-        width=250, height=44, text_size=13,
+        width=None if phone else 250, height=44, text_size=13,
         on_change=lambda e: (state.update({"att_search": e.control.value}),
                              refresh(), app.page.update()),
     )
@@ -148,16 +163,24 @@ def attendance_view(app):
         count_text,
     ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
-    cols = ft.Row([
-        ft.Container(width=250, content=txt("کارکن", size=12, font=FONT_MED, color=TEXT_MUTED)),
-        ft.Container(width=64, content=txt("ورود", size=12, font=FONT_MED, color=TEXT_MUTED)),
-        ft.Container(width=110, content=txt("خروج", size=12, font=FONT_MED, color=TEXT_MUTED)),
-        ft.Container(width=110, content=txt("ساعات کار", size=12, font=FONT_MED, color=TEXT_MUTED)),
-        ft.Container(width=70, content=txt("تأخیر", size=12, font=FONT_MED, color=TEXT_MUTED)),
-        ft.Container(width=132, content=txt("وضعیت", size=12, font=FONT_MED, color=TEXT_MUTED)),
-        ft.Container(expand=True, content=txt("آخرین مکان", size=12, font=FONT_MED, color=TEXT_MUTED)),
-        ft.Container(width=18),
-    ], spacing=12)
+    if phone:
+        cols = ft.Row([
+            ft.Container(expand=True, content=txt("کارکن", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(width=64, content=txt("ورود", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(content=txt("وضعیت", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(width=18),
+        ], spacing=12)
+    else:
+        cols = ft.Row([
+            ft.Container(width=250, content=txt("کارکن", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(width=64, content=txt("ورود", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(width=110, content=txt("خروج", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(width=110, content=txt("ساعات کار", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(width=70, content=txt("تأخیر", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(width=132, content=txt("وضعیت", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(expand=True, content=txt("آخرین مکان", size=12, font=FONT_MED, color=TEXT_MUTED)),
+            ft.Container(width=18),
+        ], spacing=12)
 
     table_card = ft.Container(
         content=ft.Column([
@@ -169,11 +192,11 @@ def attendance_view(app):
         border=ft.Border.all(1, BORDER), shadow=SHADOW,
         expand=True,
     )
+    list_card(app, table_card, h=430)
 
-    return ft.Column([
+    return page_scroll(app, [
         header,
         kpi_row,
-        ft.Row([*pill_controls, ft.Container(expand=True), search], spacing=8,
-               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        filter_row(app, pill_controls, search),
         table_card,
-    ], spacing=14, expand=True)
+    ])

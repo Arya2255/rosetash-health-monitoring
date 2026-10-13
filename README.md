@@ -69,4 +69,58 @@
 - طراحی کامل در `DESIGN.md` مستند شده است
 - اسکرین‌شات‌های تأییدشدهٔ همهٔ صفحه‌ها در پوشهٔ `screenshots/` — تازه‌ترین تور در `screenshots/live/`
 
+## نصب و اجرای آنلاین (دسترسی از اینترنت)
+
+برای اینکه اپ از هر جایی با آدرس اینترنتی در دسترس باشد، این ۴ مرحله لازم است:
+
+### ۱. نصب پیش‌نیازها
+
+```bash
+# flet — اگر نصب نیست
+pip install flet
+
+# cloudflare tunnel — دانلود از github.com/cloudflare/cloudflared
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+chmod +x /usr/local/bin/cloudflared
+```
+
+### ۲. تنظیم توکن API کلادفلر
+
+فایل `.cloudflared/rosetash-cf-api-token` را از این پروژه کپی کن:
+
+```bash
+mkdir -p ~/.cloudflared
+# توکن را در این فایل ذخیره کن
+nano ~/.cloudflared/rosetash-cf-api-token
+```
+
+### ۳. اجرای اپ به عنوان وب‌سرور
+
+```bash
+# با virtualenv پروژه
+cd rosetash-health-monitoring
+source .venv/bin/activate  # یا: uv run
+
+flet run -r --web --port 8550 src/main.py
+```
+
+### ۴. راه‌اندازی تونل کلادفلر
+
+```bash
+# اگر فایل توکن تونل نداری، از inside برنامه بساز
+# ویا دستی:
+source ~/.cloudflared/rosetash-tunnel.env
+cloudflared tunnel run
+```
+
+پس از اجرای این ۴ مرحله، اپ در آدرس `https://panel.rosetash-moe.ir` آنلاین می‌شود.
+
+---
+
+### عیب‌یابی
+
+- **سایت باز نمی‌شود:** مطمئن شو اپ روی پورت 8550 در حال اجراست → `curl http://127.0.0.1:8550`
+- **تونل وصل نیست:** لاگ رو چک کن → `tail ~/.cloudflared/rosetash-tunnel.log`
+- **DNS خطا می‌دهد:** DNS را روی Google DNS تنظیم کن → `8.8.8.8`
+
 #تگ‌ها #پروژه #روزتاش #Flet

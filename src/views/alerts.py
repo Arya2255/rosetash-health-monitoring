@@ -8,6 +8,7 @@ from theme import (
     TEXT_MUTED, WARN, WHITE, fa_num, txt,
 )
 from data import ALERTS_HISTORY
+from layout import flow, is_phone
 from components.common import card, status_chip
 
 
@@ -97,7 +98,7 @@ def alerts_view(app):
                         style=ft.ButtonStyle(color=TEXT_MUTED),
                         on_click=lambda e, aid=a["id"]: app.close_alert(aid),
                     ),
-                ], spacing=8),
+                ], spacing=8, wrap=True, run_spacing=8),
             ], spacing=12),
             padding=16,
             bgcolor=DANGER_BG if danger else WHITE,
@@ -113,7 +114,7 @@ def alerts_view(app):
             ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             padding=36, bgcolor=WHITE, border_radius=R_CARD,
             border=ft.Border.all(1, BORDER),
-            alignment=ft.Alignment.CENTER,
+            alignment=ft.alignment.Alignment(0, 0),
         )]
 
     active_col = ft.Column([
@@ -144,10 +145,10 @@ def alerts_view(app):
         *history_rows,
     ], spacing=6), pad=18)
 
+    siren_holder = ft.Container(width=None if is_phone(app) else 340,
+                                content=siren_card)
     return ft.Column([
-        ft.Row([
-            ft.Container(width=340, content=siren_card),
-            active_col,
-        ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.START),
+        flow(app, [siren_holder, active_col], spacing=14,
+             row_kw={"vertical_alignment": ft.CrossAxisAlignment.START}),
         history_card,
     ], spacing=14, scroll=ft.ScrollMode.AUTO, expand=True)

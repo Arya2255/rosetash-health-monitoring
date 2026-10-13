@@ -248,7 +248,7 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
         width=64, height=64, border_radius=32,
         clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
         border=ft.Border.all(1, BORDER), bgcolor="#F1F2F4",
-        alignment=ft.Alignment.CENTER,
+        alignment=ft.alignment.Alignment(0, 0),
     )
     rm_btn = ft.TextButton("حذف عکس", icon=ft.Icons.DELETE_OUTLINE)
 

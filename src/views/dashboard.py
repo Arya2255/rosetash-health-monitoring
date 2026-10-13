@@ -8,6 +8,7 @@ from theme import (
     fa_num, txt,
 )
 from data import EMPLOYEES, kpis, live_summary
+from layout import filter_row, flow, is_phone, list_card, page_scroll
 from components.common import card, pill, stat_card
 from components.employee_card import STATUS_ORDER, employee_card
 from components.alert_banner import emergency_banner
@@ -77,7 +78,8 @@ def _live_strip(live):
             gw_chip,
             band_chip,
             chip(hr_txt, hr_lbl),
-        ], spacing=16, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], spacing=16, wrap=True, run_spacing=8,
+           vertical_alignment=ft.CrossAxisAlignment.CENTER),
         bgcolor=WHITE, border=ft.Border.all(1, BORDER), border_radius=12,
         padding=ft.Padding.symmetric(horizontal=14, vertical=9),
     )
@@ -96,10 +98,11 @@ def dashboard_view(app):
             danger_emps[0],
             on_view=lambda e: app.go("employee", danger_emps[0]["id"]),
             on_siren=lambda e: app.set_siren(False),
+            phone=is_phone(app),
         )
 
-    # ── شاخص‌های کلیدی ──
-    kpi_row = ft.Row([
+    # ── شاخص‌های کلیدی — موبایل: زیر هم، تمام‌عرض ──
+    kpi_row = flow(app, [
         ft.Container(expand=True, content=stat_card(
             "حاضر در شیفت", f'{fa_num(k["present"])} از {fa_num(k["total"])}',
             "ثبت ورود از طریق مچ‌بند", ft.Icons.GROUPS, INK, "#E9EBEE")),
@@ -119,6 +122,10 @@ def dashboard_view(app):
         expand=True, max_extent=315, child_aspect_ratio=1.30,
         spacing=14, run_spacing=14, scroll=ft.ScrollMode.AUTO,
     )
+    if is_phone(app):
+        # موبایل: یک ستون تمام‌عرض — 315 در عرض گوشی دو ستون اسکویز می‌سازد
+        grid.max_extent = 420
+    list_card(app, grid, h=640)
     count_text = txt("", size=12, font=FONT, color=TEXT_MUTED)
 
     def open_emp(emp_id):
@@ -157,7 +164,7 @@ def dashboard_view(app):
 
     search = ft.TextField(
         hint_text="جستجوی نام کارکن…", prefix_icon=ft.Icons.SEARCH,
-        width=250, height=44, text_size=13,
+        width=None if is_phone(app) else 250, height=44, text_size=13,
         on_change=lambda e: (state.update({"search": e.control.value}), refresh(), app.page.update()),
     )
 
@@ -180,7 +187,8 @@ def dashboard_view(app):
             padding=ft.Padding.only(top=6),
         ),
         ft.Row([*pill_controls, ft.Container(expand=True), search], spacing=8,
-               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+               vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        if not is_phone(app) else filter_row(app, pill_controls, search),
         grid,
     ]
-    return ft.Column(controls, spacing=14, expand=True)
+    return page_scroll(app, controls)
