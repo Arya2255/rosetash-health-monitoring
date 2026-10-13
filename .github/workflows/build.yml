@@ -1,4 +1,4 @@
-name: Build Windows .exe
+name: Build Windows App
 
 on:
   workflow_dispatch:
@@ -8,14 +8,13 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -29,31 +28,32 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.8'
+          channel: 'stable'
 
-      - name: Install uv
-        run: |
-          pip install uv
+      - name: Install Flet
+        run: pip install flet
 
       - name: Install dependencies
         run: |
-          pip install flet
+          python -m pip install --upgrade pip
+          pip install uv
           uv sync
 
-      - name: Build Windows executable
+      - name: Build Windows app
         run: |
-          echo "y" | uv run flet build windows -o ./dist --project rosetash-health-monitoring --product "پایش سلامت کارکنان" --company "Motosel — Roztash"
+          flet build windows -o ./build
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: roztash-windows
-          path: ./dist/RosetashHealthMonitoring.exe
+          name: rosetash-windows
+          path: ./build/windows/
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ./dist/RosetashHealthMonitoring.exe
+          files: ./build/windows/**/*.exe
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
