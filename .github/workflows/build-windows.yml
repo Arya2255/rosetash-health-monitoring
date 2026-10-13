@@ -34,9 +34,10 @@ jobs:
         run: |
           $env:PYTHONIOENCODING = "utf-8"
           chcp 65001
-          # Install flet-cli with uvx, then use it
-          uvx pip install flet-cli
-          uvx flet build windows -o ./dist --yes
+          # Install flet-cli to the project venv, then run flet build
+          .\.venv\Scripts\Activate.ps1
+          pip install flet-cli
+          flet build windows -o ./dist --yes
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
