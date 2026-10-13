@@ -31,24 +31,24 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install flet[all]
+          pip install flet
           uv sync
 
       - name: Build Windows executable
         run: |
-          flet build windows --project rosetash-health-monitoring --distpath ./dist
+          uv run flet pack src/main.py --name "RosetashHealthMonitoring" --product-name "پایش سلامت کارکنان" --company-name "Motosel — Roztash" --onefile
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: roztash-windows
-          path: ./dist/*.exe
+          path: ./dist/RosetashHealthMonitoring.exe
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ./dist/*.exe
+          files: ./dist/RosetashHealthMonitoring.exe
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
