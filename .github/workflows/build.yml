@@ -6,6 +6,10 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -13,6 +17,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -26,22 +32,17 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync
-          uv pip install flet
 
       - name: Build Windows executable
         run: |
-          $env:PYTHONIOENCODING = "utf-8"
-          chcp 65001
-          # Install flet-cli globally then build
-          uv pip install flet-cli
-          flet build windows -o ./dist --yes --verbose
+          uv run pip install pyinstaller
+          uv run pyinstaller src/main.py --name "RosetashHealthMonitoring" --windowed --onefile --distpath ./dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: roztash-windows
-          path: ./dist/
-          retention-days: 30
+          path: ./dist/*.exe
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
