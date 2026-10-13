@@ -36,7 +36,7 @@ jobs:
 
       - name: Build Windows executable
         run: |
-          uv run flet pack src/main.py --name "RosetashHealthMonitoring" --product-name "پایش سلامت کارکنان" --company-name "Motosel — Roztash" --onefile
+          uv run flet build windows -o ./dist --project rosetash-health-monitoring --product "پایش سلامت کارکنان" --company "Motosel — Roztash"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
