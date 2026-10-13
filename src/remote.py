@@ -508,10 +508,24 @@ def _find_app() -> dict:
 
 def allowed_emails() -> list[str]:
     """ایمیل‌هایی که کلادفلر کد ورود را به آن‌ها می‌فرستد."""
+    # ═══════════ FALLBACK: استفاده از لیست ادمین‌ها ═══════════
+    from admin_roles import list_admins, DEFAULT_OWNER
+    
+    # اول از لیست ادمین‌ها بگیر
+    admins = list_admins()
+    admin_emails = [a["email"] for a in admins if a.get("email")]
+    
+    # اگر ادمینی نبود، ادمین اصلی را برگردان
+    if not admin_emails:
+        admin_emails = [DEFAULT_OWNER]
+    
+    # سعی کن از Cloudflare هم بگیری
     cfg = config()
     app = _find_app()
     if not app:
-        return list(cfg.get("emails") or [])
+        # اگر app نبود، ادمین‌ها را برگردان
+        return admin_emails
+    
     got, res, _ = _cf("/accounts/%s/access/apps/%s/policies"
                       % (cfg["account_id"], app["id"]))
     emails: list[str] = []
@@ -519,7 +533,9 @@ def allowed_emails() -> list[str]:
         for inc in (res[0].get("include") or []):
             if inc.get("email"):
                 emails.append(inc["email"].get("email", ""))
-    return [e for e in emails if e] or list(cfg.get("emails") or [])
+    
+    # اگر Cloudflare ایمیل داد، آن را برگردان، وگرنه ادمین‌ها
+    return [e for e in emails if e] or admin_emails
 
 
 def set_allowed_emails(emails: list[str]) -> tuple[bool, str]:
