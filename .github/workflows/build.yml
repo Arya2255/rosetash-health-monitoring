@@ -34,38 +34,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install flet pyinstaller
+          pip install flet
           uv sync
 
       - name: Build Windows app
         run: |
-          pyinstaller src/main.py `
-            --name "RosetashHealthMonitoring" `
-            --windowed `
-            --onefile `
-            --hidden-import=flet `
-            --hidden-import=flet.cli `
-            --hidden-import=flet.app `
-            --hidden-import=flet.pip `
-            --hidden-import=flet.version `
-            --hidden-import=flet.messaging `
-            --hidden-import=flet.embed `
-            --hidden-import=flet.reconnecting_websocket `
-            --hidden-import=flet.utils `
-            --hidden-import=flet.event `
-            --hidden-import=flet.transport `
-            --hidden-import=flet.errors `
-            --hidden-import=flet.env `
-            --hidden-import=flet.constants `
-            --hidden-import=flet_core `
-            --hidden-import=flet_desktop `
-            --collect-all flet `
-            --collect-all flet_core `
-            --collect-all flet_desktop `
-            --copy-metadata flet `
-            --copy-metadata flet_core `
-            --copy-metadata flet_desktop `
-            --distpath ./dist
+          flet pack src/main.py --name "RosetashHealthMonitoring" --onefile --distpath ./dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
