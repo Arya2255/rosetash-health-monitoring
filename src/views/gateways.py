@@ -20,7 +20,7 @@ from theme import (
     BORDER, FONT, FONT_B, FONT_MED, INK, OFFLINE, OK, R_BTN, R_CARD,
     TEXT_MAIN, TEXT_MUTED, WARN, WHITE, fa_num, txt,
 )
-from data import MAP_GATEWAYS, live_gateways
+from data import MAP_GATEWAYS, live_gateways, can_manage_gateways, can_edit_map
 from components.common import SHADOW, card, rel_age, section_header
 from components.gateway_form import (
     open_gateway_delete, open_gateway_form, suggest_gw_id,
@@ -66,7 +66,7 @@ def _placed_chip(item):
     return _chip("چیده‌نشده", TEXT_MUTED, _BG_GRAY)
 
 
-def _gw_card_row(item, on_edit=None, on_delete=None, on_map=None, actions=True):
+def _gw_card_row(item, on_edit=None, on_delete=None, on_map=None, actions=True, can_edit=True):
     """کارت یک گیت‌وی — چیپ‌های وضعیت، زیرنویس و دکمه‌های اقدام."""
     gid = str(item.get("gw") or "—")
     label = item.get("label") or gid
@@ -80,10 +80,12 @@ def _gw_card_row(item, on_edit=None, on_delete=None, on_map=None, actions=True):
         buttons = [
             ft.IconButton(ft.Icons.MAP, tooltip="نمایش روی نقشهٔ کارخانه",
                           icon_size=18, on_click=on_map),
-            ft.IconButton(ft.Icons.EDIT, tooltip="ویرایش", icon_size=18,
-                          on_click=on_edit),
-            ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="حذف از دفتر",
-                          icon_size=18, icon_color=OFFLINE, on_click=on_delete),
+            ft.IconButton(ft.Icons.EDIT, tooltip="ویرایش" if can_edit else "فقط ادمین اصلی می‌تواند ویرایش کند",
+                          icon_size=18, icon_color=INK if can_edit else TEXT_MUTED,
+                          on_click=on_edit if can_edit else None, disabled=not can_edit),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="حذف از دفتر" if can_edit else "فقط ادمین اصلی می‌تواند حذف کند",
+                          icon_size=18, icon_color=OFFLINE if can_edit else TEXT_MUTED,
+                          on_click=on_delete if can_edit else None, disabled=not can_edit),
         ]
     return card(ft.Row([
         ft.Container(
@@ -120,6 +122,10 @@ def _demo_banner():
 
 def gateways_view(app):
     """صفحهٔ «گیت‌وی‌ها» — دفتر گیت‌وی پل + کشف‌شده‌های شبکه."""
+    # نقش کاربر
+    my_role = app.state.get("role", "viewer")
+    can_edit = can_manage_gateways(my_role)
+    
     rows = live_gateways()
     bridge_up = rows is not None
     rows = rows or []
@@ -135,14 +141,14 @@ def gateways_view(app):
     new_btn = ft.Button(
         "گیت‌وی جدید",
         icon=ft.Icons.ADD_LOCATION_ALT,
-        disabled=not bridge_up,
-        tooltip=None if bridge_up else "برای تعریف، پل باید بالا باشد",
+        disabled=not bridge_up or not can_edit,
+        tooltip=None if (bridge_up and can_edit) else "فقط ادمین اصلی می‌تواند گیت‌وی اضافه کند" if not can_edit else "برای تعریف، پل باید بالا باشد",
         style=ft.ButtonStyle(
             bgcolor=INK, color=WHITE,
             shape=ft.RoundedRectangleBorder(radius=R_BTN),
             padding=ft.Padding.symmetric(horizontal=12, vertical=6),
         ),
-        on_click=_new,
+        on_click=_new if can_edit else None,
     )
     header = section_header(
         "گیت‌وی‌ها",
@@ -191,7 +197,7 @@ def gateways_view(app):
                 open_gateway_delete(app, item, on_done=_refresh)
 
             list_col.controls.append(
-                _gw_card_row(item, on_edit, on_delete, on_map))
+                _gw_card_row(item, on_edit, on_delete, on_map, can_edit=can_edit))
     elif bridge_up:
         list_col.controls.append(txt(
             "هنوز گیت‌ویی تعریف نشده — با «گیت‌وی جدید» شروع کن. برای هر "

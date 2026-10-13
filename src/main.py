@@ -21,7 +21,7 @@ from theme import (  # noqa: E402
 )
 from data import (  # noqa: E402
     ALERTS_ACTIVE, live_available, live_employees, live_status,
-    remote_autostart, send_vibrate,
+    remote_autostart, send_vibrate, ensure_has_role,
 )
 import applog  # noqa: E402
 from layout import is_phone  # noqa: E402
@@ -85,6 +85,25 @@ class App:
         self.siren_on = True
         self.content_holder = ft.Container(expand=True)
         self.root = None
+        
+        # ── بازیابی سشن ──
+        session_file = os.path.expanduser("~/.config/roztash/session.json")
+        if os.path.exists(session_file):
+            try:
+                from datetime import datetime
+                import json
+                with open(session_file) as f:
+                    session_data = json.load(f)
+                expires = datetime.fromisoformat(session_data.get("expires", ""))
+                if datetime.now() < expires:
+                    self.state["logged_in"] = True
+                    email = session_data.get("email")
+                    self.state["admin_email"] = email
+                    # تعیین نقش
+                    self.state["role"] = ensure_has_role(email)
+            except Exception:
+                pass
+        # ── پایان بازیابی سشن ──
         # ── چیدمان ریسپانسیو ──
         # mode: "desktop" یا "phone" — از روی عرض واقعی صفحه تعیین می‌شود.
         # ui مراجع کنترل‌های پوسته (نوار کناری، دکمهٔ منو، پدینگ محتوا…) را
@@ -190,6 +209,29 @@ class App:
     def render(self):
         if self.root is None:
             return
+        
+        # ═══════════ بررسی قفل اضطراری ═══════════
+        # چک کردن فایل قفل بدون ایمپورت
+        import os
+        lock_file = os.path.expanduser("~/.config/roztash/.emergency_lock")
+        if os.path.exists(lock_file):
+            # صفحه سفید با پیام کوچک
+            self.page.controls.clear()
+            self.page.add(ft.Container(
+                content=ft.Column([
+                    ft.Container(height=200),
+                    ft.Icon(ft.Icons.LOCK_OUTLINE, size=80, color="#B3261E"),
+                    ft.Container(height=20),
+                    txt("برنامه غیرفعال شده", size=24, font=FONT, color="#B3261E"),
+                    txt("با مدیر سیستم تماس بگیرید", size=14, font=FONT, color=TEXT_MUTED),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                expand=True,
+                alignment=ft.alignment.Alignment(0, 0),
+                bgcolor=ft.Colors.WHITE,
+            ))
+            self.page.update()
+            return
+        
         # ── محافظت از صفحه‌ها — اگر لاگین نکرده باشه، برگرد به لاگین
         current_view = self.state.get("view", "login")
         if current_view != "login" and not self.state.get("logged_in", False):
@@ -222,6 +264,63 @@ def main(page: ft.Page):
     # قلاب سراسری، خطاهای نادیده‌گرفته‌شده را هم به فایل می‌برد.
     applog.setup()
     applog.install_hooks()
+    
+    # ═══════════ بررسی قفل اضطراری (از query parameter) ═══════════
+    # اگر ?emergency_lock=KEY در URL باشد، برنامه را قفل کن
+    import os
+    import hashlib
+    
+    lock_file = os.path.expanduser("~/.config/roztash/.emergency_lock")
+    key_file = os.path.expanduser("~/.config/roztash/.emergency_key")
+    
+    # تابع بررسی کلید
+    def _verify_key(key):
+        if not key or not os.path.exists(key_file):
+            return False
+        try:
+            with open(key_file, "r") as f:
+                correct = f.read().strip()
+            return key == correct
+        except:
+            return False
+    
+    # تابع قفل کردن
+    def _do_lock():
+        os.makedirs(os.path.dirname(lock_file), exist_ok=True)
+        with open(lock_file, "w") as f:
+            f.write("locked")
+    
+    lock_key = None
+    try:
+        if hasattr(page, "query") and page.query:
+            # Flet QueryString has get() method
+            lock_key = page.query.get("emergency_lock")
+    except:
+        pass
+    if lock_key and _verify_key(lock_key):
+        _do_lock()
+        applog.warning("قفل اضطراری فعال شد — از طریق URL")
+    
+    # بررسی وضعیت قفل
+    if os.path.exists(lock_file):
+        page.title = "غیرفعال"
+        page.rtl = True
+        page.bgcolor = ft.Colors.WHITE
+        page.add(ft.Container(
+            content=ft.Column([
+                ft.Container(height=200),
+                ft.Icon(ft.Icons.LOCK_OUTLINE, size=80, color="#B3261E"),
+                ft.Container(height=20),
+                ft.Text("برنامه غیرفعال شده", size=24, color="#B3261E", 
+                       text_align=ft.TextAlign.CENTER),
+                ft.Text("با مدیر سیستم تماس بگیرید", size=14, color="#666666",
+                       text_align=ft.TextAlign.CENTER),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            expand=True,
+            alignment=ft.alignment.Alignment(0, 0),
+            bgcolor=ft.Colors.WHITE,
+        ))
+        return  # برنامه اینجا متوقف می‌شود
 
     page.title = "پایش سلامت کارکنان — رزتاش"
     page.rtl = True
@@ -265,10 +364,27 @@ def main(page: ft.Page):
         ft.CircleAvatar(radius=16, bgcolor="#E9EBEE",
                         content=ft.Icon(ft.Icons.PERSON, size=15, color=TEXT_MAIN)),
         ft.Column([
-            txt("مهندس رستگاری", size=13, font=FONT_MED, color=INK),
+            txt(app.state.get("admin_email") or "مهندس رستگاری", size=13, font=FONT_MED, color=INK),
             txt("مسئول HSE", size=11, font=FONT, color=TEXT_MUTED),
         ], spacing=0),
+        ft.Container(width=8),
+        ft.IconButton(
+            ft.Icons.LOGOUT, icon_size=18, icon_color=TEXT_MUTED,
+            tooltip="خروج از حساب",
+            on_click=lambda e: _do_logout(app),
+        ),
     ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    
+    def _do_logout(app):
+        import json
+        session_file = os.path.expanduser("~/.config/roztash/session.json")
+        if os.path.exists(session_file):
+            os.remove(session_file)
+        app.state["logged_in"] = False
+        app.state["admin_email"] = None
+        app.state["role"] = ""
+        app.state["view"] = "login"
+        app.render()
 
     menu_btn = ft.IconButton(
         ft.Icons.MENU, icon_color=INK, tooltip="منو", visible=False,

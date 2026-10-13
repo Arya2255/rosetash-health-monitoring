@@ -28,7 +28,7 @@ from theme import (
 )
 from data import (
     MAP_ENTRANCE, MAP_GATEWAYS, MAP_IMAGE, MAP_IMAGE_H, MAP_IMAGE_W,
-    live_status, save_gateway,
+    live_status, save_gateway, can_edit_map,
 )
 from layout import is_phone, page_w
 from components.common import card, section_header
@@ -553,18 +553,22 @@ def map_view(app):
         state["map_edit"] = not bool(state.get("map_edit"))
         app.render()
 
-    can_edit = bool(src["rows"])
+    # نقش کاربر
+    my_role = app.state.get("role", "viewer")
+    can_edit_map_role = can_edit_map(my_role)
+    
+    can_edit = bool(src["rows"]) and can_edit_map_role
     edit_btn = ft.Button(
         "پایان چیدن" if edit else "چیدن روی نقشه",
         icon=ft.Icons.DRAG_INDICATOR,
         disabled=not can_edit,
-        tooltip=None if can_edit else "از بخش «گیت‌وی‌ها» گیت‌وی تعریف کن",
+        tooltip=None if can_edit else ("فقط ادمین اصلی می‌تواند چیدن کند" if not can_edit_map_role else "از بخش «گیت‌وی‌ها» گیت‌وی تعریف کن"),
         style=ft.ButtonStyle(
             bgcolor=BRAND_RED if edit else INK, color=WHITE,
             shape=ft.RoundedRectangleBorder(radius=8),
             padding=ft.Padding.symmetric(horizontal=12, vertical=6),
         ),
-        on_click=_toggle_edit,
+        on_click=_toggle_edit if can_edit else None,
     )
 
     def _new_gateway(e):

@@ -63,7 +63,7 @@ from map_data import (  # noqa: E402,F401
     MAP_ENTRANCE, MAP_GATEWAYS, MAP_IMAGE, MAP_IMAGE_H, MAP_IMAGE_W,
 )
 
-# ── دسترسی از اینترنت — تونل کلادفلر و قفل ورود ایمیلی داخل خود برنامه ──
+# ═══════════ دسترسی از اینترنت — تونل کلادفلر و قفل ورود ایمیلی داخل خود برنامه ═══════════
 from remote import (  # noqa: E402,F401
     add_email as remote_add_email,
     allowed_emails as remote_emails,
@@ -76,3 +76,21 @@ from remote import (  # noqa: E402,F401
     tunnel_down as remote_down,
     tunnel_up as remote_up,
 )
+
+# ═══════════ مدیریت نقش ادمین‌ها ═══════════
+from admin_roles import (  # noqa: E402,F401
+    can_backup,
+    can_edit_map,
+    can_manage_admins,
+    can_manage_gateways,
+    can_manage_remote,
+    can_view_logs,
+    ensure_has_role,
+    get_role,
+    list_admins,
+    remove_admin,
+    set_role,
+)
+
+# ═══════════ دسترسی از اینترنت — صادرات اضافی ═══════════
+from remote import set_allowed_emails  # noqa: E402,F401

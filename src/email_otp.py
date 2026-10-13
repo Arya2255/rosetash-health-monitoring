@@ -22,14 +22,14 @@ def send_otp_email(to_email: str, code: str) -> tuple[bool, str]:
     user = cfg.get("user", "")
     password = cfg.get("password", "")
     
+    # همیشه چاپ در کنسول برای تست
+    print(f"\n{'='*50}")
+    print(f"🔐 کد تأیید برای {to_email}: {code}")
+    print(f"{'='*50}\n")
+    
     # اگر پسورد تنظیم نشده
     if not password or password == "APP_PASSWORD":
-        # Fallback به چاپ در کنسول
-        print(f"\n{'='*50}")
-        print(f"کد تأیید برای {to_email}: {code}")
-        print(f"(SMTP تنظیم نشده - در کنسول چاپ شد)")
-        print(f"{'='*50}\n")
-        return False, "SMTP تنظیم نشده - کد در کنسول چاپ شد"
+        return False, "SMTP تنظیم نشده"
     
     try:
         # ساخت پیام
