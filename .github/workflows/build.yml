@@ -34,12 +34,13 @@ jobs:
 
       - name: Install dependencies
         run: |
+          pip install flet
           uv sync
-          uv pip install flet
 
       - name: Build Windows app
         run: |
-          flet build windows -o ./dist
+          pip install pyinstaller
+          pyinstaller src/main.py --name "RosetashHealthMonitoring" --windowed --onefile --hidden-import=flet --hidden-import=flet.cli --collect-all flet --distpath ./dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
