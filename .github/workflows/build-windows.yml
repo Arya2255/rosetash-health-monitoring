@@ -34,9 +34,8 @@ jobs:
         run: |
           $env:PYTHONIOENCODING = "utf-8"
           chcp 65001
-          # Install flet-cli globally then build
-          uv pip install flet-cli
-          flet build windows -o ./dist --yes --verbose
+          # Use uvx to run flet directly from the uv environment
+          uvx flet build windows -o ./dist --yes
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
