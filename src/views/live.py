@@ -125,10 +125,10 @@ def _device_row(dot_color, title, sub):
 def _gw_row(g):
     """ردیف گیتوی — هر تعداد گیتوی ثبت‌شده یک ردیف می‌گیرد."""
     online = bool(g.get("online"))
-    rssi = g.get("rssi")
-    wifi = fa_num(round(rssi)) if rssi is not None else "—"
+    transport = g.get("transport") or "ethernet"
+    ip = g.get("ip") or "—"
     sub = (f"{'آنلاین' if online else 'آفلاین'} — {g.get('zone') or '—'}"
-           f" — fw {g.get('fw') or '—'} — وای‌فای {wifi}"
+           f" — fw {g.get('fw') or '—'} — {transport} {ip}"
            f" — آپ‌تایم {_dur(g.get('uptime_s'))}")
     return _device_row(OK if online else OFFLINE, str(g.get("gw") or "—"), sub)
 
@@ -465,11 +465,11 @@ def live_view(app):
             g = gws[0]
             gw_value.value = str(g.get("fw", "—"))
             gw_value.color = INK if g.get("online") else OFFLINE
-            wifi = g.get("rssi")
-            wifi_txt = fa_num(round(wifi)) if wifi is not None else "—"
+            transport = g.get("transport") or "ethernet"
+            ip = g.get("ip") or "—"
             gw_sub.value = (f"آپ‌تایم {_dur(g.get('uptime_s'))} — "
                             f"{fa_num(round(g.get('adv_seen') or 0))} بستهٔ دریافتی — "
-                            f"وای‌فای {wifi_txt}")
+                            f"{transport} {ip}")
         else:
             gw_value.value = "—"
             gw_value.color = OFFLINE

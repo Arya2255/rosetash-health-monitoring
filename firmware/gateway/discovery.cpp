@@ -2,14 +2,15 @@
 
 #include "discovery.h"
 #include "config.h"
+#include "network_config.h"
 #include <ArduinoJson.h>
+#include <NetworkUdp.h>
+#include <ETH.h>
 
 void DiscoveryClient::loadBroadcastAddrs(std::vector<IPAddress>& addrs) {
-  // Common broadcast addresses for different network classes
-  addrs.push_back(IPAddress(255, 255, 255, 255));  // /8 - always works
-  addrs.push_back(IPAddress(192, 168, 255, 255));  // /24
-  addrs.push_back(IPAddress(10, 255, 255, 255));   // /8
-  addrs.push_back(IPAddress(172, 31, 255, 255));   // /16
+  if (!ETH.hasIP()) return;
+  addrs.push_back(ETH.broadcastIP());
+  addrs.push_back(IPAddress(255, 255, 255, 255));
 }
 
 bool DiscoveryClient::sendQuery() {
@@ -61,8 +62,8 @@ bool DiscoveryClient::waitForAnswer(char* out_host, size_t host_cap, uint16_t* o
           DeserializationError err = deserializeJson(doc, payload);
           
           if (!err && doc.containsKey("mqtt_host")) {
-            String host = doc["mqtt_host"].as<String>();
-            uint16_t port = doc["mqtt_port"] | 1883;
+            String host = udp_.remoteIP().toString();
+            uint16_t port = doc["mqtt_port"] | roztash::kMqttPort;
             
             strncpy(out_host, host.c_str(), host_cap - 1);
             out_host[host_cap - 1] = '\0';

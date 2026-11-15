@@ -1,4 +1,4 @@
-// gateway/mqtt_link.h — WiFi + MQTT publishing with a simple offline queue.
+// gateway/mqtt_link.h — Ethernet + MQTT publishing with an offline queue.
 //
 // Topics (prefix = roztash/<gw_id>):
 //   /status     retained heartbeat + LWT offline marker
@@ -11,18 +11,21 @@
 
 #include <Arduino.h>
 #include <PubSubClient.h>
-#include <WiFi.h>
+#include <Network.h>
 
 #include "ble_central.h"
 #include "config.h"
+#include "network_config.h"
 
 class MqttLink {
  public:
-  void begin(const GatewayConfig& cfg);
-  void poll();  // wifi/mqtt reconnect + queue flush; call every loop()
+  void begin(const GatewayConfig& cfg);  // starts W5500 Ethernet with DHCP
+  void setBroker(const char* host, uint16_t port);
+  void poll();  // Ethernet/MQTT reconnect + queue flush; call every loop()
   bool online() { return mqtt_.connected(); }
+  bool networkReady() const;
 
-  void publishStatus(const char* fw, int wifi_rssi, const char* ip,
+  void publishStatus(const char* fw, const char* ip,
                      int bands_seen, uint32_t adv_seen);
   void publishPresence(BleCentral& ble);
   void publishHealth(const BleCentral& ble);
@@ -38,11 +41,10 @@ class MqttLink {
   void queueLine(const char* topic, const char* payload);
   void flushQueue();
 
-  WiFiClient net_;
+  NetworkClient net_;
   PubSubClient mqtt_{net_};
   GatewayConfig cfg_{};
   char base_[40] = {0};
-  uint32_t last_wifi_attempt_ms_ = 0;
   uint32_t last_mqtt_attempt_ms_ = 0;
   char cmd_action_[16] = {0};
   char cmd_mac_[20] = {0};

@@ -7,16 +7,17 @@
 //      the band is released (disconnected) so advertising resumes.
 //   C) remote commands on roztash/<gw>/cmd — currently "vibrate" (find-device):
 //      connect, send (05,50), the band buzzes and acks, disconnect.
-//   D) wifi setup portal: when wifi config is missing or the station fails to
-//      connect, an open AP "RoztashGw-XXXXXX" serves a phone setup page
-//      (setup_portal.{h,cpp}) — config only; firmware itself needs one USB flash.
+//   D) Ethernet setup uses the W5500 with DHCP; broker auto-discovery runs
+//      only after Ethernet has received an IP address.
 //
 // Reference docs: docs/gateway-design.md, docs/band-protocol.md,
 //                 docs/gateway-provisioning.md.
 // Toolchain: arduino-cli + esp32 core 3.x + NimBLE-Arduino >= 2.1,
 //            PubSubClient, ArduinoJson >= 7.
 #include <Arduino.h>
-#include <WiFi.h>
+#include <Network.h>
+#include <ETH.h>
+#include <SPI.h>
 #include <esp_task_wdt.h>
 #include <time.h>
 
@@ -24,9 +25,8 @@
 #include "config.h"
 #include "mqtt_link.h"
 #include "discovery.h"
-#include "setup_portal.h"
 
-const char* kFwVersion = "0.3.0-discovery";
+const char* kFwVersion = "0.4.0-ethernet";
 
 // SpO2 + HRV stages run only every Nth health window: three PPG measurements
 // back to back on every window would drain the band's battery. Battery and
@@ -44,16 +44,31 @@ static bool window_active = false;
 static uint16_t window_gen = 1;
 static uint16_t attempted_gen[BleCentral::kMaxBands];  // per-sighting-slot
 static DiscoveryClient discovery;
+static bool broker_resolved = false;
+static uint32_t last_broker_discovery_ms = 0;
 static char resolved_mqtt_host[48] = {0};
 static uint16_t resolved_mqtt_port = 1884;
 
-// Resolve MQTT host via discovery, fallback to config
+// Resolve MQTT host via discovery after DHCP is ready; keep config as fallback.
 static void resolveMqttHost() {
-  // DEBUG: Skip discovery - use config directly
   strncpy(resolved_mqtt_host, cfg.mqtt_host, sizeof(resolved_mqtt_host) - 1);
+  resolved_mqtt_host[sizeof(resolved_mqtt_host) - 1] = '\0';
   resolved_mqtt_port = cfg.mqtt_port;
-  
-  Serial.printf("[gw] Discovery: DISABLED, using config %s:%u\n", resolved_mqtt_host, resolved_mqtt_port);
+
+  char discovered_host[sizeof(resolved_mqtt_host)] = {0};
+  uint16_t discovered_port = resolved_mqtt_port;
+  const bool found = discovery.discover(cfg.mqtt_host, cfg.mqtt_port,
+                                        discovered_host, sizeof discovered_host,
+                                        &discovered_port);
+  if (found) {
+    strncpy(resolved_mqtt_host, discovered_host, sizeof(resolved_mqtt_host) - 1);
+    resolved_mqtt_host[sizeof(resolved_mqtt_host) - 1] = '\0';
+    resolved_mqtt_port = discovered_port;
+  }
+  mqtt.setBroker(resolved_mqtt_host, resolved_mqtt_port);
+  Serial.printf("[gw] broker: %s:%u%s\n", resolved_mqtt_host,
+                resolved_mqtt_port, found ? " (discovered)" : " (config fallback)");
+  broker_resolved = true;
 }
 
 // Picks the next band not yet measured in this window.
@@ -82,23 +97,15 @@ static void setupWatchdog() {
 }
 
 static void normalBegin() {
-  configTime(0, 0, "pool.ntp.org", "time.google.com");  // UTC; backend localizes
-
-  // Resolve MQTT server via discovery (auto-find the PC)
-  resolveMqttHost();
-  
-  // Override config with discovered values
-  strncpy(cfg.mqtt_host, resolved_mqtt_host, sizeof(cfg.mqtt_host) - 1);
-  cfg.mqtt_port = resolved_mqtt_port;
-  
   ble.begin(cfg.scan_interval_ms, cfg.scan_window_ms,
             (uint32_t)cfg.measure_timeout_s * 1000UL);
-  mqtt.begin(cfg);
 
+  broker_resolved = false;
+  last_broker_discovery_ms = 0;
   window_started_ms = millis();
   last_presence_ms = millis();
   last_status_ms = millis();
-  Serial.println("[gw] ready");
+  Serial.println("[gw] BLE ready; waiting for Ethernet DHCP");
 }
 
 void setup() {
@@ -109,48 +116,22 @@ void setup() {
   configLoad(cfg);
   setupWatchdog();
 
-  // wifi: connect when configured; otherwise — or when the station fails —
-  // open the setup portal (AP + web page) so the gateway can be configured
-  // from a phone. The portal keeps retrying and hands over transparently.
-  bool wifi_ok = false;
-  if (cfg.wifi_ssid[0]) {
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(cfg.wifi_ssid, cfg.wifi_pass);
-    const uint32_t t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 90000) {
-      delay(500);
-      Serial.print(".");
-      esp_task_wdt_reset();
-    }
-    wifi_ok = WiFi.status() == WL_CONNECTED;
-  }
-  Serial.printf("[gw] wifi: %s\n",
-                wifi_ok ? WiFi.localIP().toString().c_str()
-                        : (cfg.wifi_ssid[0] ? "connect failed — setup mode"
-                                            : "no config — setup mode"));
-  if (!wifi_ok) {
-    setupPortalBegin(cfg);
-  } else {
-    normalBegin();
-  }
+  mqtt.begin(cfg);  // starts W5500; DHCP runs automatically on link-up
+  normalBegin();
+  Serial.println("[gw] ready");
 }
 
 void loop() {
   const uint32_t now = millis();
+  mqtt.poll();
 
-  // Setup portal: serve the config page; the station retries in the
-  // background and we fall through to normal operation once it connects.
-  if (setupPortalActive()) {
-    if (setupPortalPoll()) {
-      WiFi.setAutoReconnect(true);
-      normalBegin();
-    }
-    esp_task_wdt_reset();
-    delay(10);
-    return;
+  // Discover the HSE broker only after W5500 has link and a DHCP lease.
+  if (mqtt.networkReady() && !broker_resolved &&
+      now - last_broker_discovery_ms >= 1000) {
+    last_broker_discovery_ms = now;
+    resolveMqttHost();
   }
 
-  mqtt.poll();
   ble.poll();
 
   // A) presence batch every 10 s
@@ -212,8 +193,7 @@ void loop() {
   // C) status heartbeat every 60 s
   if (now - last_status_ms >= 60000) {
     last_status_ms = now;
-    mqtt.publishStatus(kFwVersion, WiFi.RSSI(),
-                       WiFi.localIP().toString().c_str(),
+    mqtt.publishStatus(kFwVersion, ETH.localIP().toString().c_str(),
                        ble.sightingCount(), ble.advCount());
   }
 

@@ -22,10 +22,14 @@ sys.path.insert(0, os.path.join(_HERE, "..", "src"))
 import views.map as m  # noqa: E402
 
 # ── ۱) تخمین فاصله از قدرت سیگنال ──
-assert abs(m._approx_m(-59) - 1.0) < 0.01, m._approx_m(-59)
+# PDMB1062 reference: -82 dBm at 1 m, n=2.5 (calibration in ed21cb9).
+m82 = m._approx_m(-82)
+assert m82 is not None and abs(m82 - 1.0) < 0.01, m82
+m107 = m._approx_m(-107)
+assert m107 is not None and abs(m107 - 10.0) < 0.01, m107
 m88 = m._approx_m(-88)
-assert 13 < m88 < 16, m88
-assert m._m_text(-88) == "≈ ۱۴ متر", m._m_text(-88)
+assert m88 is not None and 1.7 < m88 < 1.8, m88
+assert m._m_text(-88) == "≈ ۲ متر", m._m_text(-88)
 assert m._m_text(None) == "در دید", m._m_text(None)
 
 # ── ۲) نقطهٔ مچ‌بند — فقط زیر گیت‌وی نصب‌شدهٔ شناخته‌شده ──
@@ -44,10 +48,11 @@ assert len(dots) == 1, len(dots)
 assert "f3:b6:d6:b7:47:d7" in dots[0].tooltip
 assert "۸۸" in dots[0].tooltip
 assert dots[0].content.controls[0].bgcolor == m.WARN  # سیگنال زیر ۷۵- → نارنجی
-assert dots[0].content.controls[1].content.value == "≈ ۱۴ متر"
+assert dots[0].content.controls[1].content.value == "≈ ۲ متر"
 
 # ── ۳) ردیف‌های وضعیت زنده و آمار تست فاصله ──
-watch = {"weakest": -91, "weakest_at": 1791700000, "samples": 12,
+# Keep the rounded session maximum distinct from the current 2 m estimate.
+watch = {"weakest": -94, "weakest_at": 1791700000, "samples": 12,
          "last_seen": None}
 rows = m._live_rows(doc, watch)
 
@@ -72,9 +77,9 @@ for r in rows:
 joined = "\n".join(texts)
 assert "سالن فیلتر ۱" in joined, joined
 assert "-۸۸" in joined, joined
-assert "≈ ۱۴ متر" in joined, joined
+assert "≈ ۲ متر" in joined, joined
 assert "دورترین تخمین این نشست" in joined, joined
-assert "≈ ۱۹ متر" in joined, joined  # from weakest -91
+assert "≈ ۳ متر" in joined, joined  # from weakest -94
 assert "۱۲" in joined, joined  # تعداد مشاهده‌ها
 assert "مشاهدهٔ مچ‌بند در این نشست" in joined, joined
 

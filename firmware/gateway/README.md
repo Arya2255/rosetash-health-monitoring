@@ -1,81 +1,60 @@
-# فریمور گیتوی روزتاش — اسکلت ESP32
+# فریمور گیتوی روزتاش — ESP32-S3 + W5500
 
-اسکلت فریمور گیتوی برای مانیتورینگ سلامت کارکنان — فاز ۲ پروژه.
-مرجع کامل طراحی: `docs/gateway-design.md`
+فریمور گیتوی BLE برای ESP32-S3 N16R8 با ماژول اترنت W5500. نسخهٔ فعلی: `0.4.0-ethernet`.
+
+## شبکه
+
+- W5500 روی SPI با پین‌های SCK=12، MISO=13، MOSI=11، CS=10، RST=9؛ خواندن VERSIONR از برد مقدار `0x04` داده است.
+- اترنت با DHCP کار می‌کند؛ Wi-Fi و پورتال AP در فریمور فعال نیستند.
+- گیتوی پس از DHCP، بروکر MQTT را با UDP پیدا می‌کند؛ مقدار جایگزین HSE برابر `192.168.50.1:1884` است.
+- بستهٔ برنامه‌ریزی در `docs/gateway-provisioning.md` مستند شده است؛ برنامه روی ویندوز فریمور و شناسه/منطقهٔ گیتوی را همزمان فلش می‌کند.
 
 ## نقش‌های گیتوی
 
-1. **اسکن دائمی حضور** — مچ‌بندهای `PDMB1062` را می‌بیند و هر ۱۰ ثانیه بستهٔ حضور و قدرت سیگنال را با MQTT می‌فرستد
-2. **پنجرهٔ سلامت** — به‌نوبت به هر مچ‌بندِ دیده‌شده وصل می‌شود: باتری و اطلاعات دستگاه را می‌خواند، فرمان شروع ضربان می‌فرستد، نمونه‌ها را جمع می‌کند و نتیجه را می‌فرستد؛ در هر پنجمین پنجره مراحل اکسیژن خون و HRV هم اجرا می‌شوند
-   - قطع شدن بعد از هر اندازه‌گیری عمدی است — مچ‌بند تا وقتی وصل باشد آگهی پخش نمی‌کند و اسکن حضور کور می‌شود
-3. **فرمان از راه دور** — روی `roztash/<gw_id>/cmd` اشتراک دارد؛ فعلاً `vibrate`: بین پنجره‌ها وصل می‌شود، `(05,50)` را می‌فرستد، منتظر تأیید می‌ماند و قطع می‌کند
+1. **حضور BLE** — اسکن `PDMB1062` و ارسال بستهٔ حضور/RSSI هر ۱۰ ثانیه از MQTT.
+2. **پنجرهٔ سلامت** — اتصال نوبتی، خواندن باتری/اطلاعات دستگاه، ضربان، و در هر پنجمین پنجره اکسیژن و HRV.
+3. **فرمان از راه دور** — اشتراک در `roztash/<gw_id>/cmd` برای فرمان `vibrate`.
 
 ## فایل‌ها
 
 | فایل | نقش |
 |---|---|
-| `gateway.ino` | چرخهٔ اصلی — راه‌اندازی، زمان‌بندی پنجره‌ها، بستهٔ حضور، واتچ‌داگ |
-| `protocol.h/.cpp` | ساخت و تحلیل فریم — بدون وابستگی به آردوینو — **تست طلایی‌شده روی لپ‌تاپ** |
-| `ble_central.h/.cpp` | اسکن مچ‌بند + چرخهٔ اتصال و اندازه‌گیری — NimBLE-Arduino ۲.x |
-| `mqtt_link.h/.cpp` | وای‌فای، MQTT، صف آفلاین روی LittleFS |
-| `config.h/.cpp` | تنظیمات از `config.json` روی LittleFS |
+| `gateway.ino` | چرخهٔ BLE، زمان‌بندی، فرمان‌ها و وضعیت گیتوی |
+| `protocol.h/.cpp` | ساخت و تحلیل فریم‌های مچ‌بند |
+| `ble_central.h/.cpp` | اسکن BLE و چرخهٔ اندازه‌گیری |
+| `mqtt_link.h/.cpp` | راه‌اندازی W5500، DHCP، MQTT و صف آفلاین LittleFS |
+| `discovery.h/.cpp` | یافتن بروکر در broadcast زیرشبکهٔ اترنت |
+| `config.h/.cpp` | بارگیری شناسه، منطقه و تنظیمات MQTT از LittleFS |
+| `network_config.h` | پین‌های W5500 و مقدارهای شبکهٔ اختصاصی |
 
-## تست طلایی پروتکل
+## بیلد توسعه
 
-```
-bash firmware/test/run_host_test.sh
-```
-
-ده تست — پارس شش فریم واقعی ضبط‌شده از مچ‌بند، ساخت سه فریم واقعی ارسال‌شده، و یک رفت‌وبرگشت.
-آخرین اجرا: **همه پاس** — پورت C++ بایت‌به‌بایت با ابزار پایتون مطابق است.
-
-## نمونهٔ `config.json`
-
-```json
-{
-  "gw_id": "gw-hall-1",
-  "zone": "سالن اصلی",
-  "wifi_ssid": "RoztashWiFi",
-  "wifi_pass": "***",
-  "mqtt_host": "192.168.1.10",
-  "mqtt_port": 1883,
-  "health_interval_s": 600,
-  "scan_interval_ms": 160,
-  "scan_window_ms": 80,
-  "measure_timeout_s": 45
-}
+```bash
+arduino-cli compile --fqbn "esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=min_spiffs,CDCOnBoot=cdc" firmware/gateway
 ```
 
-بدون فایل، درستکارها با مقدار پیش‌فرض بالا می‌آیند — برای تست روی میز کافی است.
+نسخه‌های تأییدشده: ESP32 core 3.3.12، NimBLE-Arduino 2.5.1، PubSubClient 2.8 و ArduinoJson 7.4.3. برای ساخت مجدد فایل‌های آمادهٔ برنامه‌ریزی:
 
-## بیلد و فلش
-
-راهنمای گام‌به‌گام کامل (آماده‌سازی لینوکس، تنظیم `config.json`، فلش، تست روی میز و نصب میدانی): `docs/gateway-setup.md`
-
-```
-arduino-cli core install esp32:esp32
-arduino-cli lib install "NimBLE-Arduino" "PubSubClient" "ArduinoJson"
-arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=min_spiffs" firmware/gateway
-arduino-cli upload  --fqbn "esp32:esp32:esp32:PartitionScheme=min_spiffs" -p /dev/ttyUSB0 firmware/gateway
+```bash
+uv run python tools/build_provisioner_bundle.py
 ```
 
-- نسخه‌های تأییدشده روی لپ‌تاپ مرجع: NimBLE-Arduino ۲٫۵٫۱ ، ArduinoJson ۷٫۴٫۳ ، PubSubClient ۲٫۸
-- طرح پارتیشن `min_spiffs` لازم است — باینری از پارتیشن پیش‌فرض (۹۴٪ مصرف) نزدیک به سرریز بود
-- اگر پورت سریال پیدا نشد: `sudo usermod -aG dialout $USER` و مسدودسازی سرویس `brltty`
-- خروجی سریال: ۱۱۵۲۰۰ باد — همهٔ رویدادها با برچسب `[gw]/[ble]/[mqtt]/[cfg]` لاگ می‌شوند
+خروجی سریال 115200 است. DHCP/MQTT روی سوئیچ واقعی هنوز نیاز به آزمون میدانی دارد.
 
 ## موضوع‌های MQTT
 
-| موضوع | محتوا | یادداشت |
-|---|---|---|
-| `roztash/<gw_id>/status` | وضعیت گیتوی + مچبندهای دیده‌شده | بازدارنده — LWT خاموشی را اعلام می‌کند |
-| `roztash/<gw_id>/presence` | بستهٔ `{mac, rssi}` هر ۱۰ ثانیه | بدون صف آفلاین |
-| `roztash/<gw_id>/health` | `{mac, bpm[], n, avg, wearing, ended, state, fail}` | با صف آفلاین |
-| `roztash/<gw_id>/vitals` | `{mac, battery, dev_fw, dev_hw, dev_maker, spo2_ack, hrv_ack, spo2_raw[], hrv_raw[]}` | باتری هر پنجره؛ اکسیژن و HRV هر پنج پنجره |
-| `roztash/<gw_id>/event` | خطاها و نتایج — `wearing_error` ، `measure_fail` ، `vibrated` ، `vibrate_fail` ، `cmd_reject` | با صف آفلاین |
-| `roztash/<gw_id>/cmd` | **اشتراک** — فرمان ورودی `{"action":"vibrate","mac":"..."}` | بین پنجره‌های سلامت اجرا می‌شود |
+| موضوع | محتوا |
+|---|---|
+| `roztash/<gw_id>/status` | وضعیت گیتوی و IP اترنت؛ LWT خاموشی |
+| `roztash/<gw_id>/presence` | MAC و RSSI مچ‌بندهای در دید |
+| `roztash/<gw_id>/health` | نمونه‌های ضربان، میانگین و وضعیت اندازه‌گیری |
+| `roztash/<gw_id>/vitals` | باتری، مشخصات دستگاه و دادهٔ خام SpO2/HRV |
+| `roztash/<gw_id>/event` | خطاها و نتیجهٔ فرمان |
+| `roztash/<gw_id>/cmd` | فرمان ورودی مانند `{"action":"vibrate","mac":"..."}` |
 
-## وضعیت و قدم بعدی
+## سابقهٔ برد قبلی
+
+موارد زیر مربوط به فریمورهای قدیمی روی ESP32 هستند. بستهٔ فعلی ESP32-S3 کامپایل شده، اما فلش و آزمون شبکهٔ واقعی آن هنوز انجام نشده است. گزارش بررسی نرم‌افزاری: `docs/ethernet-verification.md`.
 
 - ✅ لایهٔ پروتکل: تست طلایی پاس — آمادهٔ استفاده
 - ✅ اسکلت NimBLE + MQTT + صف آفلاین: نوشته شده

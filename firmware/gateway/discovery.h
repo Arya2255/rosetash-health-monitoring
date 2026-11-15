@@ -1,14 +1,13 @@
 // gateway/discovery.h — UDP-based service discovery for auto-connect
-// Works on any network: factory LAN, home WiFi, bridged networks.
+// Works on the dedicated Ethernet LAN (ESP32-S3 + W5500).
 //
-// On startup, the gateway broadcasts "WHERE_ARE_YOU" and waits for
-// "HERE_I_AM" response containing the server's MQTT address.
+// After DHCP, the gateway broadcasts "WHERE_ARE_YOU" on its Ethernet subnet
+// and waits for "HERE_I_AM" with the HSE MQTT broker address.
 
 #pragma once
 
-#include <WiFi.h>
-#include <WiFiUdp.h>
 #include <Arduino.h>
+#include <NetworkUdp.h>
 #include <vector>
 
 // Must match the Python server constants
@@ -16,8 +15,9 @@ static const uint16_t kDiscoveryPort = 19198;
 static const char kDiscoveryMagic[] = "ROZTASH_DISCOVERY";
 static const char kDiscoveryQuery[] = "WHERE_ARE_YOU";
 static const char kDiscoveryAnswer[] = "HERE_I_AM";
-static const uint16_t kDiscoveryTimeoutMs = 10000;  // 10 seconds
-static const uint8_t kDiscoveryRetries = 3;
+// DHCP and MQTT auto-discovery are both expected to answer on the local LAN.
+static const uint16_t kDiscoveryTimeoutMs = 1500;
+static const uint8_t kDiscoveryRetries = 2;
 
 class DiscoveryClient {
  public:
@@ -27,7 +27,7 @@ class DiscoveryClient {
                 char* out_host, size_t host_cap, uint16_t* out_port);
   
  private:
-  WiFiUDP udp_;
+  NetworkUDP udp_;
   bool sendQuery();
   bool waitForAnswer(char* out_host, size_t host_cap, uint16_t* out_port);
   void loadBroadcastAddrs(std::vector<IPAddress>& addrs);

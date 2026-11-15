@@ -1,10 +1,57 @@
 #include "mqtt_link.h"
 
 #include <ArduinoJson.h>
+#include <ETH.h>
 #include <LittleFS.h>
+#include <SPI.h>
+
+#include "network_config.h"
 
 static const char* kQueuePath = "/queue.jsonl";
 static const size_t kQueueMaxBytes = 32 * 1024;  // drop oldest wholesale when full
+static bool ethernet_started = false;
+
+static void onNetworkEvent(arduino_event_id_t event) {
+  switch (event) {
+    case ARDUINO_EVENT_ETH_START:
+      ETH.setHostname("roztash-gateway");
+      Serial.println("[eth] W5500 started; waiting for link and DHCP");
+      break;
+    case ARDUINO_EVENT_ETH_CONNECTED:
+      Serial.println("[eth] cable link up; DHCP address pending");
+      break;
+    case ARDUINO_EVENT_ETH_GOT_IP:
+      Serial.printf("[eth] DHCP IP: %s  mask: %s  gateway: %s\n",
+                    ETH.localIP().toString().c_str(),
+                    ETH.subnetMask().toString().c_str(),
+                    ETH.gatewayIP().toString().c_str());
+      break;
+    case ARDUINO_EVENT_ETH_LOST_IP:
+      Serial.println("[eth] DHCP address lost");
+      break;
+    case ARDUINO_EVENT_ETH_DISCONNECTED:
+      Serial.println("[eth] cable disconnected");
+      break;
+    case ARDUINO_EVENT_ETH_STOP:
+      Serial.println("[eth] stopped");
+      break;
+    default:
+      break;
+  }
+}
+
+static bool startEthernet() {
+  if (ethernet_started) return true;
+  Network.onEvent(onNetworkEvent);
+  SPI.begin(roztash::kW5500Sck, roztash::kW5500Miso,
+            roztash::kW5500Mosi, roztash::kW5500Cs);
+  ETH.setPollPeriod(25);  // W5500 INT is not connected.
+  ethernet_started = ETH.begin(ETH_PHY_W5500, 1, roztash::kW5500Cs,
+                               roztash::kW5500Irq, roztash::kW5500Rst,
+                               SPI, roztash::kW5500SpiMhz);
+  Serial.printf("[eth] ETH.begin: %s\n", ethernet_started ? "OK" : "FAILED");
+  return ethernet_started;
+}
 
 static const char* failName(BleCentral::Fail f) {
   switch (f) {
@@ -21,9 +68,7 @@ void MqttLink::begin(const GatewayConfig& cfg) {
   cfg_ = cfg;
   snprintf(base_, sizeof base_, "roztash/%s", cfg_.gw_id);
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  if (strlen(cfg_.wifi_ssid)) WiFi.begin(cfg_.wifi_ssid, cfg_.wifi_pass);
+  startEthernet();
 
   mqtt_.setServer(cfg_.mqtt_host, cfg_.mqtt_port);
   mqtt_.setBufferSize(2048);  // presence batches can exceed the default 256
@@ -42,15 +87,23 @@ void MqttLink::begin(const GatewayConfig& cfg) {
   });
 }
 
+void MqttLink::setBroker(const char* host, uint16_t port) {
+  if (!host || !host[0]) return;
+  if (mqtt_.connected()) mqtt_.disconnect();
+  strlcpy(cfg_.mqtt_host, host, sizeof cfg_.mqtt_host);
+  cfg_.mqtt_port = port;
+  mqtt_.setServer(cfg_.mqtt_host, cfg_.mqtt_port);
+}
+
+bool MqttLink::networkReady() const {
+  return ethernet_started && ETH.linkUp() && ETH.hasIP();
+}
+
 // --- connection maintenance -------------------------------------------------
 void MqttLink::poll() {
   const uint32_t now = millis();
-
-  if (WiFi.status() != WL_CONNECTED) {
-    if (now - last_wifi_attempt_ms_ > 10000) {
-      last_wifi_attempt_ms_ = now;
-      WiFi.reconnect();
-    }
+  if (!networkReady()) {
+    if (mqtt_.connected()) mqtt_.disconnect();
     return;
   }
 
@@ -95,7 +148,7 @@ bool MqttLink::send(const char* topic, const char* payload, bool retained,
   return false;
 }
 
-void MqttLink::publishStatus(const char* fw, int wifi_rssi, const char* ip,
+void MqttLink::publishStatus(const char* fw, const char* ip,
                              int bands_seen, uint32_t adv_seen) {
   JsonDocument doc;
   doc["gw"] = cfg_.gw_id;
@@ -103,7 +156,7 @@ void MqttLink::publishStatus(const char* fw, int wifi_rssi, const char* ip,
   doc["fw"] = fw;
   doc["online"] = true;
   doc["ip"] = ip;
-  doc["rssi"] = wifi_rssi;
+  doc["transport"] = "ethernet";
   doc["uptime_s"] = (uint32_t)(millis() / 1000UL);
   doc["bands_seen"] = bands_seen;
   doc["adv_seen"] = adv_seen;  // total adv packets since boot (radio liveness)

@@ -9,6 +9,16 @@ static void copyStr(char* dst, size_t dst_len, const char* src) {
 }
 
 void configLoad(GatewayConfig& cfg) {
+  // Defaults for the dedicated HSE Ethernet network.
+  strlcpy(cfg.gw_id, "gw-1", sizeof(cfg.gw_id));
+  strlcpy(cfg.zone, "zone-1", sizeof(cfg.zone));
+  strlcpy(cfg.mqtt_host, "192.168.50.1", sizeof(cfg.mqtt_host));
+  cfg.mqtt_port = 1884;
+  cfg.health_interval_s = 600;
+  cfg.scan_interval_ms = 160;
+  cfg.scan_window_ms = 80;
+  cfg.measure_timeout_s = 45;
+
   if (!LittleFS.begin(true)) {
     Serial.println("[cfg] LittleFS mount failed — using defaults");
     return;
@@ -28,20 +38,14 @@ void configLoad(GatewayConfig& cfg) {
   }
   copyStr(cfg.gw_id, sizeof cfg.gw_id, doc["gw_id"] | "gw-1");
   copyStr(cfg.zone, sizeof cfg.zone, doc["zone"] | "zone-1");
-  copyStr(cfg.wifi_ssid, sizeof cfg.wifi_ssid, doc["wifi_ssid"] | "");
-  copyStr(cfg.wifi_pass, sizeof cfg.wifi_pass, doc["wifi_pass"] | "");
-  copyStr(cfg.mqtt_host, sizeof cfg.mqtt_host, doc["mqtt_host"] | "192.168.1.10");
-  cfg.mqtt_port = doc["mqtt_port"] | 1883;
-  
-  // DEBUG: Force port to 1884
-  cfg.mqtt_port = 1884;
-  
+  copyStr(cfg.mqtt_host, sizeof cfg.mqtt_host,
+          doc["mqtt_host"] | "192.168.50.1");
+  cfg.mqtt_port = doc["mqtt_port"] | 1884;
+
   cfg.health_interval_s = doc["health_interval_s"] | 600;
   cfg.scan_interval_ms = doc["scan_interval_ms"] | 160;
   cfg.scan_window_ms = doc["scan_window_ms"] | 80;
   cfg.measure_timeout_s = doc["measure_timeout_s"] | 45;
-  Serial.printf("[cfg] loaded: gw=%s zone=%s broker=%s:%u wifi_ssid=%s\n",
-                cfg.gw_id,
-                cfg.zone, cfg.mqtt_host, (unsigned)cfg.mqtt_port,
-                cfg.wifi_ssid);
+  Serial.printf("[cfg] loaded: gw=%s zone=%s broker=%s:%u\n",
+                cfg.gw_id, cfg.zone, cfg.mqtt_host, (unsigned)cfg.mqtt_port);
 }

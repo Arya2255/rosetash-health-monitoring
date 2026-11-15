@@ -87,16 +87,17 @@ def main():
     assert not pv.validate_gw_id("گیت‌وی")[0]
     assert "خط تیره" in pv.validate_gw_id("GW FILTER")[1]
 
-    # ── ۳) ساخت config — کوتاه‌سازی و پیش‌فرض‌ها ──
-    cfg = pv.build_config("Gw-Test-1", "س" * 60, "s" * 50, "p" * 100,
-                          "10.0.0.1", "1884", 60)
-    assert cfg["gw_id"] == "gw-test-1", cfg
-    assert len(cfg["zone"]) == 39 and len(cfg["wifi_ssid"]) == 39, cfg
-    assert len(cfg["wifi_pass"]) == 79, cfg
-    assert cfg["mqtt_port"] == 1884 and cfg["health_interval_s"] == 60, cfg
-    assert cfg["scan_interval_ms"] == 160 and cfg["measure_timeout_s"] == 45
+    # ── ۳) Ethernet gateway config — no Wi-Fi fields or credentials ──
+    cfg = pv.build_config("Gw-Test-1", "فیلتر", "192.168.50.1", "1884", 60)
+    assert cfg == {
+        "gw_id": "gw-test-1", "zone": "فیلتر", "mqtt_host": "192.168.50.1",
+        "mqtt_port": 1884, "health_interval_s": 60,
+        "scan_interval_ms": 160, "scan_window_ms": 80,
+        "measure_timeout_s": 45,
+    }, cfg
+    assert "wifi_ssid" not in cfg and "wifi_pass" not in cfg
     text = pv.config_json_text(cfg)
-    assert "س" in text, "متن تنظیمات باید UTF-8 و خوانا باشد"
+    assert "فیلتر" in text, "متن تنظیمات باید UTF-8 و خوانا باشد"
 
     # ── ۴) ساخت واقعی تصویر LittleFS ──
     real = pv.find_tools(bundle=BUNDLE)
@@ -111,19 +112,32 @@ def main():
     else:
         print("(mklittlefs همراه بسته نبود — بخش ساخت LittleFS رد شد)")
 
+    with tempfile.TemporaryDirectory(prefix="empty-bundle-") as old_bundle:
+        os.makedirs(os.path.join(old_bundle, "firmware"))
+        with open(os.path.join(old_bundle, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump({"flash": {"chip": "esp32", "size": "4MB", "files": []}}, fh)
+        ok, old = pv.load_manifest(old_bundle)
+        assert not ok and "ESP32-S3" in old["error"], old
+
     ok, err = pv.build_littlefs(cfg, os.path.join(tmp, "x.bin"),
                                 "/no/such/mklittlefs")
     assert not ok and "mklittlefs" in err
 
     # ── ۵) فرمان فلش ──
-    cmd = pv.flash_command("/t/esptool", "/dev/ttyUSB0",
-                           [("0x1000", "boot.bin"), ("0x3D0000", "fs.bin")])
-    assert cmd[:7] == ["/t/esptool", "--chip", "esp32", "--port", "/dev/ttyUSB0",
+    cmd = pv.flash_command("/t/esptool", "/dev/ttyACM0",
+                           [("0x0", "boot.bin"), ("0x3D0000", "fs.bin")])
+    assert cmd[:7] == ["/t/esptool", "--chip", "esp32s3", "--port", "/dev/ttyACM0",
                        "--baud", "460800"], cmd
     assert cmd[7:14] == ["write-flash", "--flash-mode", "dio",
-                         "--flash-freq", "80m", "--flash-size", "4MB"], cmd
-    assert cmd[14:] == ["0x1000", "boot.bin", "0x3D0000", "fs.bin"], cmd
-    assert pv.flash_command("e", "COM3", [], baud=115200)[6] == "115200"
+                         "--flash-freq", "80m", "--flash-size", "16MB"], cmd
+    assert cmd[14:] == ["0x0", "boot.bin", "0x3D0000", "fs.bin"], cmd
+
+    # ESP32-S3 bootloader is linked at 0x0; 0x1000 belongs to the old ESP32 layout.
+    assert pv.flash_command("e", "COM3", [("0x0", "boot.bin")])[14:] == [
+        "0x0", "boot.bin"]
+    assert pv.flash_command("e", "COM3", [], baud=115200,
+                            chip="esp32s3", flash_size="16MB")[:7] == [
+        "e", "--chip", "esp32s3", "--port", "COM3", "--baud", "115200"]
 
     # ── ۶) پیشرفت و موفقیت ──
     assert pv.progress_percent("Writing at 0x00010000... (14 %)") == 14
@@ -166,8 +180,16 @@ def main():
     ok, mani = pv.load_manifest(BUNDLE)
     assert ok, mani
     addrs = {f["addr"] for f in mani["flash"]["files"]}
-    assert addrs == {"0x1000", "0x8000", "0xe000", "0x10000", "0x3D0000"}, addrs
-    assert mani["fw_version"].startswith("0.2"), mani["fw_version"]
+    assert addrs == {"0x0", "0x8000", "0xe000", "0x10000", "0x3D0000"}, addrs
+    boot = next(f for f in mani["flash"]["files"]
+                if f["file"] == "firmware/bootloader.bin")
+    assert int(boot["addr"], 16) == 0, "ESP32-S3 bootloader must be at 0x0"
+    assert mani["fw_version"] == "0.4.0-ethernet", mani["fw_version"]
+    assert mani["fqbn"] == (
+        "esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,"
+        "PartitionScheme=min_spiffs,CDCOnBoot=cdc"), mani["fqbn"]
+    assert mani["flash"]["chip"] == "esp32s3", mani["flash"]
+    assert mani["flash"]["size"] == "16MB", mani["flash"]
     assert mani["flash"]["baud"] == 460800
 
     ok, bad = pv.load_manifest(os.path.join(tmp, "nope"))
@@ -181,14 +203,15 @@ def main():
     fake_esptool = touch(os.path.join(tmp, "fake-esptool"))
     with open(fake_esptool, "w") as fh:
         fh.write("#!/bin/sh\n"
-                 "echo 'Chip type:          ESP32-D0WD-V3 (revision v3.1)'\n"
+                 "echo 'Chip type:          ESP32-S3 (QFN56) (revision v0.2)'\n"
                  "echo 'MAC:                88:57:21:B8:AC:28'\n"
-                 "echo 'Detected flash size: 4MB'\n")
+                 "echo 'Detected flash size: 16MB'\n")
     os.chmod(fake_esptool, 0o755)
     ok, doc = pv.read_chip_info("/dev/fake", fake_esptool)
     assert ok and doc["mac"] == "88:57:21:b8:ac:28", doc
-    assert "ESP32-D0WD-V3" in doc["chip"], doc
-    assert doc["flash"] == "4MB", doc
+    assert doc["chip_id"] == "esp32s3" and doc["flash_bytes"] == 16 * 1024 * 1024, doc
+    assert "ESP32-S3" in doc["chip"], doc
+    assert doc["flash"] == "16MB", doc
 
     print("OK — همهٔ بررسی‌های موتور آماده‌سازی گیتوی پاس شد")
 

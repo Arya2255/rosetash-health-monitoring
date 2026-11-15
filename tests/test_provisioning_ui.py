@@ -96,9 +96,12 @@ def main():
     page = v_prov.provisioning_view(app)
     t = texts_of(page)
     for needle in ("آماده‌سازی گیتوی", "اسکن پورت‌های سریال",
-                   "شروع فلش کامل", "بدون تنظیمات", "پل بالا نیست",
-                   "RoztashGw", "dialout", "CP210x", "فریمور 0.2."):
+                   "شروع فلش کامل", "dialout",
+                   "CP210x", "فریمور 0.4.0", "192.168.50.1", "DHCP", "W5500"):
         assert norm(needle) in t, f"متن پیدا نشد: {needle}\n---\n{t[:1000]}"
+    for obsolete in ("SSID", "رمز وای‌فای", "RoztashGw",
+                     "بدون تنظیمات", "خودش AP باز می‌کند"):
+        assert norm(obsolete) not in t, f"گزینهٔ قدیمی هنوز نمایش داده می‌شود: {obsolete}"
     st = app.state["prov"]
     assert st["inited"] and st["ports"] is None
 
@@ -141,7 +144,7 @@ def main():
     finally:
         v_prov.pv.list_serial_ports = orig_ports
 
-    # ── ۴) گارد شروع فلش بدون پورت ──
+    # ── ۴) گاردها: بدون پورت و بدون تأیید هویت فلش شروع نمی‌شود ──
     st["sel_port"] = None
     st["flashing"] = False
     app.snacks.clear()
@@ -149,17 +152,26 @@ def main():
     assert app.snacks and "پورت" in app.snacks[-1], app.snacks
     assert st["flashing"] is False
 
+    st.update({"sel_port": "/dev/ttyUSB0", "ident": None})
+    app.snacks.clear()
+    v_prov._start_flash(app, st)
+    assert app.snacks and "ESP32-S3" in app.snacks[-1], app.snacks
+    assert st["flashing"] is False
+
     # ── ۵) مسیر شکست فلش ──
     orig_flash = v_prov.pv.flash_gateway
-    v_prov.pv.flash_gateway = lambda port, cfg=None, progress=None: (
+    v_prov.pv.flash_gateway = lambda port, cfg=None, expected_chip="esp32s3", expected_flash_bytes=16777216, expected_mac="", progress=None: (
         False, {"log": ["A fatal error occurred: Failed to connect to ESP32",
                         "Connecting........"],
                 "verified": False, "error": "برد جواب نداد — دکمهٔ BOOT را نگه دار",
                 "returncode": 2})
     try:
-        st.update({"sel_port": "/dev/ttyUSB0", "cfg_mode": "config",
-                   "gw_id": "gw-test-1", "ssid": "net", "host": "10.0.0.1",
-                   "pass": "", "port": "1884", "zone": "تست", "label": ""})
+        st.update({"sel_port": "/dev/ttyUSB0", "ident": {
+                       "mac": "88:57:21:b8:ac:28",
+                       "chip_id": v_prov.pv.TARGET_CHIP,
+                       "flash_bytes": 16 * 1024 * 1024},
+                   "gw_id": "gw-test-1", "host": "192.168.50.1",
+                   "port": "1884", "zone": "تست", "label": ""})
         v_prov._start_flash(app, st)
         wait_flash_done(st)
         t = texts_of(v_prov.provisioning_view(app))
@@ -179,14 +191,26 @@ def main():
         saved.update(doc)
         return True, ""
 
-    v_prov.pv.flash_gateway = lambda port, cfg=None, progress=None: (
-        True, {"log": ["Hash of data verified."], "verified": True,
-               "error": "", "returncode": 0})
+    captured_config = {}
+
+    def fake_flash_config(port, cfg=None, expected_chip="esp32s3",
+                          expected_flash_bytes=16 * 1024 * 1024,
+                          expected_mac="", progress=None):
+        captured_config["cfg"] = cfg
+        captured_config["hardware"] = (expected_chip, expected_flash_bytes,
+                                       expected_mac)
+        return True, {"log": ["Hash of data verified."], "verified": True,
+                      "error": "", "returncode": 0}
+
+    v_prov.pv.flash_gateway = fake_flash_config
     v_prov.save_gateway = fake_save
     try:
-        st.update({"cfg_mode": "config", "done": None, "reg": None,
+        st.update({"done": None, "reg": None,
                    "gw_id": "gw-test-1", "label": "", "zone": "سالن تست",
-                   "ident": {"mac": "88:57:21:b8:ac:28"}})
+                   "host": "192.168.50.1", "port": "1884",
+                   "ident": {"mac": "88:57:21:b8:ac:28",
+                             "chip_id": v_prov.pv.TARGET_CHIP,
+                             "flash_bytes": 16 * 1024 * 1024}})
         v_prov._start_flash(app, st)
         wait_flash_done(st)
         t = texts_of(v_prov.provisioning_view(app))
@@ -196,30 +220,17 @@ def main():
         assert saved.get("kind") == "installed", saved
         assert saved.get("mac") == "88:57:21:b8:ac:28", saved
         assert st["done"]["verified"] is True
+        assert captured_config["hardware"] == (
+            "esp32s3", 16 * 1024 * 1024, "88:57:21:b8:ac:28")
+        assert captured_config["cfg"] == {
+            "gw_id": "gw-test-1", "zone": "سالن تست",
+            "mqtt_host": "192.168.50.1", "mqtt_port": 1884,
+            "health_interval_s": 600, "scan_interval_ms": 160,
+            "scan_window_ms": 80, "measure_timeout_s": 45,
+        }
     finally:
         v_prov.pv.flash_gateway = orig_flash
         v_prov.save_gateway = orig_save
-
-    # ── ۷) مسیر «بدون تنظیمات» ──
-    captured = {}
-    orig_flash = v_prov.pv.flash_gateway
-
-    def fake_flash_blank(port, cfg=None, progress=None):
-        captured["cfg"] = cfg
-        return True, {"log": ["Hash of data verified."], "verified": True,
-                      "error": "", "returncode": 0}
-
-    v_prov.pv.flash_gateway = fake_flash_blank
-    try:
-        st.update({"cfg_mode": "blank", "done": None, "reg": None})
-        v_prov._start_flash(app, st)
-        wait_flash_done(st)
-        assert captured.get("cfg") is None, captured
-        t = texts_of(v_prov.provisioning_view(app))
-        assert norm("بدون تنظیمات فلش شد") in t, t[:1200]
-        assert st["reg"] and st["reg"][0] is False
-    finally:
-        v_prov.pv.flash_gateway = orig_flash
 
     # ── ۸) نمایش پیشرفت زنده (وضعیت مستقیم) ──
     st.update({"flashing": True, "percent": 42,

@@ -14,7 +14,7 @@ Steps:
   1. compile the gateway sketch (arduino-cli, min_spiffs partition scheme)
   2. copy the fresh binaries (the compile-output-dir pitfall stays avoided:
      everything is copied from the output dir of THIS compile)
-  3. build the blank LittleFS image (board then boots into its setup AP)
+  3. build a blank LittleFS template (replaced by per-gateway config at flash time)
   4. fetch platform tools when missing (--fetch-tools) or hash existing ones
   5. write manifest.json
 
@@ -43,10 +43,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKETCH = ROOT / "firmware" / "gateway"
 DIST = ROOT / "distribution" / "gateway-provisioner"
-FQBN = "esp32:esp32:esp32:PartitionScheme=min_spiffs"
+FQBN = ("esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,"
+        "PartitionScheme=min_spiffs,CDCOnBoot=cdc")
 
-# verified flash procedure (docs/gateway-setup.md): 4 files + littlefs, 460800
-FLASH = {"baud": 460800, "mode": "dio", "freq": "80m", "size": "4MB"}
+# ESP32-S3 N16R8 gateway on the user's confirmed board.
+FLASH = {"chip": "esp32s3", "baud": 460800, "mode": "dio",
+         "freq": "80m", "size": "16MB"}
 LFS = {"offset": "0x3D0000", "size": 0x20000, "page": 256, "block": 4096}
 
 # pinned tool releases (versions the project has tested)
@@ -145,7 +147,7 @@ def copy_firmware(build_dir: Path, out: Path) -> list[dict]:
     """Copy the four flash images + build the blank LittleFS image."""
     out.mkdir(parents=True, exist_ok=True)
     pairs = [
-        (build_dir / "gateway.ino.bootloader.bin", "bootloader.bin", "0x1000"),
+        (build_dir / "gateway.ino.bootloader.bin", "bootloader.bin", "0x0"),
         (build_dir / "gateway.ino.partitions.bin", "partitions.bin", "0x8000"),
         (build_dir / "gateway.ino.bin", "app.bin", "0x10000"),
     ]
@@ -169,8 +171,8 @@ def copy_firmware(build_dir: Path, out: Path) -> list[dict]:
     files.append({"addr": "0xe000", "name": "firmware/boot_app0.bin",
                   "path": bootapp})
 
-    # blank LittleFS: empty filesystem -> board finds no /config.json at boot
-    # and starts its setup AP (firmware/gateway/setup_portal.cpp)
+    # Geometry template only: the app requires a gateway identity and writes
+    # its config.json into a fresh LittleFS image before flashing.
     blank_dir = Path(tempfile.mkdtemp(prefix="lfs-blank-"))
     blank = out / "littlefs-blank.bin"
     cmd = [mklittlefs(), "-c", str(blank_dir), "-s", hex(LFS["size"]),
@@ -281,8 +283,8 @@ def main() -> None:
         "littlefs": dict(LFS),
         "tools": tools,
         "notes": [
-            "littlefs-blank.bin has no /config.json: the board boots into its "
-            "setup AP (RoztashGw-XXXXXX) for phone configuration.",
+            "littlefs-blank.bin is a geometry template only; provisioning "
+            "requires a per-gateway config.json (no Wi-Fi setup portal).",
             "The app generates a per-gateway LittleFS image at flash time "
             "(mklittlefs, same geometry as littlefs-blank.bin).",
         ],

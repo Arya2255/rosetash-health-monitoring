@@ -30,10 +30,10 @@ def make_doc():
         "ok": True, "fetched_at": iso(now), "now": now,
         "gateways": [
             {"gw": "gw-test-1", "zone": "test", "fw": "0.1.5", "ip": "192.168.43.100",
-             "rssi": -55, "uptime_s": 7200, "adv_seen": 1200, "online": True,
+             "transport": "ethernet", "uptime_s": 7200, "adv_seen": 1200, "online": True,
              "last_seen": iso(now), "age_s": 2.0},
             {"gw": "gw-zone-2", "zone": "سالن تولید ۲", "fw": "0.1.5", "ip": "192.168.43.101",
-             "rssi": -67, "uptime_s": 3600, "adv_seen": 800, "online": True,
+             "transport": "ethernet", "uptime_s": 3600, "adv_seen": 800, "online": True,
              "last_seen": iso(now - 5), "age_s": 5.0},
         ],
         "bands": [
@@ -117,7 +117,11 @@ check("شمارندهٔ دستگاه‌ها", norm("۲ گیت‌وی — ۲ مچ
 check("کارت گیت‌وی شمارشی", "۲ از ۲" in vals)
 check("زیرنویس چند-مچ‌بندی", norm("۲ مچ‌بند در دید") in norm(vals))
 check("منطقهٔ گیت‌وی دوم", "سالن تولید ۲" in vals)
-check("وای‌فای گیت‌وی دوم", "۶۷" in vals)
+check("اترنت و IP گیت‌وی اول", "ethernet 192.168.43.100" in vals)
+check("اترنت و IP گیت‌وی دوم", "ethernet 192.168.43.101" in vals)
+check("گیت‌وی‌های اترنت: بدون وای‌فای", norm("وای‌فای") not in norm(vals))
+check("سیگنال BLE مچ‌بند اول", "آنتن -۶۱" in vals)
+check("سیگنال BLE مچ‌بند دوم", "آنتن -۷۸" in vals)
 
 # ── ۲) حالت تک-دستگاهی قبلی حفظ شود ──
 single = make_doc()
@@ -125,8 +129,16 @@ single["gateways"] = single["gateways"][:1]
 single["bands"] = single["bands"][:1]
 v_live.live_status = lambda force=False: single
 view2 = v_live.live_view(FakeApp())
-vals2 = " || ".join(texts(view2))
+single_texts = texts(view2)
+vals2 = " || ".join(single_texts)
 check("تک-گیت‌وی: نسخهٔ fw نمایش", "0.1.5" in vals2)
+check("تک-گیت‌وی: اترنت و IP در کارت شاخص",
+      any("بستهٔ دریافتی" in t and "ethernet 192.168.43.100" in t
+          for t in single_texts))
+check("تک-گیت‌وی: اترنت و IP در فهرست",
+      any("fw 0.1.5" in t and "ethernet 192.168.43.100" in t
+          for t in single_texts))
+check("تک-گیت‌وی اترنت: بدون وای‌فای", norm("وای‌فای") not in norm(vals2))
 check("تک-مچ‌بند: زیرنویس ساده",
       norm("دیده می‌شود") in norm(vals2) and norm("۲ مچ‌بند در دید") not in norm(vals2))
 check("تک-گیت‌وی: چیپ شمارشی نیست", "۲ از ۲" not in vals2)

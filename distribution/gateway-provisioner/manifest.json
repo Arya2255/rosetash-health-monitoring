@@ -1,20 +1,21 @@
 {
   "schema": "roztash-gateway-bundle/v1",
-  "built_at": "2026-10-11T16:49:52+03:30",
-  "fw_version": "0.2.1-setup",
-  "fqbn": "esp32:esp32:esp32:PartitionScheme=min_spiffs",
+  "built_at": "2026-11-15T20:13:26+03:30",
+  "fw_version": "0.4.0-ethernet",
+  "fqbn": "esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=min_spiffs,CDCOnBoot=cdc",
   "core": "esp32:esp32 3.3.12",
   "flash": {
+    "chip": "esp32s3",
     "baud": 460800,
     "mode": "dio",
     "freq": "80m",
-    "size": "4MB",
+    "size": "16MB",
     "files": [
       {
-        "addr": "0x1000",
+        "addr": "0x0",
         "file": "firmware/bootloader.bin",
-        "sha256": "47bbbfca119fe87190f63a67af9d85adff6433bcf3812ec92a9b9c9416a53ad1",
-        "size": 24992
+        "sha256": "84bb365666003b051f564d04380d0cf5d9d85c420ddafe9fc863071b49e49bfc",
+        "size": 19968
       },
       {
         "addr": "0x8000",
@@ -25,8 +26,8 @@
       {
         "addr": "0x10000",
         "file": "firmware/app.bin",
-        "sha256": "587626bf177a68fb23233f106108727950a130f699bdccb8f2fe5dcafe434b12",
-        "size": 1284336
+        "sha256": "55892cc5dc1d046e97477ba86257da65c9e4820b474449b82350703c94446a87",
+        "size": 894432
       },
       {
         "addr": "0xe000",
@@ -37,7 +38,7 @@
       {
         "addr": "0x3D0000",
         "file": "firmware/littlefs-blank.bin",
-        "sha256": "1622e43d9ca154849f27df896ba16d0abdeff95e8888e60dd909a268c967a302",
+        "sha256": "f961bb2767d719c733ee1a81087645a71f32b84873a4e80a7a0adab6bf614a8c",
         "size": 131072
       }
     ]
@@ -79,7 +80,7 @@
     }
   },
   "notes": [
-    "littlefs-blank.bin has no /config.json: the board boots into its setup AP (RoztashGw-XXXXXX) for phone configuration.",
+    "littlefs-blank.bin is a geometry template only; provisioning requires a per-gateway config.json (no Wi-Fi setup portal).",
     "The app generates a per-gateway LittleFS image at flash time (mklittlefs, same geometry as littlefs-blank.bin)."
   ]
 }

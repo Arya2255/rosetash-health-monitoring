@@ -1,18 +1,9 @@
 # -*- coding: utf-8 -*-
-"""بخش «آماده‌سازی گیتوی» — برنامه‌نویسی کامل برد از داخل خود برنامه.
+"""آماده‌سازی گیتوی از داخل برنامه.
 
-موتور این صفحه ``src/provisioner.py`` است: بستهٔ همراه
-``distribution/gateway-provisioner/`` شامل فریمور آماده و ابزارهای
-esptool/mklittlefs برای ویندوز و لینوکس. اینجا فقط رابط کاربری سه‌گامی است:
-
-  ۱) برد — اسکن پورت سریال، خواندن مشخصات (چیپ/فلش/MAC) و هشدار برد اشتباه
-  ۲) مشخصات — شناسه/نام/منطقه (پیشنهاد از دفتر پل) + وای‌فای و بروکر
-     (پیش‌فرض از /api/netinfo همان سیستمی که برنامه رویش اجراست)
-  ۳) فلش — با تنظیمات همین حالا (پیشنهادی) یا بدون تنظیمات برای ست‌کردن
-     از گوشی در محل نصب (AP راه‌اندازی خود برد)
-
-بعد از فلش موفق، گیت‌وی خودکار در دفتر پل ثبت می‌شود. فلش در نخ جداگانه
-اجرا می‌شود تا پنجره قفل نشود؛ یک تیکر هر ثانیه صفحه را تازه می‌کند.
+بستهٔ همراه شامل فریمور و esptool/mklittlefs است؛ فرم تنظیمات فقط هویت، منطقه
+و نشانی بروکر را می‌گیرد. گیتوی ESP32-S3/W5500 IP را از DHCP دریافت می‌کند؛
+SSID و رمز Wi-Fi در این معماری لازم نیست.
 """
 
 import threading
@@ -22,7 +13,7 @@ import flet as ft
 
 from theme import (BORDER, FONT, FONT_B, FONT_MED, INK, OFFLINE, OK, R_BTN,
                    R_CARD, TEXT_MAIN, TEXT_MUTED, WARN, WHITE, fa_num, txt)
-from data import live_gateways, netinfo, save_gateway
+from data import live_gateways, save_gateway
 import provisioner as pv
 
 from components.common import SHADOW, card, section_header
@@ -49,20 +40,19 @@ def _prov_state(app) -> dict:
         st["inited"] = True
         st.update({
             "ports": None, "sel_port": None, "ident": None, "ident_err": "",
-            "gw_id": "", "label": "", "zone": "", "ssid": "", "pass": "",
-            "host": "", "port": "", "cfg_mode": "config",
+            "gw_id": "", "label": "", "zone": "",
+            "host": "192.168.50.1", "port": "1884",
             "flashing": False, "percent": None, "log": [], "done": None,
             "reg": None, "_tick": False,
         })
-        info = netinfo(include_pass=True) or {}
-        st["net"] = info
         st["gw_rows"] = live_gateways() or []
-        if info:
-            st["ssid"] = info.get("ssid") or ""
-            st["pass"] = info.get("pass") or ""
-            st["host"] = info.get("mqtt_host") or ""
-            st["port"] = str(info.get("mqtt_port") or "")
     return st
+
+
+def _identity_compatible(ident) -> bool:
+    return bool(ident and ident.get("mac")
+                and ident.get("chip_id") == pv.TARGET_CHIP
+                and ident.get("flash_bytes") == 16 * 1024 * 1024)
 
 
 def _identity_warnings(ident, rows, gw_id) -> list[str]:
@@ -131,22 +121,20 @@ def _start_flash(app, st):
     if not port:
         app.snack("اول پورت سریال را انتخاب کن")
         return
-    cfg = None
-    if st.get("cfg_mode") != "blank":
-        gw_ok, gw_msg = pv.validate_gw_id(st.get("gw_id") or "")
-        if not gw_ok:
-            app.snack(gw_msg)
-            return
-        if not (st.get("ssid") or "").strip():
-            app.snack("نام وای‌فای خالی است — بخش «وای‌فای و بروکر» را پر کن")
-            return
-        if not (st.get("host") or "").strip():
-            app.snack("آدرس بروکر خالی است — بخش «وای‌فای و بروکر» را پر کن")
-            return
-        cfg = pv.build_config(
-            st.get("gw_id") or "", st.get("zone") or "", st.get("ssid") or "",
-            st.get("pass") or "", st.get("host") or "",
-            st.get("port") or 1883, 600)
+    ident = st.get("ident") or {}
+    if not _identity_compatible(ident):
+        app.snack("ابتدا ESP32-S3 شانزده‌مگابایتی را شناسایی و تأیید کن")
+        return
+    gw_ok, gw_msg = pv.validate_gw_id(st.get("gw_id") or "")
+    if not gw_ok:
+        app.snack(gw_msg)
+        return
+    if not (st.get("host") or "").strip():
+        app.snack("آدرس بروکر خالی است")
+        return
+    cfg = pv.build_config(
+        st.get("gw_id") or "", st.get("zone") or "",
+        st.get("host") or "", st.get("port") or 1884, 600)
     st["flashing"] = True
     st["percent"] = None
     st["log"] = []
@@ -163,7 +151,11 @@ def _start_flash(app, st):
             del st["log"][0]
 
     def worker():
-        ok, info = pv.flash_gateway(port, cfg=cfg, progress=note)
+        ident = st.get("ident") or {}
+        ok, info = pv.flash_gateway(
+            port, cfg=cfg, expected_chip=ident["chip_id"],
+            expected_flash_bytes=ident["flash_bytes"],
+            expected_mac=ident["mac"], progress=note)
         st["log"] = info.get("log") or st["log"]
         st["done"] = {"ok": ok, "error": info.get("error") or "",
                       "verified": info.get("verified")}
@@ -194,10 +186,9 @@ def _bundle_card(st) -> ft.Control:
     if not bundle.get("present"):
         return ft.Container(
             content=ft.Row([
-                ft.Icon(ft.Icons.INVENTORY_2, size=18, color=WARN),
-                txt("بستهٔ همراه برنامه ساخته نشده — برای ساخت: "
-                    "tools/build_provisioner_bundle.py", size=12.5,
-                    font=FONT_MED, color=WARN, expand=True),
+                ft.Icon(ft.Icons.WARNING_AMBER, size=18, color=WARN),
+                txt(bundle.get("error") or "بستهٔ فلش گیتوی آماده نیست — آن را بازسازی کن",
+                    size=12, font=FONT_MED, color=WARN, expand=True),
             ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor=_BG_WARN, border_radius=R_CARD,
             padding=ft.Padding.symmetric(horizontal=14, vertical=10))
@@ -225,30 +216,18 @@ def _bundle_card(st) -> ft.Control:
     ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER), pad=12)
 
 
-def _net_card(app, st) -> ft.Control:
-    info = st.get("net") or {}
-
-    def refresh(e):
-        st["net"] = netinfo(include_pass=True) or {}
-        st["gw_rows"] = live_gateways() or []
-        app.render()
-
-    if info:
-        sub = (f"وای‌فای: {info.get('ssid') or '—'} — بروکر: "
-               f"{info.get('mqtt_host') or '—'}:{info.get('mqtt_port') or '—'}")
-        icon, fg, bg = ft.Icons.WIFI_TETHERING, OK, _BG_OK
-    else:
-        sub = ("پل بالا نیست — مقادیر وای‌فای/بروکر را دستی وارد کن "
-               "(پل: python3 backend/bridge.py)")
-        icon, fg, bg = ft.Icons.WIFI_TETHERING, WARN, _BG_WARN
+def _net_card(st) -> ft.Control:
+    """یادآوری شبکهٔ اترنت اختصاصی و مقادیر پیش‌فرض گیتوی."""
+    host = st.get("host") or "192.168.50.1"
+    port = st.get("port") or "1884"
     return ft.Container(
         content=ft.Row([
-            ft.Icon(icon, size=18, color=fg),
-            txt(sub, size=12, font=FONT, color=fg, expand=True),
-            ft.IconButton(ft.Icons.REFRESH, tooltip="تازه‌سازی از پل",
-                          icon_size=18, on_click=refresh),
+            ft.Icon(ft.Icons.LAN, size=18, color=OK),
+            txt(("شبکهٔ گیتوی: W5500 + DHCP — بدون وای‌فای و بدون شبکهٔ شرکت. "
+                 f"کشف خودکار بروکر؛ نشانی جایگزین {host}:{port}"),
+                size=12, font=FONT, color=OK, expand=True),
         ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        bgcolor=bg, border_radius=R_CARD,
+        bgcolor=_BG_OK, border_radius=R_CARD,
         padding=ft.Padding.symmetric(horizontal=14, vertical=8))
 
 
@@ -257,10 +236,9 @@ def _step1_card(app, st) -> ft.Control:
     blocks = [
         txt("۱) برد را با کابل دیتادار به همین سیستم وصل کن", size=14,
             font=FONT_B, color=INK),
-        txt("پیش از هر چیز «اسکن پورت‌ها»؛ بعد پورت برد را انتخاب و "
-            "«خواندن مشخصات برد» را بزن. هر خواندن، یک‌بار برد را کوتاه "
-            "ری‌استارت می‌کند — طبیعی است.", size=11.5, font=FONT,
-            color=TEXT_MUTED),
+        txt("اسکن پورت‌ها، انتخاب برد و سپس «خواندن و تأیید مشخصات» را بزن. "
+            "برنامه فقط ESP32-S3 با فلش ۱۶ مگابایت را برای این فریمور می‌پذیرد.",
+            size=12, font=FONT, color=TEXT_MUTED),
     ]
 
     ports = st.get("ports")
@@ -304,6 +282,13 @@ def _step1_card(app, st) -> ft.Control:
                     st.__setitem__("sel_port", port), app.render()),
                 ink=True))
         blocks.append(ft.Column(rows, spacing=6))
+        blocks.append(ft.Button(
+            "خواندن و تأیید مشخصات برد", icon=ft.Icons.MEMORY,
+            style=ft.ButtonStyle(
+                bgcolor=WHITE, color=INK,
+                shape=ft.RoundedRectangleBorder(radius=R_BTN),
+                side=ft.BorderSide(1, BORDER)),
+            on_click=lambda e: _read_ident(app, st)))
         blocks.append(ft.TextButton("اسکن دوباره", icon=ft.Icons.REFRESH,
                                     on_click=lambda e: (_scan_ports(app, st),
                                                         app.render())))
@@ -311,12 +296,15 @@ def _step1_card(app, st) -> ft.Control:
     # نتیجهٔ خواندن مشخصات + هشدارها
     if st.get("ident"):
         d = st["ident"]
+        compatible = _identity_compatible(d)
         blocks.append(ft.Container(
             content=ft.Column([
                 ft.Row([
-                    ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=OK),
-                    txt("مشخصات برد خوانده شد", size=12.5, font=FONT_MED,
-                        color=OK),
+                    ft.Icon(ft.Icons.CHECK_CIRCLE if compatible else ft.Icons.ERROR_OUTLINE,
+                            size=16, color=OK if compatible else OFFLINE),
+                    txt("برد آمادهٔ فلش است" if compatible else
+                        "مدل برد با فریمور گیتوی سازگار نیست",
+                        size=12.5, font=FONT_MED, color=OK if compatible else OFFLINE),
                 ], spacing=6),
                 ft.Row([
                     _chip(d.get("chip") or "ESP32", INK, _BG_GRAY),
@@ -324,7 +312,7 @@ def _step1_card(app, st) -> ft.Control:
                     _chip(d.get("mac") or "—", INK, _BG_GRAY),
                 ], spacing=6, wrap=True),
             ], spacing=6),
-            bgcolor=_BG_OK, border_radius=R_CARD,
+            bgcolor=_BG_OK if compatible else _BG_ERR, border_radius=R_CARD,
             padding=ft.Padding.symmetric(horizontal=12, vertical=10)))
         for w in _identity_warnings(d, st.get("gw_rows"), st.get("gw_id")):
             blocks.append(ft.Container(
@@ -351,7 +339,7 @@ def _field(label, key, st, **kw):
 
 
 def _step2_card(app, st) -> ft.Control:
-    """گام ۲ — شناسه/منطقه + وای‌فای و آدرس بروکر."""
+    """گام ۲ — هویت گیتوی و نشانی جایگزین بروکر."""
     rows = [r for r in (st.get("gw_rows") or [])
             if r.get("registered") is not False]
 
@@ -364,9 +352,9 @@ def _step2_card(app, st) -> ft.Control:
     blocks = [
         txt("۲) شناسه و مشخصات گیت‌وی", size=14, font=FONT_B, color=INK),
         txt("شناسه همان است که در برد نوشته می‌شود و در دفتر پل ثبت "
-            "می‌گردد. برای گیت‌وی موجود، از تراشه‌های زیر انتخاب کن تا "
-            "نام و منطقه از دفتر بیاید.", size=11.5, font=FONT,
-            color=TEXT_MUTED),
+            "می‌گردد. کد منطقه/محل نصب را وارد کن؛ IP را W5500 از DHCP "
+            "می‌گیرد و آدرس بروکر معمولاً با UDP پیدا می‌شود.",
+            size=11.5, font=FONT, color=TEXT_MUTED),
     ]
     if rows:
         chips = []
@@ -390,34 +378,24 @@ def _step2_card(app, st) -> ft.Control:
             _field("منطقه / محل نصب", "zone", st, expand=1),
         ], spacing=8),
         flow(app, [
-            _field("نام وای‌فای (SSID)", "ssid", st, expand=2),
-            _field("رمز وای‌فای", "pass", st, expand=2, password=True),
-            _field("آدرس بروکر MQTT", "host", st, expand=2),
-            _field("پورت", "port", st, expand=1),
+            _field("آدرس جایگزین بروکر MQTT", "host", st, expand=3),
+            _field("پورت MQTT", "port", st, expand=1),
         ], spacing=8),
+        txt("شبکهٔ عادی با DHCP از W5500 می‌آید؛ آدرس بروکر با UDP کشف می‌شود. "
+            "نشانی بالا فقط در صورت در دسترس نبودن سرویس کشف استفاده می‌شود.",
+            size=11, font=FONT, color=TEXT_MUTED),
     ]
     return card(ft.Column(blocks, spacing=10), pad=14)
 
 
 def _step3_card(app, st) -> ft.Control:
-    """گام ۳ — حالت فلش + دکمه + پیشرفت زنده + نتیجه."""
-    def mode(e):
-        st["cfg_mode"] = "blank" if e.control.value else "config"
-        app.render()
-
-    blank = st.get("cfg_mode") == "blank"
+    """گام ۳ — فلش فریمور و تنظیمات اجباری گیتوی."""
     blocks = [
-        txt("۳) فلش روی برد", size=14, font=FONT_B, color=INK),
-        ft.Checkbox(
-            label=("بدون تنظیمات فلش کن — برد بعد از نصب، خودش AP باز می‌کند "
-                   "و از گوشیِ نصب‌کار ست می‌شود"),
-            value=blank, on_change=mode),
+        txt("۳) فلش فریمور و تنظیمات گیتوی", size=14, font=FONT_B, color=INK),
+        txt("شناسه و منطقهٔ همین فرم همراه فریمور نوشته می‌شوند. هر برد باید "
+            "شناسهٔ یکتا داشته باشد. تصویر فلش کامل شامل فریمور ESP32-S3 و "
+            "LittleFS با همان تنظیمات است.", size=11.5, font=FONT, color=TEXT_MUTED),
     ]
-    if not blank:
-        blocks.append(txt("با کانفیگ همین حالا: وای‌فای و بروکر از گام ۲ در "
-                          "تصویر تنظیمات برد نوشته می‌شود؛ بعد از فلش، برد "
-                          "خودش به شبکه وصل می‌شود.", size=11.5, font=FONT,
-                          color=TEXT_MUTED))
 
     if st.get("flashing"):
         pct = st.get("percent")
@@ -438,10 +416,11 @@ def _step3_card(app, st) -> ft.Control:
                 height=140),
         ]
     else:
+        ident_ok = _identity_compatible(st.get("ident"))
         blocks.append(ft.Button(
             "شروع فلش کامل", icon=ft.Icons.DOWNLOAD,
-            disabled=st.get("flashing") or not st.get("sel_port"),
-            tooltip=None if st.get("sel_port") else "اول پورت را از گام ۱ انتخاب کن",
+            disabled=st.get("flashing") or not st.get("sel_port") or not ident_ok,
+            tooltip=(None if ident_ok else "ابتدا مشخصات ESP32-S3 و فلش ۱۶MB را تأیید کن"),
             style=ft.ButtonStyle(
                 bgcolor=INK, color=WHITE,
                 shape=ft.RoundedRectangleBorder(radius=R_BTN),
@@ -515,10 +494,12 @@ def _help_card() -> ft.Control:
         txt("• ویندوز: اگر پورت پیدا نشد درایور CP210x را نصب کن؛ اگر فلش "
             "وسط کار قطع شد، کابل و پورت USB را عوض کن", size=11.5, font=FONT,
             color=TEXT_MAIN),
-        txt("• بعد از نصب دیگر کابل لازم نیست: بردِ بدون تنظیمات، شبکهٔ "
-            "RoztashGw-… (باز) را باز می‌کند و از مرورگر گوشی روی آدرس "
-            "http://192.168.4.1 ست می‌شود", size=11.5, font=FONT,
-            color=TEXT_MAIN),
+        txt("• برد را فقط از طریق کابل USB برنامه‌ریزی کن. برای شبکهٔ داده، "
+            "پس از نصب کابل LAN ماژول W5500 را به سوئیچ همان بخش وصل کن.",
+            size=11.5, font=FONT, color=TEXT_MAIN),
+        txt("• شبکهٔ گیتوی جدا از شبکهٔ شرکت است. DHCP از کامپیوتر HSE می‌آید؛ "
+            "این کارت شبکهٔ جدا را به شبکهٔ شرکت وصل نکن.",
+            size=11.5, font=FONT, color=TEXT_MAIN),
     ], spacing=6), pad=14)
 
 
@@ -545,15 +526,14 @@ def provisioning_view(app):
 
     header = section_header(
         "آماده‌سازی گیتوی",
-        "برد نو را با کابل به همین سیستم وصل کن، هویت و مشخصات را تأیید "
-        "کن و فلش کامل (فریمور + تنظیمات) را همان‌جا بزن — بدون arduino-cli "
-        "و بدون نصب ابزار اضافه. فلش با تنظیمات همین حالا یا بدون تنظیمات "
-        "برای ست‌کردن از گوشی در محل نصب.")
+        "برد را با کابل USB وصل کن و مشخصاتش را تأیید کن؛ برنامه شناسه و منطقهٔ "
+        "همین فرم را داخل فریمور و LittleFS می‌نویسد. پس از نصب W5500 را به سوئیچ "
+        "بخش وصل کن تا از DHCP شبکهٔ اختصاصی IP بگیرد.")
 
     return ft.Column([
         header,
         _bundle_card(st),
-        _net_card(app, st),
+        _net_card(st),
         _step1_card(app, st),
         _step2_card(app, st),
         _step3_card(app, st),

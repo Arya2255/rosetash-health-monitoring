@@ -1,0 +1,403 @@
+{
+  "project": "نقشه راه مرحله‌به‌مرحله دمو و تست سخت‌افزار روزتاش",
+  "scope": "مهاجرت نرم‌افزاری به ESP32-S3 و شبکهٔ اختصاصی؛ آزمون سخت‌افزاری جداگانه",
+  "generated_at": "2026-11-15T16:48:43+00:00",
+  "perspectives": [
+    "Technical",
+    "Critical",
+    "User",
+    "Risk",
+    "Hidden"
+  ],
+  "temporal_states": [
+    "past_taken",
+    "past_alternative",
+    "current",
+    "future_predicted",
+    "ghost_suggestion"
+  ],
+  "nodes": [
+    {
+      "id": "step1_band_rssi",
+      "label": "۱. اسکریپت تست RSSI زنده مچ‌بند با دانگل",
+      "step_number": 1,
+      "category": "laptop_ble_test",
+      "temporal_state": "past_taken",
+      "description": "اتصال دانگل بلوتوث لپ‌تاپ (hci1 CSR8510 5.0) به مچ‌بند Porodo PDMB1062 و نمایش لایو توان سیگنال در ترمینال برای تست فاصله و موانع فیزیکی.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "با اصلاح API کتابخانه Bleak 3.x و استفاده از detection_callback آگهی‌های مچ‌بند به‌صورت پایدار دریافت شد."
+        },
+        {
+          "perspective": "User",
+          "type": "insight",
+          "comment": "امکان حرکت دادن مچ‌بند پشت موانع و مشاهده بلادرنگ افت سیگنال در ترمینال فراهم شد."
+        },
+        {
+          "perspective": "Risk",
+          "type": "warning",
+          "comment": "RSSI بسیار ضعیف (-87 تا -91 dBm) حتی در فاصله نزدیک و با دانگل hci0 (CSR8510 BLE 5.0). مورد بررسی قرار گیرد: ۱) Tx Power خود مچ‌بند PDMB1062 پایین است ۲) تداخل RF بدنه لپ‌تاپ ۳) جهت آنتن مچ‌بند ۴) احتمال نیاز به دانگل با گین بالاتر یا آنتن خارجی."
+        }
+      ]
+    },
+    {
+      "id": "alt_gatt_rssi_lock",
+      "label": "مسیر جایگزین: خواندن RSSI فقط با اتصال دائم GATT",
+      "category": "laptop_ble_test",
+      "temporal_state": "past_alternative",
+      "description": "نگه‌داشتن اتصال مستقیم بلوتوث برای خواندن سیگنال که کانال آگهی مچ‌بند را برای دیگر دستگاه‌ها مسدود می‌کرد.",
+      "reviews": [
+        {
+          "perspective": "Critical",
+          "type": "error",
+          "comment": "در حالت اتصال دائم، مچ‌بند دیگر پکت‌های Advertisement پخش نمی‌کند و گیتوی‌های دیگر آن را غایب ثبت می‌کنند."
+        },
+        {
+          "perspective": "Risk",
+          "type": "warning",
+          "comment": "مصرف باتری مچ‌بند در اتصال پیوسته چند برابر می‌شود."
+        }
+      ]
+    },
+    {
+      "id": "step2_band_features",
+      "label": "۲. اسکریپت تست ویژگی‌های مچ‌بند (ضربان، باتری، ویبره)",
+      "step_number": 2,
+      "category": "laptop_ble_test",
+      "temporal_state": "past_taken",
+      "description": "اتصال GATT با دانگل لپ‌تاپ، خواندن درصد باتری، ارسال دستور باینری (02,70) برای ضربان و (05,50) برای تست لرزش سخت‌افزاری.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "پروتکل باینری مچ‌بند و خصوصیت is_connected در پایتون ۳٫۱۴ با موفقیت دیباگ و اصلاح شد."
+        },
+        {
+          "perspective": "User",
+          "type": "insight",
+          "comment": "تأیید حسی لرزش مچ‌بند اثبات کرد که ارتباط دوطرفه (ارسال فرمان به سخت‌افزار) کاملاً برقرار است."
+        }
+      ]
+    },
+    {
+      "id": "step3_distance_calibration",
+      "label": "۳. اسکریپت تخمین فاصله از روی RSSI و فیلتر کالمن",
+      "step_number": 3,
+      "category": "laptop_ble_test",
+      "temporal_state": "past_taken",
+      "description": "تبدیل توان سیگنال RSSI به فاصله برحسب متر با فرمول توان محیطی (n=2.5, tx=-59) و فیلتر کالمن برای حذف نویز پرش سیگنال.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "فیلتر کالمن نوسانات لحظه‌ای سیگنال BLE را مهار کرده و تخمین متراژ را پایدار می‌کند."
+        },
+        {
+          "perspective": "Hidden",
+          "type": "warning",
+          "comment": "مقدار -80 dBm در فاصله نزدیک نشان داد که بدنه لپ‌تاپ یا رادیوی دانگل تداخل دارد و باید با پارامتر tx-power کالیبره شود."
+        }
+      ]
+    },
+    {
+      "id": "step4_reverse_watches_friend",
+      "label": "۴. مهندسی معکوس ساعت‌ها و آماده‌سازی اسکریپت‌ها برای دوست",
+      "step_number": 4,
+      "category": "laptop_ble_test",
+      "temporal_state": "past_taken",
+      "description": "دیکامپایل APKهای GloryFit (ساعت KR Pro) و Wearfit (ساعت Keqiwear) از دسکتاپ، استخراج UUIDهای 000055ff و 6E40 Nordic UART و ساخت اسکریپت‌های تست برای ارسال به همکار.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "ساعت Keqiwear از پروتکل استاندارد Nordic UART استفاده می‌کند که راه‌اندازی را بسیار ساده‌تر می‌سازد."
+        },
+        {
+          "perspective": "User",
+          "type": "insight",
+          "comment": "چون ساعت‌ها پیش دوست در کارخانه است، اسکریپت‌های آماده به او داده می‌شود تا خودش تست سیگنال را روی ساعت‌ها اجرا کند."
+        }
+      ]
+    },
+    {
+      "id": "step5_w5500_wiring",
+      "label": "۵. سیم‌کشی تأییدشدهٔ ESP32-S3 و W5500",
+      "step_number": 5,
+      "category": "esp32_hardware",
+      "temporal_state": "past_taken",
+      "description": "SPI: SCK=12، MISO=13، MOSI=11، CS=10، RST=9. خواندن VERSIONR=0x04 اتصال تراشه را تأیید کرده است؛ این تأیید به معنی آزمون شبکهٔ فریمور نهایی نیست.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "مرجع پین‌ها firmware/gateway/network_config.h است؛ پین‌های ESP32 قدیمی معتبر نیستند."
+        }
+      ]
+    },
+    {
+      "id": "step6_w5500_web_test",
+      "label": "۶. تست اترنت با وب‌سرور ساده ESP32 و اتصال به مودم خانگی",
+      "step_number": 6,
+      "category": "esp32_hardware",
+      "temporal_state": "future_predicted",
+      "description": "اتصال کابل لن ماژول W5500 به پورت LAN مودم وای‌فای خانه، بالا آوردن یک صفحه وب سبک در ESP32 و باز کردن آدرس IP آن در مرورگر کامپیوتر برای اثبات کارکرد اترنت.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "تست در خانه با مودم شخصی، عملکرد لایه فیزیکی اترنت و دریافت IP از DHCP را پیش از ورود به محیط صنعتی اثبات می‌کند."
+        },
+        {
+          "perspective": "Critical",
+          "type": "warning",
+          "comment": "باید اطمینان حاصل شود که کتابخانه اترنت با هسته Arduino ESP32 نسخه 3.x کامپایل بدون خطا می‌دهد."
+        }
+      ]
+    },
+    {
+      "id": "step7_friend_auto_flash_script",
+      "label": "۷. بستهٔ فلش و صفحهٔ آماده‌سازی داخل برنامه",
+      "step_number": 7,
+      "category": "deployment_prep",
+      "temporal_state": "current",
+      "description": "فریمور ESP32-S3 N16R8 کامپایل و بستهٔ 0.4.0-ethernet بازسازی شد. آغازگر از 0x0 نوشته می‌شود. برنامه هویت برد، چیدمان و هش فایل‌ها را کنترل و تنظیمات اختصاصی می‌سازد. آزمون واقعی USB و ویندوز هنوز باقی است.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "آزمون‌های بدون برد برای آماده‌سازی و اعتبارسنجی بسته موفق‌اند."
+        },
+        {
+          "perspective": "Critical",
+          "type": "warning",
+          "comment": "موفقیت کامپایل و تست نرم‌افزاری جایگزین فلش و بوت واقعی نیست."
+        }
+      ]
+    },
+    {
+      "id": "step8_factory_rack_install",
+      "label": "۸. نصب گیتوی‌ها در رک‌های کارخانه و اتصال کابل لن به سوییچ",
+      "step_number": 8,
+      "category": "deployment_prep",
+      "temporal_state": "future_predicted",
+      "description": "گیتوی‌ها به سوئیچ‌های اختصاصی بخش‌ها و سپس کارت شبکهٔ اختصاصی رایانهٔ HSE وصل می‌شوند. شبکه به زیرساخت شرکت وابسته نیست.",
+      "reviews": [
+        {
+          "perspective": "Critical",
+          "type": "warning",
+          "comment": "سوئیچ غیرمدیریتی سرویس DHCP ندارد؛ سرویس روی رایانهٔ HSE یا روتر آزمایشی لازم است."
+        }
+      ]
+    },
+    {
+      "id": "step9_esp32_web_signal_panel",
+      "label": "۹. پنل وب اختصاصی ESP32 برای نمایش زنده سیگنال ساعت‌ها",
+      "step_number": 9,
+      "category": "esp32_firmware",
+      "temporal_state": "future_predicted",
+      "description": "برنامه‌ریزی فریمور ESP32 به شکلی که وب‌سرور داخلی آن لیست ساعت‌ها و مچ‌بندهای در دید را به همراه قدرت سیگنال RSSI لحظه‌ای نمایش دهد.",
+      "reviews": [
+        {
+          "perspective": "User",
+          "type": "insight",
+          "comment": "همکار با باز کردن آی‌پی هر گیتوی در مرورگر موبایل خود می‌تواند پوشش رادیویی اطراف رک را بلافاصله بدون سرور تست کند."
+        },
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "به‌روزرسانی صفحه وب با fetch یا WebSocket سبک بدون اشغال حافظه رم میکروکنترلر پیاده می‌شود."
+        }
+      ]
+    },
+    {
+      "id": "step10_esp32_read_watch_vitals",
+      "label": "۱۰. خواندن ویژگی‌های حیاتی ساعت‌ها توسط ESP32",
+      "step_number": 10,
+      "category": "esp32_firmware",
+      "temporal_state": "future_predicted",
+      "description": "اضافه کردن درایورهای اتصال GATT به ساعت‌های GloryFit و Keqiwear داخل فریمور گیتوی برای دریافت ضربان، باتری و لرزش.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "warning",
+          "comment": "اتصال نوبتی کوتاه (Time-slice connection) مانع قطع شدن اسکن حضور مچ‌بند سایر کارگران می‌شود."
+        },
+        {
+          "perspective": "Hidden",
+          "type": "insight",
+          "comment": "هر برند ساعت زمان پاسخ‌دهی متفاوتی دارد که با تایم‌اوت‌های مستقل در فریمور مدیریت می‌شود."
+        }
+      ]
+    },
+    {
+      "id": "step11_app_backend_integration",
+      "label": "۱۱. تکمیل و ادغام برنامه کامپیوتر HSE با سخت‌افزار",
+      "step_number": 11,
+      "category": "integration",
+      "temporal_state": "future_predicted",
+      "description": "اتصال بک‌اند و پل دیتابیس به کابل لن سوییچ رک و هماهنگ‌سازی نرم‌افزار مانیتورینگ Flet روی کامپیوتر اتاق HSE.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "داشبورد HSE داده‌های تمام گیتوی‌های نصب‌شده در رک‌ها را دریافت و روی نقشه و جدول نمایش می‌دهد."
+        },
+        {
+          "perspective": "User",
+          "type": "insight",
+          "comment": "مسئول HSE کل وضعیت کارکنان و سالن‌ها را از طریق صفحه نمایش کامپیوتر اتاق خود رصد می‌کند."
+        }
+      ]
+    },
+    {
+      "id": "step12_factory_demo_delivery",
+      "label": "۱۲. تحویل دموی عملیاتی به کارخانه و عیب‌یابی میدانی",
+      "step_number": 12,
+      "category": "integration",
+      "temporal_state": "future_predicted",
+      "description": "تحویل فاز دموی پایدار به کارخانه برای پیدا شدن عیوب و کمبودهای واقعی در شرایط کارخانه و تعیین تغییرات بعدی.",
+      "reviews": [
+        {
+          "perspective": "Critical",
+          "type": "insight",
+          "comment": "هدف این مرحله رسیدن به دموی کارا است؛ بازخوردهای واقعی پرسنل مسیر نسخه نهایی را تعیین خواهد کرد."
+        },
+        {
+          "perspective": "Risk",
+          "type": "warning",
+          "comment": "تغییرات ناشی از تست میدانی باید در قالب گزارش‌های منظم ثبت و روی فریمور گیتوی‌ها اعمال شود."
+        }
+      ]
+    },
+    {
+      "id": "ghost_static_ip_fallback",
+      "label": "مسیر کنارگذاشته‌شده: آدرس ثابت برای هر برد",
+      "category": "safety",
+      "temporal_state": "past_alternative",
+      "description": "طبق تصمیم کاربر، هر گیتوی آدرس را فقط از DHCP می‌گیرد. نشانی جایگزین بروکر، آدرس ثابت خود برد نیست.",
+      "reviews": []
+    },
+    {
+      "id": "ghost_offline_event_buffer",
+      "label": "پیشنهاد: صف حافظه آفلاین گیتوی هنگام قطعی کابل",
+      "category": "safety",
+      "temporal_state": "ghost_suggestion",
+      "description": "ذخیره موقت رکوردهای تردد و ضربان قلب در حافظه LittleFS میکروکنترلر در صورت قطعی موقت کابل لن رک.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "با وصل مجدد کابل لن سوییچ، رکوردهای از دست نرفته یک‌جا به سرور اتاق HSE ارسال می‌شوند."
+        }
+      ]
+    },
+    {
+      "id": "ethernet_field_acceptance",
+      "label": "آزمون عملی فریمور نهایی",
+      "category": "integration",
+      "temporal_state": "future_predicted",
+      "description": "با کابل داده، فریمور از برنامه فلش و بوت شود؛ سپس DHCP، کشف بروکر، MQTT، دریافت مچ‌بند و قطع‌و‌وصل کابل روی شبکهٔ آزمایشی بررسی شود. فعلاً سخت‌افزار متصل نشده است.",
+      "reviews": [
+        {
+          "perspective": "User",
+          "type": "warning",
+          "comment": "برای تست اولیه خرید سوئیچ‌های کارخانه لازم نیست؛ روتر دارای DHCP هم قابل استفاده است."
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "source": "step1_band_rssi",
+      "target": "alt_gatt_rssi_lock",
+      "type": "alternative"
+    },
+    {
+      "source": "step1_band_rssi",
+      "target": "step2_band_features",
+      "type": "dependency"
+    },
+    {
+      "source": "step1_band_rssi",
+      "target": "step3_distance_calibration",
+      "type": "dependency"
+    },
+    {
+      "source": "step1_band_rssi",
+      "target": "step4_reverse_watches_friend",
+      "type": "dependency"
+    },
+    {
+      "source": "step1_band_rssi",
+      "target": "step5_w5500_wiring",
+      "type": "next_step"
+    },
+    {
+      "source": "step3_distance_calibration",
+      "target": "step5_w5500_wiring",
+      "type": "dependency"
+    },
+    {
+      "source": "step5_w5500_wiring",
+      "target": "step6_w5500_web_test",
+      "type": "current_focus"
+    },
+    {
+      "source": "step6_w5500_web_test",
+      "target": "step7_friend_auto_flash_script",
+      "type": "dependency"
+    },
+    {
+      "source": "step7_friend_auto_flash_script",
+      "target": "step8_factory_rack_install",
+      "type": "dependency"
+    },
+    {
+      "source": "step8_factory_rack_install",
+      "target": "step9_esp32_web_signal_panel",
+      "type": "dependency"
+    },
+    {
+      "source": "step4_reverse_watches_friend",
+      "target": "step10_esp32_read_watch_vitals",
+      "type": "dependency"
+    },
+    {
+      "source": "step9_esp32_web_signal_panel",
+      "target": "step10_esp32_read_watch_vitals",
+      "type": "dependency"
+    },
+    {
+      "source": "step10_esp32_read_watch_vitals",
+      "target": "step11_app_backend_integration",
+      "type": "dependency"
+    },
+    {
+      "source": "step11_app_backend_integration",
+      "target": "step12_factory_demo_delivery",
+      "type": "delivery"
+    },
+    {
+      "source": "step8_factory_rack_install",
+      "target": "ghost_static_ip_fallback",
+      "type": "suggested_evolution"
+    },
+    {
+      "source": "step9_esp32_web_signal_panel",
+      "target": "ghost_offline_event_buffer",
+      "type": "suggested_evolution"
+    },
+    {
+      "source": "step7_friend_auto_flash_script",
+      "target": "ethernet_field_acceptance",
+      "type": "dependency"
+    },
+    {
+      "source": "ethernet_field_acceptance",
+      "target": "step8_factory_rack_install",
+      "type": "dependency"
+    }
+  ]
+}

@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import re
@@ -35,10 +36,12 @@ LITTLEFS_SIZE = "0x20000"
 LITTLEFS_PAGE = "256"
 LITTLEFS_OFFSET = "0x3D0000"
 DEFAULT_BAUD = 460800
+TARGET_CHIP = "esp32s3"
+TARGET_FLASH_SIZE = "16MB"
+TARGET_FW_VERSION = "0.4.0-ethernet"
 
 _GW_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,31}$")  # همان قاعدهٔ پل
-_LIMITS = {"gw_id": 23, "zone": 39, "wifi_ssid": 39, "wifi_pass": 79,
-           "mqtt_host": 47}
+_LIMITS = {"gw_id": 23, "zone": 39, "mqtt_host": 47}
 _PERCENT_RE = re.compile(r"\((\d+)\s?%\)")
 _MAC_RE = re.compile(r"MAC:\s*([0-9a-fA-F:]{17})")
 
@@ -137,10 +140,9 @@ def bundle_status(bundle: Path | str | None = None) -> dict:
     if not manifest.is_file():
         status["error"] = "بستهٔ همراه پیدا نشد — tools/build_provisioner_bundle.py را اجرا کن"
         return status
-    try:
-        doc = json.loads(manifest.read_text(encoding="utf-8"))
-    except Exception as exc:
-        status["error"] = f"manifest خراب است: {exc}"
+    ok, doc = load_manifest(bundle)
+    if not ok:
+        status["error"] = doc.get("error", "بستهٔ همراه ناسازگار است")
         return status
     status["present"] = True
     status["fw_version"] = doc.get("fw_version")
@@ -237,7 +239,7 @@ def read_chip_info(port: str, esptool: str, timeout: float = 75.0) -> tuple[bool
 
     هر خواندن یک ری‌استارت کوتاه برد است؛ طبیعی و بی‌خطر.
     """
-    res = _run([esptool, "--chip", "esp32", "--port", str(port), "flash-id"],
+    res = _run([esptool, "--chip", TARGET_CHIP, "--port", str(port), "flash-id"],
                timeout)
     out = _text(res)
     doc = {"port": str(port), "mac": "", "chip": "", "flash": "",
@@ -255,7 +257,19 @@ def read_chip_info(port: str, esptool: str, timeout: float = 75.0) -> tuple[bool
             doc["flash"] = line.split(":", 1)[1].strip()
         elif not doc["flash"] and line.startswith("Flash size:"):
             doc["flash"] = line.split(":", 1)[1].strip()
-    ok = bool(m is not None or (res is not None and res.returncode == 0 and doc["chip"]))
+    chip_text = doc["chip"].lower()
+    doc["chip_id"] = TARGET_CHIP if "esp32-s3" in chip_text or "esp32s3" in chip_text else ""
+    flash_mib = re.search(r"(\d+)\s*mb", doc["flash"], re.I)
+    doc["flash_bytes"] = (int(flash_mib.group(1)) * 1024 * 1024
+                          if flash_mib else 0)
+    ok = bool(res is not None and res.returncode == 0 and m is not None
+              and doc["chip"] and doc["flash"])
+    if ok and doc["chip_id"] != TARGET_CHIP:
+        doc["error"] = "این برد ESP32-S3 نیست؛ فریمور گیتوی فعلی برای ESP32-S3 ساخته شده"
+        return False, doc
+    if ok and doc["flash_bytes"] != 16 * 1024 * 1024:
+        doc["error"] = "حجم فلش این برد ۱۶ مگابایت نیست؛ عملیات متوقف شد"
+        return False, doc
     if not ok:
         doc["error"] = _serial_error_hint(out) or "برد پاسخ نداد — اتصال را چک کن"
         if m is None and "MAC" not in out:
@@ -296,26 +310,23 @@ def validate_gw_id(gw: str) -> tuple[bool, str]:
     return True, ""
 
 
-def build_config(gw_id: str, zone: str, ssid: str, password: str, mqtt_host: str,
-                 mqtt_port: int | str = 1883,
+def build_config(gw_id: str, zone: str, mqtt_host: str,
+                 mqtt_port: int | str = 1884,
                  health_interval_s: int | str = 600) -> dict:
-    """دیکشنری config.json — دقیقاً کلیدهایی که فریمور می‌خواند."""
+    """ساخت config.json اترنت — بدون SSID/رمز؛ شبکه از W5500 و DHCP است."""
     def clip(value, limit):
         return str(value or "").strip()[:limit]
 
-    cfg = {
+    return {
         "gw_id": clip(gw_id, _LIMITS["gw_id"]).lower(),
         "zone": clip(zone, _LIMITS["zone"]),
-        "wifi_ssid": clip(ssid, _LIMITS["wifi_ssid"]),
-        "wifi_pass": clip(password, _LIMITS["wifi_pass"]),
         "mqtt_host": clip(mqtt_host, _LIMITS["mqtt_host"]),
-        "mqtt_port": int(mqtt_port or 1883),
+        "mqtt_port": int(mqtt_port or 1884),
         "health_interval_s": int(health_interval_s or 600),
         "scan_interval_ms": 160,
         "scan_window_ms": 80,
         "measure_timeout_s": 45,
     }
-    return cfg
 
 
 def config_json_text(cfg: dict) -> str:
@@ -354,19 +365,53 @@ def load_manifest(bundle: Path | str | None = None) -> tuple[bool, dict]:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         return False, {"error": f"manifest خراب است: {exc}"}
+    if not isinstance(doc, dict) or not isinstance(doc.get("flash"), dict):
+        return False, {"error": "ساختار manifest معتبر نیست"}
     doc["_bundle"] = str(bundle)
-    for item in doc.get("flash", {}).get("files") or []:
-        if not (bundle / item["file"]).is_file():
-            return False, {"error": f"فایل بستهٔ همراه نیست: {item['file']}"}
+    flash = doc["flash"]
+    if (flash.get("chip") != TARGET_CHIP
+            or flash.get("size") != TARGET_FLASH_SIZE
+            or doc.get("fw_version") != TARGET_FW_VERSION):
+        return False, {"error": ("بستهٔ فلش قدیمی یا ناسازگار است؛ "
+                                 "برای ESP32-S3 با فلش 16MB بستهٔ تازه بساز")}
+    # ESP32-S3 ROM loads its bootloader at 0x0, not the legacy ESP32's 0x1000.
+    expected = {
+        "firmware/bootloader.bin": 0x0,
+        "firmware/partitions.bin": 0x8000,
+        "firmware/boot_app0.bin": 0xE000,
+        "firmware/app.bin": 0x10000,
+        "firmware/littlefs-blank.bin": int(LITTLEFS_OFFSET, 16),
+    }
+    try:
+        files = flash["files"]
+        actual = {item["file"]: int(item["addr"], 16) for item in files}
+        if len(files) != len(expected) or actual != expected:
+            return False, {"error": "فهرست یا آدرس فایل‌های فلش با ESP32-S3 سازگار نیست"}
+        lfs = doc["littlefs"]
+        if (int(lfs["offset"], 16) != int(LITTLEFS_OFFSET, 16)
+                or lfs["size"] != int(LITTLEFS_SIZE, 16)
+                or lfs["page"] != int(LITTLEFS_PAGE) or lfs["block"] != 4096):
+            return False, {"error": "هندسهٔ پارتیشن تنظیمات با فریمور سازگار نیست"}
+        for item in files:
+            artifact = bundle / item["file"]
+            if not artifact.is_file():
+                return False, {"error": f"فایل بستهٔ همراه نیست: {item['file']}"}
+            if (artifact.stat().st_size != item["size"]
+                    or hashlib.sha256(artifact.read_bytes()).hexdigest() != item["sha256"]):
+                return False, {"error": f"اندازه یا هش فایل بسته معتبر نیست: {item['file']}"}
+    except (KeyError, TypeError, ValueError, OSError, AttributeError):
+        return False, {"error": "اطلاعات فایل‌ها یا پارتیشن‌های manifest معتبر نیست"}
     return True, doc
 
 
 def flash_command(esptool: str, port: str, entries: list[tuple[str, str]],
-                  baud: int = DEFAULT_BAUD) -> list[str]:
-    """ساخت فرمان write-flash با آدرس‌ها و فایل‌های مرتب — قابل تست مستقل."""
-    cmd = [str(esptool), "--chip", "esp32", "--port", str(port),
+                  baud: int = DEFAULT_BAUD, chip: str = TARGET_CHIP,
+                  flash_size: str = TARGET_FLASH_SIZE) -> list[str]:
+    """ساخت فرمان write-flash متناسب با سخت‌افزار گیتوی روزتاش."""
+    cmd = [str(esptool), "--chip", chip, "--port", str(port),
            "--baud", str(baud), "write-flash",
-           "--flash-mode", "dio", "--flash-freq", "80m", "--flash-size", "4MB"]
+           "--flash-mode", "dio", "--flash-freq", "80m",
+           "--flash-size", flash_size]
     for addr, path in entries:
         cmd += [str(addr), str(path)]
     return cmd
@@ -383,18 +428,15 @@ def flash_ok(output: str, returncode: int) -> bool:
     return returncode == 0 and "hash of data verified" in (output or "").lower()
 
 
-def flash_gateway(port: str, cfg: dict | None = None,
+def flash_gateway(port: str, cfg: dict, expected_chip: str = TARGET_CHIP,
+                  expected_flash_bytes: int = 16 * 1024 * 1024,
+                  expected_mac: str = "",
                   bundle: Path | str | None = None, esptool: str | None = None,
                   mklittlefs: str | None = None, baud: int = DEFAULT_BAUD,
                   progress=None, timeout: float = 900.0) -> tuple[bool, dict]:
-    """فلش کامل گیتوی: بوت‌لودر + پارتیشن + boot_app0 + اپ + LittleFS.
+    """فلش کامل گیتوی به‌همراه config.json همان برد روی LittleFS.
 
-    cfg یک دیکشنری config است که همان‌جا به تصویر LittleFS تبدیل می‌شود؛
-    cfg=None یعنی تصویر خالی همراه بسته فلش شود — برد بعد از بوت، AP
-    «RoztashGw-…» باز می‌کند تا از گوشی تنظیم شود.
-
-    progress: کالکبک(line) برای نمایش زندهٔ خروجی esptool.
-    برمی‌گرداند (ok, info) — info شامل log، verified و پیام خطای فارسی است.
+    cfg اجباری است تا هر برد با شناسه و منطقهٔ یکتا فلش شود.
     """
     info = {"log": [], "verified": False, "error": "", "returncode": None,
             "cmd": []}
@@ -402,9 +444,27 @@ def flash_gateway(port: str, cfg: dict | None = None,
     tools = find_tools(bundle=bundle)
     esptool = esptool or tools["esptool"]
     mklittlefs = mklittlefs or tools["mklittlefs"]
+    if not isinstance(cfg, dict) or not cfg.get("gw_id"):
+        info["error"] = "شناسهٔ گیت‌وی و تنظیمات آن اجباری است؛ فلش خالی مجاز نیست"
+        return False, info
     if not esptool:
         info["error"] = ("ابزار esptool پیدا نشد — بستهٔ همراه برنامه ناقص است؛ "
                          "tools/build_provisioner_bundle.py --fetch-tools را اجرا کن")
+        return False, info
+
+    ok, board = read_chip_info(port, esptool)
+    info["log"].extend(board.get("log") or [])
+    if not ok:
+        info["error"] = board.get("error") or "تأیید مشخصات برد ناموفق بود"
+        return False, info
+    if board.get("chip_id") != expected_chip:
+        info["error"] = "نوع برد هنگام فلش با برد تأییدشده مطابقت ندارد"
+        return False, info
+    if board.get("flash_bytes") != expected_flash_bytes:
+        info["error"] = "حجم فلش برد هنگام فلش تغییر کرده یا ناسازگار است"
+        return False, info
+    if expected_mac and board.get("mac") != expected_mac.lower():
+        info["error"] = "برد متصل‌شده با MAC تأییدشده مطابقت ندارد"
         return False, info
 
     ok, manifest = load_manifest(bundle)
@@ -418,7 +478,7 @@ def flash_gateway(port: str, cfg: dict | None = None,
         entries: list[tuple[str, str]] = []
         for item in manifest["flash"]["files"]:
             path = bundle / item["file"]
-            if item["file"] == lfs_rel and cfg is not None:
+            if item["file"] == lfs_rel:
                 if not mklittlefs:
                     info["error"] = "ابزار mklittlefs برای ساخت تصویر تنظیمات پیدا نشد"
                     return False, info
@@ -463,9 +523,12 @@ def flash_gateway(port: str, cfg: dict | None = None,
 
     out = "\n".join(info["log"])
     info["returncode"] = proc.returncode
-    if proc.returncode == 0:
-        info["verified"] = "hash of data verified" in out.lower()
+    info["verified"] = "hash of data verified" in out.lower()
+    if flash_ok(out, proc.returncode):
         return True, info
+    if proc.returncode == 0:
+        info["error"] = "فلش انجام شد اما تأیید هش کامل نیست؛ برد را دوباره بررسی کن"
+        return False, info
     info["error"] = (_serial_error_hint(out)
                      or "فلش ناموفق بود — لاگ پایین را ببین و دوباره امتحان کن")
     return False, info
