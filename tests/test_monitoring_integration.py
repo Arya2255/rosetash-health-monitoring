@@ -95,7 +95,41 @@ class LoopbackIntegration(unittest.TestCase):
                         employee=live.live_employees(force=True)[0]
                         self.assertEqual(employee['name'],'Integration Fixture')
                         self.assertEqual(employee['weekly_schedule'],schedule)
-                        print('LOOPBACK_INTEGRATION_PASS: HTTP save, signed roles, MQTT policy, strongest gateway, pause/resume, restart')
+                        # Synthetic wearable boundary, real MQTT transport both directions.
+                        bridge.ingest('roztash/gw-a/status',json.dumps({'online':True,
+                            'scan_policy_ready':True,'vibration_request_id':True,'fw':'0.5.1-battery'}))
+                        bridge.ingest('roztash/gw-a/presence',json.dumps({'bands':[
+                            {'mac':MAC,'rssi':-42,'age_ms':0}]}))
+                        bridge.ingest('roztash/gw-a/vitals',json.dumps({'mac':MAC,'battery':12}))
+                        alert=live.live_status(force=True)['battery_alerts'][0]
+                        self.assertEqual(alert['vibration_status'],'pending')
+                        command_sub=subprocess.Popen(['mosquitto_sub','-h','127.0.0.1','-p',str(mqtt_port),
+                            '-t','roztash/gw-a/cmd','-C','1','-W','5','-F','%r %p'],
+                            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                        self.addCleanup(self.stop_process,command_sub)
+                        time.sleep(.15)
+                        bridge.dispatch_battery_alerts()
+                        command_output,err=command_sub.communicate(timeout=7)
+                        self.assertEqual(command_sub.returncode,0,err)
+                        retained,raw=command_output.strip().split(' ',1)
+                        self.assertEqual(retained,'0')
+                        command=json.loads(raw)
+                        self.assertEqual(command['mac'],MAC)
+                        self.assertEqual(command['reason'],'battery_low')
+                        self.assertEqual(live.live_status(force=True)['battery_alerts'][0]['vibration_status'],'awaiting_ack')
+                        ack_sub=subprocess.Popen(['mosquitto_sub','-h','127.0.0.1','-p',str(mqtt_port),
+                            '-t','roztash/gw-a/event','-C','1','-W','5','-F','%t %p'],
+                            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                        self.addCleanup(self.stop_process,ack_sub)
+                        time.sleep(.15)
+                        ack={'type':'vibrated','mac':MAC,'request_id':command['request_id'],'reason':'battery_low'}
+                        subprocess.run(['mosquitto_pub','-h','127.0.0.1','-p',str(mqtt_port),
+                            '-t','roztash/gw-a/event','-m',json.dumps(ack)],check=True,timeout=4)
+                        ack_output,err=ack_sub.communicate(timeout=7)
+                        self.assertEqual(ack_sub.returncode,0,err)
+                        topic,body=ack_output.strip().split(' ',1);bridge.ingest(topic,body)
+                        self.assertEqual(live.live_status(force=True)['battery_alerts'][0]['vibration_status'],'confirmed')
+                        print('LOOPBACK_INTEGRATION_PASS: HTTP, MQTT policies, location, pause, restart, battery command and synthetic ACK')
                 finally:
                     server.shutdown();server.server_close();serving.join(2)
                     if bridge._db is not None:

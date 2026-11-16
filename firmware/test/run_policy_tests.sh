@@ -14,3 +14,7 @@ compiler="${CXX:-c++}"
   firmware/test/ble_policy_host_test.cpp firmware/gateway/ble_central.cpp \
   firmware/gateway/protocol.cpp -o "$TMPDIR/ble-policy-host-test"
 "$TMPDIR/ble-policy-host-test"
+"$compiler" -std=c++17 -O2 -Wall -Wextra -Werror \
+  -Ifirmware/gateway -I"$json_include" firmware/test/vibration_command_host_test.cpp \
+  -o "$TMPDIR/vibration-command-host-test"
+"$TMPDIR/vibration-command-host-test"

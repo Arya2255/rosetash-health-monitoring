@@ -26,7 +26,7 @@
 #include "mqtt_link.h"
 #include "discovery.h"
 
-const char* kFwVersion = "0.5.0-shifts";
+const char* kFwVersion = "0.5.1-battery";
 
 // SpO2 + HRV stages run only every Nth health window: three PPG measurements
 // back to back on every window would drain the band's battery. Battery and
@@ -142,10 +142,12 @@ void loop() {
     Serial.printf("[gw] health window %lu open\n", (unsigned long)health_schedule.generation());
   if (!ble.healthBusy()) {
     if (ble.jobFinished()) {
-      if (ble.jobRevoked() || !mqtt.policy().allows(ble.jobMac(), millis())) {
+      if (ble.wasVibrate()) {
+        if (ble.jobRevoked() || !mqtt.policy().allows(ble.jobMac(), millis()))
+          mqtt.rejectVibration("policy_revoked");
+        else mqtt.finishVibration(ble.vibrated());
+      } else if (ble.jobRevoked() || !mqtt.policy().allows(ble.jobMac(), millis())) {
         // Discard all results of revoked work; do not leak an off-duty sample.
-      } else if (ble.wasVibrate()) {
-        mqtt.publishEvent(ble.vibrated() ? "vibrated" : "vibrate_fail", ble.jobMac(), "");
       } else {
         mqtt.publishHealth(ble);
         mqtt.publishVitals(ble);
@@ -162,7 +164,7 @@ void loop() {
       if (mqtt.takeCommand(act, sizeof act, cmac, sizeof cmac)) {
         if (strcmp(act, "vibrate") == 0) {
           if (!ble.startVibrate(cmac))
-            mqtt.publishEvent("cmd_reject", cmac, "vibrate: off-duty, unseen or busy");
+            mqtt.rejectVibration("off_duty_unseen_or_busy");
         } else mqtt.publishEvent("cmd_unknown", cmac, act);
       } else if (health_schedule.active()) pickNextBand();
     }

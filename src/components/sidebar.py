@@ -68,15 +68,6 @@ def _nav_column(active, on_nav, alert_count=0):
         txt("کارخانه رزتاش", size=10, font=FONT, color=SIDE_MUTED),
     ], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
-    user = ft.Row([
-        ft.CircleAvatar(radius=17, bgcolor="#3A3F44",
-                        content=ft.Icon(ft.Icons.PERSON, size=16, color=WHITE)),
-        ft.Column([
-            txt("مهندس رستگاری", size=13, font=FONT_MED, color=SIDE_TEXT),
-            txt("مسئول HSE", size=11, font=FONT, color=SIDE_MUTED),
-        ], spacing=1),
-    ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-
     return ft.Column(
         [
             brand,
@@ -85,8 +76,6 @@ def _nav_column(active, on_nav, alert_count=0):
             ft.Container(height=4),
             *items,
             ft.Container(expand=True),
-            ft.Divider(height=1, thickness=1, color="#2A2D30"),
-            user,
             ft.Container(
                 content=txt("نسخهٔ ۰٫۱ — نمونهٔ اولیه", size=10, font=FONT, color="#5A5E62"),
                 alignment=ft.alignment.Alignment(0, 0),

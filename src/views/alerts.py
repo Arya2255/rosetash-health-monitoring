@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 """هشدارها — آژیر مرکزی، هشدارهای فعال و تاریخچهٔ امروز."""
 
+import asyncio
+
 import flet as ft
 
 from theme import (
     BORDER, DANGER, DANGER_BG, FONT, FONT_B, FONT_MED, INK, R_BTN, R_CARD,
     TEXT_MUTED, WARN, WHITE, fa_num, txt,
 )
-from data import ALERTS_HISTORY
+from data import ALERTS_HISTORY, live_status
 from layout import flow, is_phone
 from components.common import card, status_chip
+from components.battery_alerts import battery_alert_panel
 
 
 def _action_btn(label, icon, bg, on_click):
@@ -22,6 +25,29 @@ def _action_btn(label, icon, bg, on_click):
 
 
 def alerts_view(app):
+    generation = app.state.get("alerts_gen", 0) + 1
+    app.state["alerts_gen"] = generation
+    battery_holder = ft.Container()
+
+    def refresh_battery():
+        doc = live_status()
+        battery_holder.content = battery_alert_panel((doc or {}).get("battery_alerts") or [])
+
+    refresh_battery()
+
+    async def battery_loop():
+        while app.state.get("view") == "alerts" and app.state.get("alerts_gen") == generation:
+            await asyncio.sleep(2)
+            if app.state.get("view") != "alerts" or app.state.get("alerts_gen") != generation:
+                return
+            try:
+                refresh_battery()
+                app.page.update()
+            except RuntimeError:
+                return
+
+    if hasattr(app.page, "run_task"):
+        app.page.run_task(battery_loop)
     # ── کارت آژیر مرکزی ──
     siren_on = app.siren_on
     siren_color = DANGER if siren_on else TEXT_MUTED
@@ -148,6 +174,7 @@ def alerts_view(app):
     siren_holder = ft.Container(width=None if is_phone(app) else 340,
                                 content=siren_card)
     return ft.Column([
+        battery_holder,
         flow(app, [siren_holder, active_col], spacing=14,
              row_kw={"vertical_alignment": ft.CrossAxisAlignment.START}),
         history_card,

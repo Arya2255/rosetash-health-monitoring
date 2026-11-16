@@ -16,6 +16,7 @@ from data import (
     can_backup, can_edit_map, can_manage_admins, can_manage_gateways,
     can_manage_remote, can_view_logs, get_role, list_admins,
     remove_admin, set_role, ensure_has_role, set_allowed_emails,
+    get_admin_name, set_admin_name,
 )
 from admin_roles import DEFAULT_OWNER
 
@@ -55,6 +56,40 @@ def settings_view(app):
     is_owner = can_manage_admins(my_role)
 
     sections = []
+
+    # ── مشخصات حساب — فقط برای خود کاربر واردشده ──
+    profile_card = None
+    profile_email = (admin_email or "").strip().lower()
+    if app.state.get("logged_in") and profile_email:
+        name_field = ft.TextField(
+            label="نام و نام خانوادگی", value=get_admin_name(profile_email),
+            text_size=13, max_length=120, data="admin-profile-name",
+        )
+
+        def _save_profile(e):
+            current_email = (app.state.get("admin_email") or "").strip().lower()
+            if not app.state.get("logged_in") or current_email != profile_email:
+                return
+            ok, msg = set_admin_name(profile_email, name_field.value or "")
+            if ok:
+                app.state["admin_name"] = get_admin_name(profile_email)
+                app.render()
+            app.snack(msg)
+
+        profile_card = card(ft.Column([
+            txt("حساب کاربری", size=15, font=FONT_B, color=INK),
+            name_field,
+            ft.Row([
+                ft.Button(
+                    "ذخیرهٔ نام", height=40, data="admin-profile-save",
+                    style=ft.ButtonStyle(
+                        bgcolor=INK, color=WHITE,
+                        shape=ft.RoundedRectangleBorder(radius=R_BTN),
+                    ),
+                    on_click=_save_profile,
+                ),
+            ]),
+        ], spacing=10), pad=18)
 
     # ═══════════ بخش مدیریت ادمین‌ها — فقط ادمین اصلی ═══════════
     if is_owner:
@@ -414,7 +449,7 @@ def settings_view(app):
     sections.append(about_card)
 
     # ═══════════ چیدمان دوستونه ═══════════
-    left_col = []
+    left_col = [profile_card] if profile_card is not None else []
     right_col = []
     
     if is_owner:

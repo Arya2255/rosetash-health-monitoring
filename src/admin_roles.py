@@ -29,6 +29,7 @@ ROLES_FILE = os.path.expanduser("~/.config/roztash/admin_roles.json")
 
 # ادمین پیش‌فرض — اولین ادمین اصلی
 DEFAULT_OWNER = "i.s.1377.1999@gmail.com"
+_MAX_ADMIN_NAME_LENGTH = 120
 
 # ═══════════ توابع داخلی ═══════════
 
@@ -57,6 +58,38 @@ def _write_roles(data: dict):
 
 
 # ═══════════ API عمومی ═══════════
+
+def get_admin_name(email: str) -> str:
+    """نام ثبت‌شدهٔ ادمین؛ بدون حدس نام از ایمیل یا نقش."""
+    email = (email or "").strip().lower()
+    if not email:
+        return ""
+    names = _read_roles().get("names", {})
+    name = names.get(email, "") if isinstance(names, dict) else ""
+    return name.strip() if isinstance(name, str) else ""
+
+
+def set_admin_name(email: str, name: str) -> tuple[bool, str]:
+    """ذخیرهٔ نام نمایشی در همان فایل نقش‌ها، بدون تغییر دسترسی‌ها."""
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        return False, "ایمیل معتبر نیست"
+    if not isinstance(name, str) or not name.strip():
+        return False, "نام را وارد کنید"
+    name = name.strip()
+    if len(name) > _MAX_ADMIN_NAME_LENGTH:
+        return False, "نام باید حداکثر ۱۲۰ نویسه باشد"
+    if (any(not (ch.isprintable() or ch in "\u200c\u200d") for ch in name)
+            or not any(ch.isprintable() and not ch.isspace() for ch in name)):
+        return False, "نام باید در یک خط و بدون نویسهٔ کنترلی باشد"
+    data = _read_roles()
+    data.setdefault("names", {})[email] = name
+    try:
+        _write_roles(data)
+    except OSError:
+        return False, "نام حساب کاربری ذخیره نشد؛ دسترسی به فایل تنظیمات را بررسی کنید"
+    return True, "نام حساب کاربری ذخیره شد"
+
 
 def get_role(email: Optional[str]) -> str:
     """دریافت نقش ایمیل.
@@ -174,6 +207,9 @@ def remove_admin(email: str) -> tuple[bool, str]:
     
     del roles[email]
     data["roles"] = roles
+    names = data.get("names", {})
+    if isinstance(names, dict):
+        names.pop(email, None)
     _write_roles(data)
     applog.info("ادمین حذف شد — %s", email)
     return True, "ادمین حذف شد"

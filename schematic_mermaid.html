@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Schematic - Roztash Health Monitoring (Mermaid Fixed)</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Vazirmatn', 'Tahoma', 'Arial', sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      margin: 0;
+      padding: 20px;
+      line-height: 1.5;
+    }
+    .container { max-width: 100%; margin: 0 auto; }
+    header {
+      text-align: center;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #30363d;
+    }
+    h1 { color: #58a6ff; margin: 0 0 4px; font-size: 1.4rem; }
+    .subtitle { color: #8b949e; font-size: 0.9rem; }
+    .mermaid {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 20px;
+      overflow: auto;
+    }
+    .notes {
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 16px; margin-top: 16px; font-size: 0.85rem; color: #8b949e;
+    }
+    .notes h3 { color: #f0f6fc; margin-top: 0; }
+    .notes ul { margin: 0; padding-right: 20px; }
+    .notes li { margin: 6px 0; }
+    .critical { color: #f85149; font-weight: 600; }
+    .warning { color: #d29922; font-weight: 600; }
+    .ok { color: #7ee787; font-weight: 600; }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 10px 14px; margin-bottom: 16px; font-size: 0.75rem;
+    }
+    .legend-item { display: flex; align-items: center; gap: 5px; color: #8b949e; }
+    .legend-line { width: 20px; height: 3px; border-radius: 2px; }
+    #error { color: #f85149; padding: 10px; background: #3a0d0d; border: 1px solid #f85149; border-radius: 4px; margin: 10px 0; display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>نقشه شماتیکی — Roztash Health Monitoring</h1>
+      <p class="subtitle">ESP32 NodeMCU ESP-32S V1.1 + W5500 Ethernet + DHT22/AM2302 + YS-502 5V Adapter</p>
+    </header>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-line" style="background:#7ee787"></div><span>Power Rails (VCC/GND)</span></div>
+      <div class="legend-item"><div class="legend-line" style="background:#58a6ff"></div><span>SPI Bus (HSPI)</span></div>
+      <div class="legend-item"><div class="legend-line" style="background:#d29922"></div><span>Control / Single-Bus</span></div>
+      <div class="legend-item"><div class="legend-line" style="background:#f85149"></div><span>Input Only / Warning</span></div>
+      <div class="legend-item"><div class="legend-line" style="background:transparent;border:1px dashed #8b949e"></div><span>NC / Floating</span></div>
+    </div>
+
+    <div id="error"></div>
+
+    <div class="mermaid" id="diagram">
+graph LR
+    %% ===== STYLES =====
+    classDef power fill:#1a3a1a,stroke:#7ee787,stroke-width:2,color:#7ee787
+    classDef spi fill:#0d1a3a,stroke:#58a6ff,stroke-width:2,color:#58a6ff
+    classDef ctrl fill:#3a2a0d,stroke:#d29922,stroke-width:2,color:#d29922
+    classDef input fill:#3a0d0d,stroke:#f85149,stroke-width:2,color:#f85149
+    classDef flash fill:#1a1a1a,stroke:#8b949e,stroke-width:1.5,color:#8b949e
+    classDef nc fill:transparent,stroke:#8b949e,stroke-width:1.5,color:#8b949e
+    classDef src fill:#161b22,stroke:#30363d,stroke-width:2,color:#7ee787
+    classDef mod fill:#161b22,stroke:#30363d,stroke-width:2,color:#f0f6fc
+    classDef resistor fill:#1a1a1a,stroke:#d29922,stroke-width:1.5,color:#d29922
+
+    %% ===== POWER SOURCES =====
+    YS502["YS-502 Adapter<br/>5V / 2A"]:::src
+    USB["Laptop USB<br/>5V Programming"]:::src
+
+    %% ===== ESP32 NODEMCU =====
+    subgraph ESP32["ESP32 NodeMCU ESP-32S V1.1 (Ai-Thinker / ZY-ESP32 Module)"]
+        direction TB
+        
+        %% Right Header J1 (top to bottom)
+        J1_1["J1-1: 3V3 VDD3V3<br/>Power Out"]:::power
+        J1_2["J1-2: EN<br/>Enable"]:::ctrl
+        J1_3["J1-3: SUP GPIO36<br/>VP SVP Input Only"]:::input
+        J1_4["J1-4: SUN VDD5V<br/>5V In"]:::power
+        J1_5["J1-5: P34 GND<br/>Ground"]:::power
+        J1_6["J1-6: P35 GPIO35<br/>VN Input Only"]:::input
+        J1_7["J1-7: P32 GPIO32<br/>Free"]:::ctrl
+        J1_8["J1-8: P33 GPIO33<br/>Free"]:::ctrl
+        J1_9["J1-9: P25 GPIO25<br/>W5500 RST"]:::ctrl
+        J1_10["J1-10: P26 GPIO26<br/>Free"]:::ctrl
+        J1_11["J1-11: P27 GPIO27<br/>Free"]:::ctrl
+        J1_12["J1-12: P14 GPIO14<br/>HSPI SCK"]:::spi
+        J1_13["J1-13: P12 GPIO12<br/>HSPI MISO"]:::spi
+        J1_14["J1-14: GND<br/>Ground"]:::power
+        J1_15["J1-15: P13 GPIO13<br/>HSPI MOSI"]:::spi
+        J1_16["J1-16: SD2 GPIO9<br/>Flash Do Not Use"]:::flash
+        J1_17["J1-17: SD3 GPIO10<br/>Board GND"]:::flash
+        J1_18["J1-18: GND GPIO11<br/>Ground"]:::power
+        J1_19["J1-19: 5V NC<br/>NC in Schematic"]:::nc
+        
+        %% Left Header J2 (top to bottom)
+        J2_1["J2-1: GND<br/>Ground"]:::power
+        J2_2["J2-2: P23 GPIO23<br/>DHT22 DATA"]:::ctrl
+        J2_3["J2-3: P22 GPIO22<br/>UART0 RX I2C"]:::ctrl
+        J2_4["J2-4: TX GPIO23<br/>Duplicate"]:::ctrl
+        J2_5["J2-5: RX GPIO22<br/>Duplicate"]:::ctrl
+        J2_6["J2-6: GND<br/>Ground"]:::power
+        J2_7["J2-7: P21 GND<br/>Ground"]:::power
+        J2_8["J2-8: P19 GPIO3<br/>Free"]:::ctrl
+        J2_9["J2-9: P18 GPIO34<br/>Input Only W5500 INT"]:::input
+        J2_10["J2-10: P5 GPIO23<br/>Duplicate"]:::ctrl
+        J2_11["J2-11: P17 GPIO22<br/>Duplicate"]:::ctrl
+        J2_12["J2-12: P16 GPIO21<br/>W5500 RST Alt"]:::ctrl
+        J2_13["J2-13: P4 GND<br/>GPIO4 NOT HERE"]:::power
+        J2_14["J2-14: P0 GPIO13<br/>Duplicate MOSI"]:::ctrl
+        J2_15["J2-15: P2 GPIO12<br/>Duplicate MISO"]:::ctrl
+        J2_16["J2-16: P15 GPIO14<br/>Duplicate SCK"]:::ctrl
+        J2_17["J2-17: SD1 GPIO27<br/>Flash"]:::flash
+        J2_18["J2-18: SD0 GPIO26<br/>Flash"]:::flash
+        J2_19["J2-19: CLK GPIO25<br/>Flash"]:::flash
+    end
+
+    %% ===== W5500 MODULE =====
+    subgraph W5500["W5500 Ethernet Module (HanRun HR911105A RJ45)"]
+        direction TB
+        W_3V3["3.3V<br/>Power In"]:::power
+        W_GND["GND<br/>Ground"]:::power
+        W_SCLK["SCLK<br/>SPI Clock"]:::spi
+        W_MISO["MISO<br/>SPI MISO"]:::spi
+        W_MOSI["MOSI<br/>SPI MOSI"]:::spi
+        W_CS["SCS CS<br/>Chip Select"]:::spi
+        W_RST["RSTn<br/>Reset Active Low"]:::ctrl
+        W_INT["INTn<br/>Interrupt Active Low"]:::ctrl
+        W_5V["5V<br/>Optional NC"]:::nc
+        W_RJ45["RJ45<br/>Ethernet Jack"]:::mod
+    end
+
+    %% ===== DHT22 SENSOR =====
+    subgraph DHT22["DHT22 AM2302 (Aosong ASAIR)"]
+        direction TB
+        D_VDD["VDD<br/>3.3V-5.5V"]:::power
+        D_DATA["DATA<br/>Single Bus"]:::ctrl
+        D_NC["NC<br/>Floating"]:::nc
+        D_GND["GND<br/>Ground"]:::power
+    end
+
+    %% ===== PULL-UP RESISTOR =====
+    R_PU["5kOhm Pull-up<br/>Resistor"]:::resistor
+
+    %% ===== CONNECTIONS =====
+    %% Power: Adapter -> ESP32
+    YS502 -->|Red +5V| J1_4
+    YS502 -->|Blue Black GND| J1_14
+    
+    %% USB -> ESP32 (dashed = simultaneous safe)
+    USB -.->|USB 5V via Schottky D1| J1_4
+    USB -.->|USB GND| J1_14
+
+    %% ESP32 3V3 Rail -> Peripherals
+    J1_1 -->|3.3V Out| W_3V3
+    J1_1 -->|3.3V Out| D_VDD
+
+    %% ESP32 GND Rail -> Peripherals
+    J1_14 -->|GND| W_GND
+    J1_14 -->|GND| D_GND
+
+    %% SPI Bus (HSPI)
+    J1_12 -->|SCK GPIO14| W_SCLK
+    J1_13 -->|MISO GPIO12| W_MISO
+    J1_15 -->|MOSI GPIO13| W_MOSI
+    J2_12 -->|CS GPIO21| W_CS
+
+    %% Control Lines
+    J1_9 -->|RST GPIO25| W_RST
+    J2_9 -.->|INT GPIO34 Input Only| W_INT
+
+    %% DHT22 Single-Bus
+    J2_2 -->|DATA GPIO23| D_DATA
+    
+    %% Pull-up: 3V3 -> Resistor -> DHT22 DATA
+    J1_1 -.->|3.3V| R_PU
+    R_PU -.->|Pull-up| D_DATA
+</div>
+
+    <div class="notes">
+      <h3>📋 نکات حیاتی اجرا</h3>
+      <ul>
+        <li><span class="ok">✓ آداپتور YS-502 + USB همزمان امن</span> — دیود شاتکی 1N5819 (D1) روی برد ESP32 از برگشت جریان جلوگیری می‌کند.</li>
+        <li><span class="ok">✓ W5500 تغذیه ۳.۳V مستقیم از ESP32 3V3</span> — پین ۵V ماژول OPTIONAL (خالی بگذار). ماژول HanRun HR911105A شامل مگنتیک یکپارچه.</li>
+        <li><span class="critical">✗ GPIO4 روی هدر وجود ندارد</span> — J2-13 (P4) = GND. برای W5500 RST از GPIO25 (J1-9) یا GPIO21 (J2-12) استفاده کنید.</li>
+        <li><span class="critical">✗ J1-19 برچسب 5V دارد اما NC است</span> — به هیچ‌چیز وصل نکنید.</li>
+        <li><span class="critical">✗ فلش داخلی GPIO6-11 روی هدر موجودند</span> — SD2,SD3,SD1,SD0,CLK = GPIO9,10,27,26,25 ❌ استفاده نکنید.</li>
+        <li><span class="warning">⚠ تضاد GPIO23</span> — DHT22 DATA و W5500 CS هر دو می‌خواهند GPIO23. <strong>حل:</strong> W5500 CS → GPIO21 (J2-12 P16), DHT22 DATA → GPIO23 (J2-2 P23).</li>
+        <li><span class="warning">⚠ Pull-up ۵kΩ برای DHT22 DATA الزامی</span> — بین GPIO23 و 3V3.</li>
+        <li><span class="warning">⚠ فقط‌ورودی: GPIO34,35,36,39</span> — SUP(J1-3), P35(J1-6), P18(J2-9) — خروجی ندهید.</li>
+        <li><span class="ok">✓ پورت سریال CP2102</span> — در لینوکس <code>/dev/ttyUSB0</code>، درایور پیش‌فرض.</li>
+        <li><span class="ok">✓ ESP32 Module: ZY-ESP32 (WROOM-32 equivalent)</span> — FCC/CE/SRRC، Cristal 40MHz داخلی.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        primaryColor: '#161b22',
+        primaryTextColor: '#e6edf3',
+        primaryBorderColor: '#30363d',
+        lineColor: '#8b949e',
+        secondaryColor: '#0d1117',
+        tertiaryColor: '#21262d',
+        background: '#0d1117',
+        mainBkg: '#0d1117',
+        secondBkg: '#161b22',
+        tertiaryBkg: '#21262d',
+        nodeBorder: '#30363d',
+        clusterBkg: '#161b22',
+        clusterBorder: '#30363d',
+        fontFamily: 'Vazirmatn, Tahoma, Arial',
+        fontSize: '12px',
+        edgeLabelBackground: '#0d1117'
+      },
+      flowchart: {
+        useMaxWidth: false,
+        htmlLabels: true,
+        curve: 'basis',
+        rankdir: 'LR',
+        nodeSpacing: 50,
+        rankSpacing: 80
+      },
+      securityLevel: 'loose'
+    });
+
+    // Error handling
+    document.addEventListener('DOMContentLoaded', function() {
+      const diagram = document.getElementById('diagram');
+      const errorDiv = document.getElementById('error');
+      
+      // Check for mermaid errors
+      const observer = new MutationObserver(function(mutations) {
+        if (diagram.querySelector('.mermaid-error')) {
+          const err = diagram.querySelector('.mermaid-error');
+          errorDiv.textContent = 'Mermaid Error: ' + err.textContent;
+          errorDiv.style.display = 'block';
+        }
+      });
+      observer.observe(diagram, { childList: true, subtree: true });
+    });
+  </script>
+</body>
+</html>

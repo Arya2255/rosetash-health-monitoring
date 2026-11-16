@@ -104,7 +104,7 @@ def reports_view(app):
         ft.Container(
             height=215, alignment=ft.Alignment.BOTTOM_CENTER,
             content=ft.Row(bars, spacing=12 if phone else 24,
-                           alignment=ft.MainAxisalignment.Alignment(0, 0),
+                           alignment=ft.MainAxisAlignment.CENTER,
                            vertical_alignment=ft.CrossAxisAlignment.END),
         ),
     ], spacing=14), pad=18)

@@ -22,7 +22,7 @@ def send_otp_email(to_email: str, code: str) -> tuple[bool, str]:
     user = cfg.get("user", "")
     password = cfg.get("password", "")
     
-    # همیشه چاپ در کنسول برای تست
+    # DEBUG ONLY: remove this OTP console print after local login testing.
     print(f"\n{'='*50}")
     print(f"🔐 کد تأیید برای {to_email}: {code}")
     print(f"{'='*50}\n")

@@ -29,6 +29,7 @@ import views.management as v_management  # noqa: E402
 import views.reports as v_reports  # noqa: E402
 import views.settings as v_settings  # noqa: E402
 import views.logs as v_logs  # noqa: E402
+import views.login as v_login  # noqa: E402
 
 
 class FakePage:
@@ -87,6 +88,7 @@ def main():
     app = FakeApp()
     checks = [
         ("پوسته / نوار کناری", lambda: c_sidebar.build_sidebar("dashboard", app.go, 3)),
+        ("ورود", lambda: v_login.login_view(app)),
         ("داشبورد", lambda: v_dashboard.dashboard_view(app)),
         ("پایش زنده", lambda: v_live.live_view(app)),
         ("نقشهٔ کارخانه", lambda: v_map.map_view(app)),

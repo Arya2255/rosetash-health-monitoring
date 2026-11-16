@@ -54,6 +54,10 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 import applog
 from tools.discovery_udp import DiscoveryServer
+import battery_alerts as battery_policy
+from battery_alerts import (claim as claim_battery, observe as observe_battery,
+                         pending_rows as pending_battery_rows, record_publish as record_battery_publish,
+                         record_result as record_battery_result, visible_alerts as visible_battery_alerts)
 from admin_roles import (can_manage_employee_scanning,
                          can_manage_employee_schedules, get_role)
 from employee_schedule import (DAY_KEYS, MAX_ACTIVE_MACS, TEHRAN, active_employee_macs,
@@ -152,6 +156,7 @@ def db() -> sqlite3.Connection:
         _db.row_factory = sqlite3.Row
         _db.execute("PRAGMA journal_mode=WAL")
         _db.executescript(SCHEMA)
+        battery_policy.ensure_schema(_db)
         # مهاجرت نرم — ستون‌های تازهٔ کارکنان روی دیتابیس‌های موجود
         cols = {r[1] for r in _db.execute("PRAGMA table_info(employees)")}
         for col, coltype in (("conditions", "TEXT"), ("medications", "TEXT"),
@@ -403,11 +408,16 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
             mac = _norm_mac(doc.get("mac"))
             if not _valid_mac(mac) or not _mac_data_visible(c, mac, ts, ts):
                 return
+            level = doc.get("battery")
+            if not battery_policy.valid_percent(level):
+                level = None
+            if c.execute("SELECT mac FROM employees WHERE mac=?", (mac,)).fetchone():
+                observe_battery(c, mac, gw, level, ts)
             c.execute(
                 "INSERT INTO vitals(ts,gw,mac,battery,dev_fw,dev_hw,dev_maker,"
                 "spo2_ack,hrv_ack,steps,spo2_raw,hrv_raw,payload) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (ts, gw, mac, doc.get("battery"), doc.get("dev_fw"),
+                (ts, gw, mac, level, doc.get("dev_fw"),
                  doc.get("dev_hw"), doc.get("dev_maker"),
                  1 if doc.get("spo2_ack") else 0, 1 if doc.get("hrv_ack") else 0,
                  doc.get("steps"), json.dumps(doc.get("spo2_raw") or []),
@@ -418,6 +428,8 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
             mac = _norm_mac(doc.get("mac"))
             if mac and (not _valid_mac(mac) or not _mac_data_visible(c, mac, ts, ts)):
                 return
+            if leaf == "event":
+                record_battery_result(c, gw, {**doc, "mac": mac}, ts)
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
                       (ts, gw, doc.get("type", leaf), mac or None, payload))
         # هرس سبک
@@ -425,7 +437,7 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
         c.execute("DELETE FROM health WHERE id <= (SELECT MAX(id) FROM health) - ?", (HEALTH_KEEP,))
         c.execute("DELETE FROM vitals WHERE id <= (SELECT MAX(id) FROM vitals) - ?", (VITALS_KEEP,))
         c.commit()
-    if leaf in ("status", "presence"):
+    if leaf in ("status", "presence", "vitals", "event"):
         _scan_policy_wake.set()
 
 
@@ -679,6 +691,7 @@ def remove_employee(mac) -> tuple[bool, str]:
     with _lock:
         c = db()
         cur = c.execute("DELETE FROM employees WHERE mac=?", (mac,))
+        c.execute("DELETE FROM battery_alert_state WHERE mac=?", (mac,))
         c.commit()
     if cur.rowcount == 0:
         return False, "not found"
@@ -1532,6 +1545,9 @@ def snapshot(now: float | None = None) -> dict:
                     v["vitals_age_s"] = round(now - back["ts"], 1)
             vitals.append(v)
         employees = _employees_view(c, now)
+        battery_alert_rows = visible_battery_alerts(
+            c, now, lambda mac, at, current: current - at <= VITALS_TTL
+            and _mac_data_visible(c, mac, at, current))
         bands_known = _bands_known_view(c, now)
         map_gateways = _gateways_view(c, now)
         catalogs = {kind: [] for kind in CATALOG_KINDS}
@@ -1544,7 +1560,7 @@ def snapshot(now: float | None = None) -> dict:
         "gateways": gws, "bands": bands, "health": health, "vitals": vitals,
         "employees": employees, "bands_known": bands_known,
         "catalogs": catalogs, "map_gateways": map_gateways,
-        "events": events,
+        "events": events, "battery_alerts": battery_alert_rows,
     }
 
 
@@ -1604,6 +1620,85 @@ def publish_scan_policies() -> dict[str, str]:
     return results
 
 
+_battery_dispatch_lock = threading.Lock()
+
+
+def dispatch_battery_alerts(now: float | None = None) -> dict:
+    """Try pending episodes outside the DB lock; ACKs alone confirm vibration."""
+    results = {}
+    with _battery_dispatch_lock:
+        moment = time.time() if now is None else now
+        with _lock:
+            candidates = [row["mac"] for row in pending_battery_rows(db(), moment)]
+        for mac in candidates:
+            moment = time.time() if now is None else now
+            with _lock:
+                c = db()
+                row = c.execute("SELECT * FROM battery_alert_state WHERE mac=?", (mac,)).fetchone()
+                if row is None or not row["active"] or row["confirmed_at"] is not None:
+                    continue
+                retry_window_over = (row["first_attempt_at"] is not None
+                                     and moment - row["first_attempt_at"] >= battery_policy.RETRY_WINDOW_SECONDS)
+                if row["attempts"] >= battery_policy.MAX_ATTEMPTS or retry_window_over:
+                    if row["delivery_status"] != "failed":
+                        c.execute("UPDATE battery_alert_state SET delivery_status='unconfirmed',"
+                                  "last_error='ack_not_received' WHERE mac=?", (mac,))
+                    c.commit()
+                    continue
+                if (row["next_attempt_at"] > moment or moment - row["sample_at"] > VITALS_TTL
+                        or not _mac_data_visible(c, mac, row["sample_at"], moment)):
+                    continue
+                # After any attempt keep retries on the same receiver; its dedupe cache
+                # prevents a lost ACK from triggering a second physical vibration.
+                gw = row["last_gateway"] if row["attempts"] else None
+                if not gw:
+                    gw = _fresh_bands(c, moment, installed_only=True).get(mac, {}).get("gw")
+                observation = (c.execute("SELECT b.seen_at FROM band_observations b "
+                                        "JOIN gateway_registry g ON g.gw=b.gw "
+                                        "WHERE b.mac=? AND b.gw=? AND g.kind='installed'",
+                                        (mac, gw)).fetchone() if gw else None)
+                status = c.execute("SELECT last_seen,payload FROM gateways WHERE gw=?", (gw,)).fetchone() if gw else None
+                error = None
+                if (observation is None or not 0 <= moment - observation["seen_at"] <= PRESENCE_TTL
+                        or not _mac_data_visible(c, mac, observation["seen_at"], moment)):
+                    error = "band_unavailable"
+                elif status is None or not status["last_seen"] or not 0 <= moment - status["last_seen"] <= GATEWAY_ONLINE_TTL:
+                    error = "gateway_unavailable"
+                else:
+                    try:
+                        capabilities = json.loads(status["payload"] or "{}")
+                    except (TypeError, ValueError):
+                        capabilities = {}
+                    if not isinstance(capabilities, dict) or capabilities.get("vibration_request_id") is not True:
+                        error = "gateway_update_required"
+                    elif capabilities.get("scan_policy_ready") is not True:
+                        error = "policy_unavailable"
+                if error:
+                    c.execute("UPDATE battery_alert_state SET last_error=? WHERE mac=?", (error, mac))
+                    c.commit()
+                    continue
+                # The firmware's command queue has one slot. Don't flood one receiver.
+                busy = c.execute("SELECT 1 FROM battery_alert_state WHERE mac!=? AND last_gateway=? "
+                                 "AND active=1 AND confirmed_at IS NULL AND attempts>0 "
+                                 "AND delivery_status IN ('dispatching','awaiting_ack') AND next_attempt_at>?",
+                                 (mac, gw, moment)).fetchone()
+                if busy:
+                    continue
+                request = claim_battery(c, row, gw, moment)
+                c.commit()
+            if request is None:
+                continue
+            try:
+                ok, detail = publish(f"roztash/{gw}/cmd", json.dumps(request, separators=(",", ":")), retained=False)
+            except Exception:
+                ok, detail = False, "publish_failed"
+            with _lock:
+                record_battery_publish(db(), request, gw, moment, ok)
+                db().commit()
+            results[mac] = "sent" if ok else "publish_failed"
+    return results
+
+
 def scan_policy_loop() -> None:
     while True:
         _scan_policy_wake.clear()
@@ -1613,6 +1708,7 @@ def scan_policy_loop() -> None:
             for gw, result in results.items():
                 if result != "sent":
                     log(f"scan policy not delivered to {gw}: {result}")
+            dispatch_battery_alerts()
             policy = employee_scan_policy()
             transition = policy["next_transition_at"]
             delay = max(0.05, _SCAN_POLICY_REFRESH_S - (time.monotonic() - started))

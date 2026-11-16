@@ -19,6 +19,7 @@
 #include "network_config.h"
 #include "health_schedule.h"
 #include "mqtt_packet_guard.h"
+#include "vibration_command.h"
 
 class PolicyNetworkClient : public NetworkClient {
  public:
@@ -53,6 +54,8 @@ class MqttLink {
 
   // Remote commands from roztash/<gw>/cmd — consume-once.
   bool takeCommand(char* action, size_t action_cap, char* mac, size_t mac_cap);
+  void finishVibration(bool success, const char* detail = "");
+  void rejectVibration(const char* detail);
 
  private:
   bool send(const char* topic, const char* payload, bool retained,
@@ -61,6 +64,9 @@ class MqttLink {
   void flushQueue();
   void revokePolicy();
   void receivePolicy(const uint8_t* payload, size_t len);
+  void publishCommandEvent(const char* type, const roztash::VibrationCommand& cmd,
+                           const char* detail);
+  void cancelPendingCommand(const char* detail);
 
   BleCentral* ble_ = nullptr;
   roztash::HealthSchedule* schedule_ = nullptr;
@@ -74,7 +80,5 @@ class MqttLink {
   GatewayConfig cfg_{};
   char base_[40] = {0};
   uint32_t last_mqtt_attempt_ms_ = 0;
-  char cmd_action_[16] = {0};
-  char cmd_mac_[20] = {0};
-  volatile bool cmd_pending_ = false;
+  roztash::VibrationCommands vibration_commands_;
 };

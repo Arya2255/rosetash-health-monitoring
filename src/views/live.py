@@ -22,6 +22,7 @@ from data import live_status, send_vibrate
 from layout import flow, is_phone
 from components.common import card, section_header
 from components.monitoring import monitoring_interval_card
+from components.battery_alerts import battery_alert_panel
 
 CHART_LEN = 60          # ستون‌های نمودار
 FEED_LEN = 6            # ردیف‌های خوراک رویداد
@@ -149,6 +150,7 @@ def live_view(app):
     state["live_gen"] = gen
 
     doc = live_status()
+    battery_holder = ft.Container()
 
     # ── چیپ اتصال ──
     conn_dot = ft.Container(width=8, height=8, border_radius=4, bgcolor=OFFLINE)
@@ -331,6 +333,7 @@ def live_view(app):
             del hist[:len(hist) - CHART_LEN * 2]
 
     def _apply(d):
+        battery_holder.content = battery_alert_panel((d or {}).get("battery_alerts") or [])
         # چیپ اتصال
         if d and d.get("ok"):
             conn_dot.bgcolor = OK
@@ -517,6 +520,20 @@ def live_view(app):
                 entries.append((_epoch(e.get("ts")), "warn",
                                 f"{who} — مچ‌بند هنگام نوبت اندازه‌گیری در دسترس نبود"))
                 continue
+            if kind in ("battery_low", "battery_recovered", "battery_vibration_sent",
+                        "battery_vibration_confirmed", "battery_vibration_failed"):
+                labels = {
+                    "battery_low": "هشدار شارژ کم مچ‌بند",
+                    "battery_recovered": "شارژ مچ‌بند بازیابی شد",
+                    "battery_vibration_sent": "فرمان ویبرهٔ شارژ کم ارسال شد؛ هنوز تأیید نشده",
+                    "battery_vibration_confirmed": "ویبرهٔ هشدار شارژ کم تأیید شد",
+                    "battery_vibration_failed": "ویبرهٔ هشدار شارژ کم تأیید نشد",
+                }
+                who = e.get("employee_name") or e.get("mac") or "کارکن"
+                entries.append((_epoch(e.get("ts")),
+                                "ok" if kind in ("battery_recovered", "battery_vibration_confirmed") else "warn",
+                                f"{who} — {labels[kind]}"))
+                continue
             if kind == "vitals":
                 entries.append((_epoch(e.get("ts")), "ok",
                                 "باتری و اطلاعات دستگاه به‌روز شد"))
@@ -563,6 +580,7 @@ def live_view(app):
         section_header("پایش زندهٔ گیت‌وی",
                        "دادهٔ واقعی از پل محلی — به‌روزرسانی هر ثانیه",
                        trailing=conn_chip),
+        battery_holder,
         monitoring_interval_card(app),
         kpi_row,
         vitals_row,

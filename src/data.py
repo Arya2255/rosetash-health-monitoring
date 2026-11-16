@@ -61,6 +61,9 @@ from live import (  # noqa: E402,F401
     send_vibrate,
 )
 
+# ── دسترسی به اینترنت — نشان «زنده» نوار بالا از همین‌جا پر می‌شود ──
+from netcheck import internet_available  # noqa: E402,F401
+
 # ── نقشهٔ کارخانه — تصویر پایه و موقعیت نشانگرها ──
 from map_data import (  # noqa: E402,F401
     MAP_ENTRANCE, MAP_GATEWAYS, MAP_IMAGE, MAP_IMAGE_H, MAP_IMAGE_W,
@@ -91,9 +94,11 @@ from admin_roles import (  # noqa: E402,F401
     can_manage_remote,
     can_view_logs,
     ensure_has_role,
+    get_admin_name,
     get_role,
     list_admins,
     remove_admin,
+    set_admin_name,
     set_role,
 )
 

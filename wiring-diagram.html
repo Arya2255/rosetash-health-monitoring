@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>سیم‌کشی Roztash Health Monitoring - ESP32 NodeMCU ESP-32S V1.1</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Vazirmatn', 'Tahoma', 'Arial', sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      margin: 0;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    h1 { text-align: center; color: #58a6ff; margin-bottom: 8px; font-size: 1.8rem; }
+    .subtitle { text-align: center; color: #8b949e; margin-bottom: 24px; font-size: 1rem; }
+    .board-wrapper { display: flex; flex-wrap: wrap; justify-content: center; gap: 32px; margin-bottom: 32px; }
+    .board {
+      background: #161b22;
+      border: 2px solid #30363d;
+      border-radius: 12px;
+      padding: 24px;
+      position: relative;
+      min-width: 320px;
+      max-width: 380px;
+      flex: 1;
+    }
+    .board-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #30363d;
+    }
+    .board-title { font-weight: 700; font-size: 1.1rem; color: #f0f6fc; }
+    .board-badge {
+      background: #238636; color: white; padding: 2px 8px;
+      border-radius: 4px; font-size: 0.75rem; font-weight: 600;
+    }
+    .pin-row { display: flex; gap: 8px; margin-bottom: 6px; }
+    .pin {
+      flex: 1; min-width: 0;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 0.8rem;
+      transition: all 0.2s ease;
+      cursor: default;
+    }
+    .pin:hover { border-color: #58a6ff; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(88,166,255,0.15); }
+    .pin-label { font-weight: 700; color: #f0f6fc; }
+    .pin-gpio { color: #8b949e; font-size: 0.7rem; font-family: monospace; }
+    .pin-function { color: #a5d6ff; font-size: 0.65rem; margin-top: 2px; }
+    .pin-warning { color: #f85149; font-size: 0.65rem; margin-top: 2px; }
+    .pin-power { color: #7ee787; font-size: 0.65rem; margin-top: 2px; }
+    .pin-nc { color: #8b949e; font-size: 0.65rem; margin-top: 2px; text-decoration: line-through; }
+    .side-label { writing-mode: vertical-rl; text-orientation: mixed; font-weight: 700; color: #58a6ff; font-size: 0.85rem; padding: 8px 0; }
+    .side-container { display: flex; gap: 12px; align-items: flex-start; }
+    .connections { background: #161b22; border: 2px solid #30363d; border-radius: 12px; padding: 24px; margin-bottom: 24px; }
+    .conn-title { font-size: 1.1rem; font-weight: 700; color: #f0f6fc; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+    .conn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .conn-card {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 16px;
+      border-left: 4px solid var(--color);
+    }
+    .conn-card h4 { margin: 0 0 12px; color: var(--color); font-size: 0.95rem; }
+    .conn-line { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 0.85rem; }
+    .conn-line:last-child { border-bottom: none; }
+    .conn-from { color: #8b949e; font-family: monospace; font-size: 0.8rem; }
+    .conn-arrow { color: #58a6ff; margin: 0 8px; }
+    .conn-to { color: #7ee787; font-family: monospace; font-size: 0.8rem; font-weight: 600; }
+    .legend { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; padding: 16px; background: #161b22; border: 2px solid #30363d; border-radius: 12px; margin-bottom: 24px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #8b949e; }
+    .legend-color { width: 16px; height: 16px; border-radius: 4px; border: 1px solid #30363d; }
+    .notes { background: #161b22; border: 2px solid #30363d; border-radius: 12px; padding: 20px; }
+    .notes h3 { margin-top: 0; color: #f0f6fc; }
+    .notes ul { margin: 0; padding-right: 20px; color: #8b949e; font-size: 0.9rem; }
+    .notes li { margin-bottom: 8px; }
+    .notes .critical { color: #f85149; font-weight: 600; }
+    .notes .warning { color: #d29922; font-weight: 600; }
+    .notes .ok { color: #7ee787; font-weight: 600; }
+    @media (max-width: 900px) {
+      .board-wrapper { flex-direction: column; align-items: center; }
+      .board { width: 100%; max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>سیم‌کشی Roztash Health Monitoring</h1>
+    <p class="subtitle">ESP32 NodeMCU ESP-32S V1.1 (Ai-Thinker) + W5500 Ethernet + DHT22/AM2302 + YS-502 5V Adapter</p>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-color" style="background:#7ee787;border-color:#7ee787"></div><span>قدرت (Power / GND)</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#58a6ff;border-color:#58a6ff"></div><span>SPI / داده (Data)</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#d29922;border-color:#d29922"></div><span>کنترل / وقفه (Control / INT)</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#f85149;border-color:#f85149"></div><span>فقط ورودی (Input Only)</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#8b949e;border-color:#8b949e"></div><span>فلش داخلی / استفاده نکن</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:transparent;border:2px dashed #8b949e"></div><span>خالی (NC / Floating)</span></div>
+    </div>
+
+    <div class="board-wrapper">
+      <!-- RIGHT SIDE (J1) -->
+      <div class="board">
+        <div class="board-header">
+          <span class="board-title">ردیف راست (J1) — بالا به پایین</span>
+          <span class="board-badge">19 پین</span>
+        </div>
+        <div class="side-container">
+          <span class="side-label">J1</span>
+          <div class="pin-row" style="flex-direction:column; gap:6px;">
+            <div class="pin"><div class="pin-label">۱  3V3</div><div class="pin-power">VDD3V3 خروجی ۳.۳V — تغذیه ماژول‌ها</div></div>
+            <div class="pin"><div class="pin-label">۲  EN</div><div class="pin-function">CH_PU / Enable (Active High)</div></div>
+            <div class="pin"><div class="pin-label">۳  SUP</div><div class="pin-warning">GPIO36 (VP/SVP) — فقط ورودی (ADC1_CH0)</div></div>
+            <div class="pin"><div class="pin-label">۴  SUN</div><div class="pin-power">VDD5V ورودی ۵V — آداپتور YS-502 اینجا!</div></div>
+            <div class="pin"><div class="pin-label">۵  P34</div><div class="pin-power">GND (برچسب P34 گمراه‌کننده)</div></div>
+            <div class="pin"><div class="pin-label">۶  P35</div><div class="pin-warning">GPIO35 (VN) — فقط ورودی (ADC1_CH7)</div></div>
+            <div class="pin"><div class="pin-label">۷  P32</div><div class="pin-function">GPIO32 — رزرو / W5500 RST جایگزین</div></div>
+            <div class="pin"><div class="pin-label">۸  P33</div><div class="pin-function">GPIO33 — رزرو</div></div>
+            <div class="pin"><div class="pin-label">۹  P25</div><div class="pin-function">GPIO25 — <strong>W5500 RST (پیشنهاد)</strong></div></div>
+            <div class="pin"><div class="pin-label">۱۰ P26</div><div class="pin-function">GPIO26 — رزرو</div></div>
+            <div class="pin"><div class="pin-label">۱۱ P27</div><div class="pin-function">GPIO27 — رزرو</div></div>
+            <div class="pin"><div class="pin-label">۱۲ P14</div><div class="pin-function" style="color:#58a6ff"><strong>GPIO14 — HSPI_SCK → W5500 SCLK</strong></div></div>
+            <div class="pin"><div class="pin-label">۱۳ P12</div><div class="pin-function" style="color:#58a6ff"><strong>GPIO12 — HSPI_MISO → W5500 MISO</strong></div></div>
+            <div class="pin"><div class="pin-label">۱۴ GND</div><div class="pin-power">زمین مشترک</div></div>
+            <div class="pin"><div class="pin-label">۱۵ P13</div><div class="pin-function" style="color:#58a6ff"><strong>GPIO13 — HSPI_MOSI → W5500 MOSI</strong></div></div>
+            <div class="pin"><div class="pin-label">۱۶ SD2</div><div class="pin-nc">GPIO9 — فلش داخلی ❌ استفاده نکن</div></div>
+            <div class="pin"><div class="pin-label">۱۷ SD3</div><div class="pin-power">GND در برد واقعی (Schematic: GPIO11 CMD)</div></div>
+            <div class="pin"><div class="pin-label">۱۸ GND</div><div class="pin-power">زمین (Schematic: GPIO11 CMD — فلش داخلی)</div></div>
+            <div class="pin"><div class="pin-label">۱۹ 5V</div><div class="pin-nc">NC در Schematic — <strong>خالی بگذار</strong></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LEFT SIDE (J2) -->
+      <div class="board">
+        <div class="board-header">
+          <span class="board-title">ردیف چپ (J2) — بالا به پایین</span>
+          <span class="board-badge">19 پین</span>
+        </div>
+        <div class="side-container">
+          <span class="side-label">J2</span>
+          <div class="pin-row" style="flex-direction:column; gap:6px;">
+            <div class="pin"><div class="pin-label">۱  GND</div><div class="pin-power">زمین مشترک</div></div>
+            <div class="pin"><div class="pin-label">۲  P23</div><div class="pin-function" style="color:#58a6ff"><strong>GPIO23 — DHT22 DATA + Pull-up 5kΩ</strong></div></div>
+            <div class="pin"><div class="pin-label">۳  P22</div><div class="pin-function">GPIO22 — UART0_RX / I2C_SCL</div></div>
+            <div class="pin"><div class="pin-label">۴  TX</div><div class="pin-function">GPIO23 (U0TX) — تکرار P23</div></div>
+            <div class="pin"><div class="pin-label">۵  RX</div><div class="pin-function">GPIO22 (U0RX) — تکرار P22</div></div>
+            <div class="pin"><div class="pin-label">۶  GND</div><div class="pin-power">زمین (Schematic: GPIO1/P21)</div></div>
+            <div class="pin"><div class="pin-label">۷  P21</div><div class="pin-power">زمین (Schematic: GND) — برچسب گمراه‌کننده</div></div>
+            <div class="pin"><div class="pin-label">۸  P19</div><div class="pin-function">GPIO3 — رزرو</div></div>
+            <div class="pin"><div class="pin-label">۹  P18</div><div class="pin-warning">GPIO34 — فقط ورودی → W5500 INT (اختیاری)</div></div>
+            <div class="pin"><div class="pin-label">۱۰ P5</div><div class="pin-function">GPIO23 — تکرار P23/TX</div></div>
+            <div class="pin"><div class="pin-label">۱۱ P17</div><div class="pin-function">GPIO22 — تکرار P22/RX</div></div>
+            <div class="pin"><div class="pin-label">۱۲ P16</div><div class="pin-function" style="color:#d29922"><strong>GPIO21 — W5500 RST جایگزین</strong></div></div>
+            <div class="pin"><div class="pin-label">۱۳ P4</div><div class="pin-power">GND — <strong>GPIO4 اینجا نیست!</strong></div></div>
+            <div class="pin"><div class="pin-label">۱۴ P0</div><div class="pin-function">GPIO13 — تکرار P13 (HSPI_MOSI)</div></div>
+            <div class="pin"><div class="pin-label">۱۵ P2</div><div class="pin-function">GPIO12 — تکرار P12 (HSPI_MISO)</div></div>
+            <div class="pin"><div class="pin-label">۱۶ P15</div><div class="pin-function">GPIO14 — تکرار P14 (HSPI_SCK)</div></div>
+            <div class="pin"><div class="pin-label">۱۷ SD1</div><div class="pin-nc">GPIO27 — فلش داخلی ❌ استفاده نکن</div></div>
+            <div class="pin"><div class="pin-label">۱۸ SD0</div><div class="pin-nc">GPIO26 — فلش داخلی ❌ استفاده نکن</div></div>
+            <div class="pin"><div class="pin-label">۱۹ CLK</div><div class="pin-nc">GPIO25 — فلش داخلی ❌ استفاده نکن</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONNECTIONS -->
+    <div class="connections">
+      <div class="conn-title">🔌 اتصالات پیشنهادی (Final Wiring)</div>
+      <div class="conn-grid">
+
+        <!-- POWER -->
+        <div class="conn-card" style="--color:#7ee787">
+          <h4>⚡ تغذیه (Power)</h4>
+          <div class="conn-line"><span class="conn-from">آداپتور YS-502 (+) قرمز</span><span class="conn-arrow">──►</span><span class="conn-to">SUN (J1-4) = VDD5V IN</span></div>
+          <div class="conn-line"><span class="conn-from">آداپتور YS-502 (-) آبی/مشکی</span><span class="conn-arrow">──►</span><span class="conn-to">GND (J1-14 / J2-1 / J2-6 / J2-7 / J2-13)</span></div>
+          <div class="conn-line"><span class="conn-from">ESP32 3V3 (J1-1)</span><span class="conn-arrow">──►</span><span class="conn-to">W5500 3.3V + DHT22 VDD (پین ۱)</span></div>
+          <div class="conn-line"><span class="conn-from">لپ‌تاپ USB</span><span class="conn-arrow">──►</span><span class="conn-to">micro-USB ESP32 (فقط برنامه‌ریزی)</span></div>
+          <div class="conn-line"><span class="conn-from">W5500 پین 5V</span><span class="conn-arrow">──►</span><span class="conn-to" style="color:#f85149">خالی بگذار (NC)</span></div>
+          <div class="conn-line"><span class="conn-from">ESP32 5V (J1-19)</span><span class="conn-arrow">──►</span><span class="conn-to" style="color:#f85149">خالی بگذار (NC در Schematic)</span></div>
+        </div>
+
+        <!-- W5500 SPI -->
+        <div class="conn-card" style="--color:#58a6ff">
+          <h4>🌐 W5500 Ethernet (HSPI سخت‌افزاری)</h4>
+          <div class="conn-line"><span class="conn-from">W5500 SCLK</span><span class="conn-arrow">──►</span><span class="conn-to">P14 / GPIO14 (J1-12)</span></div>
+          <div class="conn-line"><span class="conn-from">W5500 MISO</span><span class="conn-arrow">──►</span><span class="conn-to">P12 / GPIO12 (J1-13)</span></div>
+          <div class="conn-line"><span class="conn-from">W5500 MOSI</span><span class="conn-arrow">──►</span><span class="conn-to">P13 / GPIO13 (J1-15)</span></div>
+          <div class="conn-line"><span class="conn-from">W5500 CS (SCSn)</span><span class="conn-arrow">──►</span><span class="conn-to">P16 / GPIO21 (J2-12) <em>یا GPIO5 اگر آزاد باشد</em></span></div>
+          <div class="conn-line"><span class="conn-from">W5500 RSTn</span><span class="conn-arrow">──►</span><span class="conn-to">P25 / GPIO25 (J1-9) <em>Active Low، ≥500µs</em></span></div>
+          <div class="conn-line"><span class="conn-from">W5500 INTn</span><span class="conn-arrow">──►</span><span class="conn-to">P18 / GPIO34 (J2-9) <em>اختیاری، فقط ورودی</em></span></div>
+          <div class="conn-line"><span class="conn-from">W5500 3.3V</span><span class="conn-arrow">──►</span><span class="conn-to">3V3 (J1-1)</span></div>
+          <div class="conn-line"><span class="conn-from">W5500 GND</span><span class="conn-arrow">──►</span><span class="conn-to">GND مشترک</span></div>
+        </div>
+
+        <!-- DHT22 -->
+        <div class="conn-card" style="--color:#d29922">
+          <h4>🌡️ DHT22 / AM2302 (Single-Bus)</h4>
+          <div class="conn-line"><span class="conn-from">DHT22 VDD (پین ۱، قرمز)</span><span class="conn-arrow">──►</span><span class="conn-to">3V3 (J1-1)</span></div>
+          <div class="conn-line"><span class="conn-from">DHT22 DATA (پین ۲، زرد)</span><span class="conn-arrow">──►</span><span class="conn-to">P23 / GPIO23 (J2-2) + Pull-up 5kΩ به 3V3</span></div>
+          <div class="conn-line"><span class="conn-from">DHT22 NC (پین ۳)</span><span class="conn-arrow">──►</span><span class="conn-to" style="color:#f85149">معلق (Floating) — وصل نکن!</span></div>
+          <div class="conn-line"><span class="conn-from">DHT22 GND (پین ۴، مشکی)</span><span class="conn-arrow">──►</span><span class="conn-to">GND مشترک</span></div>
+          <div class="conn-line"><span class="conn-from">فاصله نمونه‌برداری</span><span class="conn-arrow">──►</span><span class="conn-to">≥ ۲ ثانیه (اجباری)</span></div>
+        </div>
+
+        <!-- PIN CONFLICTS -->
+        <div class="conn-card" style="--color:#f85149">
+          <h4>⚠️ تضادها و نکات حیاتی</h4>
+          <div class="conn-line"><span class="conn-from">GPIO23 (P23/TX/P5)</span><span class="conn-arrow">──►</span><span class="conn-to">DHT22 DATA + W5500 CS Konflit! → یکی عوض کن</span></div>
+          <div class="conn-line"><span class="conn-from">GPIO22 (P22/RX/P17)</span><span class="conn-arrow">──►</span><span class="conn-to">UART0 RX/TX — اگر Serial استفاده می‌کن، رزرو کن</span></div>
+          <div class="conn-line"><span class="conn-from">GPIO4</span><span class="conn-arrow">──►</span><span class="conn-to" style="color:#f85149">روی هدر نیست! (J2-13 P4 = GND)</span></div>
+          <div class="conn-line"><span class="conn-from">فلش داخلی (GPIO6-11)</span><span class="conn-arrow">──►</span><span class="conn-to" style="color:#8b949e">SD2,SD3,SD1,SD0,CLK,J1-18 — استفاده نکن</span></div>
+          <div class="conn-line"><span class="conn-from">فقط ورودی (34,35,36,39)</span><span class="conn-arrow">──►</span><span class="conn-to" style="color:#f85149">SUP, P35, P18 — خروجی نده</span></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- NOTES -->
+    <div class="notes">
+      <h3>📋 نکات مهم اجرا</h3>
+      <ul>
+        <li><span class="ok">✓ آداپتور YS-502 + USB همزمان امن است</span> — دیود شاتکی 1N5819 (D1) روی برد ESP32 از برگشت جریان به USB جلوگیری می‌کند (Schematic تأیید شده).</li>
+        <li><span class="ok">✓ W5500 تغذیه ۳.۳V مستقیم از ESP32 بگیر</span> — ماژول رگولاتور AMS1117 روی برد دارد اما ۳.۳V مستقیم نویز کمتر دارد. پین ۵V ماژول را خالی بگذار.</li>
+        <li><span class="critical">✗ GPIO4 روی هدر شما وجود ندارد</span> — J2-13 برچسب P4 دارد اما Schematic و برد واقعی هر دو GND هستند. برای W5500 RST از GPIO25 (J1-9) یا GPIO21 (J2-12) استفاده کنید.</li>
+        <li><span class="critical">✗ پین J1-19 برچسب 5V دارد اما NC است</span> — به هیچ‌چیز وصل نکنید.</li>
+        <li><span class="critical">✗ پین J1-17 (SD3) برچسب GND دارد اما Schematic می‌گوید GPIO11 (CMD/فلش داخلی)</span> — در برد واقعی زمین است، برای GPIO استفاده نکنید.</li>
+        <li><span class="warning">⚠ DHT22 DATA و W5500 CS هر دو می‌خواهند GPIO23</span> — پیشنهاد: W5500 CS = GPIO21 (J2-12 P16)، DHT22 DATA = GPIO23 (J2-2 P23).</li>
+        <li><span class="warning">⚠ Pull-up ۵kΩ برای DHT22 DATA الزامی است</span> — بین پین DATA (GPIO23) و 3V3 وصل کنید.</li>
+        <li><span class="ok">✓ پورت سریال: CP2102</span> — در لینوکس معمولاً <code>/dev/ttyUSB0</code>، درایور پیش‌فرض دارد.</li>
+        <li><span class="ok">✓ ماژول ESP32: ZY-ESP32 (FC/CE/SRRC)</span> — معادل ESP32-WROOM-32، cristal 40MHz داخلی دارد.</li>
+        <li><span class="ok">✓ RJ45: HanRun HR911105A</span> — مگنتیک یکپارچه، نیاز به ترنسفورمر خارجی ندارد.</li>
+      </ul>
+    </div>
+
+  </div>
+</body>
+</html>

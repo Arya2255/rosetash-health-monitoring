@@ -93,21 +93,32 @@ void MqttLink::begin(const GatewayConfig& cfg, BleCentral& ble, roztash::HealthS
     }
     snprintf(expected, sizeof expected, "%s/cmd", base_);
     if (strcmp(topic, expected) != 0) return;
-    JsonDocument doc;
-    if (deserializeJson(doc, payload, len)) { publishEvent("cmd_reject", "", "invalid JSON"); return; }
-    const char* action = doc["action"] | "";
-    const char* mac = doc["mac"] | "";
-    if (!roztash::canonicalMac(mac) || !policy_.allows(mac, millis())) {
-      publishEvent("cmd_reject", "", "off-duty, malformed MAC or no valid policy");
+    roztash::VibrationCommand command;
+    const char* error = nullptr;
+    if (!roztash::parseVibrationCommand(reinterpret_cast<const char*>(payload), len,
+                                       command, error)) {
+      publishEvent("cmd_reject", "", error);
       return;
     }
-    if (strlen(action) >= sizeof cmd_action_ || !action[0] || cmd_pending_) {
-      publishEvent("cmd_reject", mac, "invalid action or command queue busy");
+    if (net_.guard.retained()) {
+      publishCommandEvent("cmd_reject", command, "retained_command_rejected");
       return;
     }
-    strlcpy(cmd_action_, action, sizeof cmd_action_);
-    strlcpy(cmd_mac_, mac, sizeof cmd_mac_);
-    cmd_pending_ = true;
+    if (!policy_.allows(command.mac, millis())) {
+      publishCommandEvent("cmd_reject", command, "policy_revoked");
+      return;
+    }
+    switch (vibration_commands_.offer(command, millis())) {
+      case roztash::CommandOffer::Completed:
+        publishCommandEvent("vibrated", command, "already_completed"); break;
+      case roztash::CommandOffer::Conflict:
+        publishCommandEvent("cmd_reject", command, "request_id_conflict"); break;
+      case roztash::CommandOffer::Busy:
+        publishCommandEvent("cmd_reject", command, "command_queue_busy"); break;
+      case roztash::CommandOffer::Duplicate:
+      case roztash::CommandOffer::Accepted:
+        break;
+    }
   });
 }
 
@@ -172,7 +183,7 @@ void MqttLink::poll() {
 }
 
 void MqttLink::revokePolicy() {
-  cmd_pending_ = false;
+  cancelPendingCommand("policy_revoked");
   if (!policy_installed_) return;
   policy_installed_ = false;
   policy_.revoke();
@@ -200,7 +211,8 @@ void MqttLink::receivePolicy(const uint8_t* payload, size_t len) {
   policy_installed_ = true;
   ble_->setScanPolicy(incoming_policy_, received);
   schedule_->sync(policy_, received);  // removes revoked entries without resetting progress
-  if (cmd_pending_ && !policy_.allows(cmd_mac_, received)) cmd_pending_ = false;
+  const auto* pending = vibration_commands_.pending();
+  if (pending && !policy_.allows(pending->mac, received)) cancelPendingCommand("policy_revoked");
   if (changed) status_pending_ = true;
   flushQueue();
 }
@@ -208,11 +220,57 @@ void MqttLink::receivePolicy(const uint8_t* payload, size_t len) {
 // Consume-once read of the last received command (callback-set).
 bool MqttLink::takeCommand(char* action, size_t action_cap, char* mac,
                            size_t mac_cap) {
-  if (!cmd_pending_) return false;
-  cmd_pending_ = false;
-  strlcpy(action, cmd_action_, action_cap);
-  strlcpy(mac, cmd_mac_, mac_cap);
+  roztash::VibrationCommand command;
+  const auto result = vibration_commands_.take(millis(), command);
+  if (result == roztash::CommandTake::None) return false;
+  if (result == roztash::CommandTake::Expired) {
+    publishCommandEvent("cmd_reject", command, "command_expired");
+    return false;
+  }
+  if (!policy_.allows(command.mac, millis())) {
+    rejectVibration("policy_revoked");
+    return false;
+  }
+  strlcpy(action, "vibrate", action_cap);
+  strlcpy(mac, command.mac, mac_cap);
   return true;
+}
+
+void MqttLink::publishCommandEvent(const char* type, const roztash::VibrationCommand& command,
+                                  const char* detail) {
+  JsonDocument doc;
+  doc["gw"] = cfg_.gw_id;
+  doc["type"] = type;
+  doc["mac"] = command.mac;
+  if (command.tracked()) {
+    doc["request_id"] = command.request_id;
+    doc["reason"] = command.reason;
+  }
+  if (detail && detail[0]) doc["detail"] = detail;
+  String output;
+  serializeJson(doc, output);
+  char topic[48];
+  snprintf(topic, sizeof topic, "%s/event", base_);
+  send(topic, output.c_str(), false, true);
+}
+
+void MqttLink::cancelPendingCommand(const char* detail) {
+  roztash::VibrationCommand command;
+  if (vibration_commands_.cancelPending(command)) publishCommandEvent("cmd_reject", command, detail);
+}
+
+void MqttLink::finishVibration(bool success, const char* detail) {
+  const auto* command = vibration_commands_.active();
+  if (!command) return;
+  publishCommandEvent(success ? "vibrated" : "vibrate_fail", *command, detail);
+  vibration_commands_.finish(success, millis());
+}
+
+void MqttLink::rejectVibration(const char* detail) {
+  const auto* command = vibration_commands_.active();
+  if (!command) return;
+  publishCommandEvent("cmd_reject", *command, detail);
+  vibration_commands_.finish(false, millis());
 }
 
 // --- publishing -------------------------------------------------------------
@@ -239,6 +297,7 @@ void MqttLink::publishStatus(const char* fw, const char* ip,
   doc["scan_enabled"] = ble_->scanEnabled();
   doc["health_interval_s"] = policy_.policy().health_interval_s;
   doc["health_job_active"] = ble_->healthBusy();
+  doc["vibration_request_id"] = true;
   String out;
   serializeJson(doc, out);
   char topic[48];

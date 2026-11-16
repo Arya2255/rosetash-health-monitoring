@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Schematic - Roztash Health Monitoring</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Vazirmatn', 'Tahoma', 'Arial', sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      margin: 0;
+      padding: 20px;
+      line-height: 1.5;
+    }
+    .container { max-width: 1800px; margin: 0 auto; }
+    header {
+      text-align: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #30363d;
+    }
+    h1 { color: #58a6ff; margin: 0 0 8px; font-size: 1.6rem; }
+    .subtitle { color: #8b949e; font-size: 0.95rem; }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 12px 16px; margin-bottom: 20px; font-size: 0.8rem;
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; color: #8b949e; }
+    .legend-color { width: 14px; height: 14px; border-radius: 3px; }
+    .schematic-wrapper {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: auto;
+    }
+    .notes {
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 16px; margin-top: 16px; font-size: 0.85rem; color: #8b949e;
+    }
+    .notes h3 { color: #f0f6fc; margin-top: 0; }
+    .notes ul { margin: 0; padding-right: 20px; }
+    .notes li { margin: 6px 0; }
+    .critical { color: #f85149; font-weight: 600; }
+    .warning { color: #d29922; font-weight: 600; }
+    .ok { color: #7ee787; font-weight: 600; }
+    @media (max-width: 1000px) {
+      .schematic-wrapper svg { width: 100%; height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>نقشه شماتیکی — Roztash Health Monitoring</h1>
+      <p class="subtitle">ESP32 NodeMCU ESP-32S V1.1 + W5500 Ethernet + DHT22/AM2302 + YS-502 5V Adapter</p>
+    </header>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-color" style="background:#7ee787"></div><span>Power Rails (VCC/GND)</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#58a6ff"></div><span>SPI Bus (HSPI)</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#d29922"></div><span>Control / Single-Bus</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#f85149"></div><span>Input Only / Warning</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:transparent;border:2px dashed #8b949e"></div><span>NC / Floating</span></div>
+    </div>
+
+    <div class="schematic-wrapper">
+      <!-- SVG Schematic - Static, no JS needed -->
+      <svg width="1700" height="1100" viewBox="0 0 1700 1100" xmlns="http://www.w3.org/2000/svg" style="background:#0d1117">
+        <defs>
+          <marker id="arrow-power" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L6,3 Z" fill="#7ee787"/>
+          </marker>
+          <marker id="arrow-spi" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L6,3 Z" fill="#58a6ff"/>
+          </marker>
+          <marker id="arrow-data" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L6,3 Z" fill="#d29922"/>
+          </marker>
+          <marker id="arrow-ctrl" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L6,3 Z" fill="#d29922"/>
+          </marker>
+          <style>
+            .pin { cursor: default; }
+            .pin-label { font-family: monospace; font-size: 10px; fill: #e6edf3; }
+            .pin-gpio { font-family: monospace; font-size: 8px; fill: #8b949e; }
+            .comp-label { font-family: 'Vazirmatn', Tahoma, Arial; font-size: 13px; font-weight: 600; fill: #f0f6fc; }
+            .conn-label { font-family: 'Vazirmatn', Tahoma, Arial; font-size: 9px; font-weight: 600; paint-order: stroke; stroke: #0d1117; stroke-width: 3; }
+          </style>
+        </defs>
+
+        <!-- ===== BACKGROUND GRID (subtle) ===== -->
+        <g stroke="#1a1f26" stroke-width="0.5">
+          <line x1="0" y1="0" x2="1700" y2="0" style="display:none"/>
+        </g>
+
+        <!-- ===== CONNECTIONS (drawn first, behind components) ===== -->
+        <!-- Power: Adapter -> ESP32 SUN -->
+        <path d="M 180 140 H 350 V 230 H 720" fill="none" stroke="#7ee787" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-power)"/>
+        <text x="450" y="130" class="conn-label" fill="#7ee787">Red (+5V)</text>
+
+        <!-- Power: Adapter GND -> ESP32 GND -->
+        <path d="M 180 180 H 350 V 470 H 720" fill="none" stroke="#7ee787" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-power)"/>
+        <text x="450" y="510" class="conn-label" fill="#7ee787">Blue/Black (GND)</text>
+
+        <!-- USB 5V -> ESP32 SUN (dashed) -->
+        <path d="M 180 360 H 300 V 230 H 720" fill="none" stroke="#7ee787" stroke-width="2" stroke-dasharray="8,4" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>
+        <text x="400" y="340" class="conn-label" fill="#7ee787" opacity="0.7">USB 5V (via D1)</text>
+
+        <!-- USB GND -> ESP32 GND (dashed) -->
+        <path d="M 180 400 H 300 V 470 H 720" fill="none" stroke="#7ee787" stroke-width="2" stroke-dasharray="8,4" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>
+
+        <!-- ESP32 3V3 -> W5500 3.3V -->
+        <path d="M 720 150 H 850" fill="none" stroke="#7ee787" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-power)"/>
+        <text x="770" y="140" class="conn-label" fill="#7ee787">3.3V Out</text>
+
+        <!-- ESP32 GND -> W5500 GND -->
+        <path d="M 720 470 H 850" fill="none" stroke="#7ee787" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-power)"/>
+        <text x="770" y="510" class="conn-label" fill="#7ee787">GND</text>
+
+        <!-- ESP32 3V3 -> DHT22 VDD -->
+        <path d="M 720 150 H 850 V 570" fill="none" stroke="#7ee787" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-power)"/>
+        <text x="770" y="360" class="conn-label" fill="#7ee787">3.3V</text>
+
+        <!-- ESP32 GND -> DHT22 GND -->
+        <path d="M 720 470 H 850 V 670" fill="none" stroke="#7ee787" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-power)"/>
+        <text x="770" y="620" class="conn-label" fill="#7ee787">GND</text>
+
+        <!-- SPI: ESP32 HSPI -> W5500 -->
+        <path d="M 720 330 H 850" fill="none" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-spi)"/>
+        <text x="770" y="320" class="conn-label" fill="#58a6ff">SCK (GPIO14)</text>
+
+        <path d="M 720 355 H 850" fill="none" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-spi)"/>
+        <text x="770" y="345" class="conn-label" fill="#58a6ff">MISO (GPIO12)</text>
+
+        <path d="M 720 400 H 850" fill="none" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-spi)"/>
+        <text x="770" y="390" class="conn-label" fill="#58a6ff">MOSI (GPIO13)</text>
+
+        <!-- CS: ESP32 GPIO21 (J2-12) -> W5500 CS -->
+        <path d="M 400 430 H 300 V 360 H 850" fill="none" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-spi)"/>
+        <text x="400" y="350" class="conn-label" fill="#58a6ff">CS (GPIO21)</text>
+
+        <!-- RST: ESP32 GPIO25 (J1-9) -> W5500 RST -->
+        <path d="M 720 255 H 850" fill="none" stroke="#d29922" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow-ctrl)"/>
+        <text x="770" y="245" class="conn-label" fill="#d29922">RST (GPIO25)</text>
+
+        <!-- INT: W5500 INT -> ESP32 GPIO34 (J2-9) (dotted, input only) -->
+        <path d="M 850 420 H 950 V 380 H 400" fill="none" stroke="#f85149" stroke-width="2" stroke-dasharray="4,4" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>
+        <text x="600" y="370" class="conn-label" fill="#f85149" opacity="0.8">INT (GPIO34, Input Only)</text>
+
+        <!-- DHT22 DATA: ESP32 GPIO23 (J2-2) -> DHT22 DATA -->
+        <path d="M 400 180 H 300 V 570 H 850" fill="none" stroke="#d29922" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-data)"/>
+        <text x="400" y="560" class="conn-label" fill="#d29922">DATA (GPIO23)</text>
+
+        <!-- Pull-up: 3V3 -> 5kΩ -> DHT22 DATA -->
+        <path d="M 720 150 H 780 V 570" fill="none" stroke="#7ee787" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3,3"/>
+        <path d="M 850 570 H 880" fill="none" stroke="#d29922" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow-data)"/>
+        <text x="820" y="555" class="conn-label" fill="#d29922" font-size="8">5kΩ Pull-up</text>
+
+        <!-- ===== COMPONENTS ===== -->
+
+        <!-- YS-502 Adapter -->
+        <g transform="translate(40, 80)">
+          <rect x="0" y="0" width="120" height="120" rx="8" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+          <text x="60" y="24" class="comp-label" text-anchor="middle">
+            <tspan x="60" dy="0">YS-502</tspan>
+            <tspan x="60" dy="1.2em">5V / 2A</tspan>
+          </text>
+          <!-- V+ pin -->
+          <circle cx="60" cy="-10" r="6" fill="#1a3a1a" stroke="#7ee787" stroke-width="2"/>
+          <text x="40" y="-4" class="pin-label" text-anchor="end">V+</text>
+          <!-- GND pin -->
+          <circle cx="60" cy="130" r="6" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="40" y="136" class="pin-label" text-anchor="end">GND</text>
+        </g>
+
+        <!-- USB Source -->
+        <g transform="translate(40, 300)">
+          <rect x="0" y="0" width="120" height="80" rx="8" fill="#161b22" stroke="#30363d" stroke-width="2" opacity="0.7"/>
+          <text x="60" y="22" class="comp-label" text-anchor="middle" opacity="0.7">
+            <tspan x="60" dy="0">Laptop USB</tspan>
+            <tspan x="60" dy="1.2em">5V (Program)</tspan>
+          </text>
+          <circle cx="60" cy="-10" r="6" fill="#1a3a1a" stroke="#7ee787" stroke-width="2" opacity="0.7"/>
+          <text x="40" y="-4" class="pin-label" text-anchor="end" opacity="0.7">VBUS</text>
+          <circle cx="60" cy="90" r="6" fill="#1a1a1a" stroke="#8b949e" stroke-width="2" opacity="0.7"/>
+          <text x="40" y="96" class="pin-label" text-anchor="end" opacity="0.7">GND</text>
+        </g>
+
+        <!-- ESP32 Board (Main) -->
+        <g transform="translate(350, 50)">
+          <rect x="0" y="0" width="400" height="700" rx="8" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+          <text x="200" y="24" class="comp-label" text-anchor="middle">
+            <tspan x="200" dy="0">ESP32 NodeMCU ESP-32S V1.1</tspan>
+            <tspan x="200" dy="1.2em">(Ai-Thinker / ZY-ESP32 Module)</tspan>
+          </text>
+
+          <!-- Right Side Pins (J1) - x=400 -->
+          <!-- 1: 3V3 -->
+          <circle cx="400" cy="50" r="5" fill="#1a3a1a" stroke="#7ee787" stroke-width="2"/>
+          <text x="412" y="54" class="pin-label">3V3</text>
+          <text x="412" y="64" class="pin-gpio">VDD3V3</text>
+
+          <!-- 2: EN -->
+          <circle cx="400" cy="75" r="5" fill="#3a2a0d" stroke="#d29922" stroke-width="2"/>
+          <text x="412" y="79" class="pin-label">EN</text>
+          <text x="412" y="89" class="pin-gpio">EN</text>
+
+          <!-- 3: SUP (GPIO36, Input Only) -->
+          <circle cx="400" cy="100" r="5" fill="#3a0d0d" stroke="#f85149" stroke-width="2" stroke-dasharray="6,3"/>
+          <text x="412" y="104" class="pin-label">SUP</text>
+          <text x="412" y="114" class="pin-gpio">GPIO36 (In)</text>
+
+          <!-- 4: SUN (VDD5V In) - ADAPTER CONNECTS HERE -->
+          <circle cx="400" cy="125" r="6" fill="#1a3a1a" stroke="#7ee787" stroke-width="3"/>
+          <text x="412" y="129" class="pin-label" font-weight="bold">SUN ⚡</text>
+          <text x="412" y="139" class="pin-gpio">VDD5V In</text>
+
+          <!-- 5: P34 (GND) -->
+          <circle cx="400" cy="150" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="412" y="154" class="pin-label">P34</text>
+          <text x="412" y="164" class="pin-gpio">GND</text>
+
+          <!-- 6: P35 (GPIO35, Input Only) -->
+          <circle cx="400" cy="175" r="5" fill="#3a0d0d" stroke="#f85149" stroke-width="2" stroke-dasharray="6,3"/>
+          <text x="412" y="179" class="pin-label">P35</text>
+          <text x="412" y="189" class="pin-gpio">GPIO35 (In)</text>
+
+          <!-- 7: P32 (GPIO32) -->
+          <circle cx="400" cy="200" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="412" y="204" class="pin-label">P32</text>
+          <text x="412" y="214" class="pin-gpio">GPIO32</text>
+
+          <!-- 8: P33 (GPIO33) -->
+          <circle cx="400" cy="225" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="412" y="229" class="pin-label">P33</text>
+          <text x="412" y="239" class="pin-gpio">GPIO33</text>
+
+          <!-- 9: P25 (GPIO25) - W5500 RST -->
+          <circle cx="400" cy="250" r="5" fill="#3a2a0d" stroke="#d29922" stroke-width="2"/>
+          <text x="412" y="254" class="pin-label">P25</text>
+          <text x="412" y="264" class="pin-gpio">GPIO25 → RST</text>
+
+          <!-- 10: P26 (GPIO26) -->
+          <circle cx="400" cy="275" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="412" y="279" class="pin-label">P26</text>
+          <text x="412" y="289" class="pin-gpio">GPIO26</text>
+
+          <!-- 11: P27 (GPIO27) -->
+          <circle cx="400" cy="300" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="412" y="304" class="pin-label">P27</text>
+          <text x="412" y="314" class="pin-gpio">GPIO27</text>
+
+          <!-- 12: P14 (GPIO14) - HSPI SCK -->
+          <circle cx="400" cy="325" r="5" fill="#0d1a3a" stroke="#58a6ff" stroke-width="2"/>
+          <text x="412" y="329" class="pin-label">P14</text>
+          <text x="412" y="339" class="pin-gpio">GPIO14 SCK</text>
+
+          <!-- 13: P12 (GPIO12) - HSPI MISO -->
+          <circle cx="400" cy="350" r="5" fill="#0d1a3a" stroke="#58a6ff" stroke-width="2"/>
+          <text x="412" y="354" class="pin-label">P12</text>
+          <text x="412" y="364" class="pin-gpio">GPIO12 MISO</text>
+
+          <!-- 14: GND -->
+          <circle cx="400" cy="375" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="412" y="379" class="pin-label">GND</text>
+          <text x="412" y="389" class="pin-gpio">Ground</text>
+
+          <!-- 15: P13 (GPIO13) - HSPI MOSI -->
+          <circle cx="400" cy="400" r="5" fill="#0d1a3a" stroke="#58a6ff" stroke-width="2"/>
+          <text x="412" y="404" class="pin-label">P13</text>
+          <text x="412" y="414" class="pin-gpio">GPIO13 MOSI</text>
+
+          <!-- 16: SD2 (GPIO9, Flash) -->
+          <circle cx="400" cy="425" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="3,3"/>
+          <text x="412" y="429" class="pin-label">SD2</text>
+          <text x="412" y="439" class="pin-gpio">GPIO9 Flash</text>
+
+          <!-- 17: SD3 (Board: GND) -->
+          <circle cx="400" cy="450" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="412" y="454" class="pin-label">SD3</text>
+          <text x="412" y="464" class="pin-gpio">GND (Board)</text>
+
+          <!-- 18: GND (Sch: GPIO11) -->
+          <circle cx="400" cy="475" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="412" y="479" class="pin-label">GND</text>
+          <text x="412" y="489" class="pin-gpio">Ground</text>
+
+          <!-- 19: 5V (NC in Schematic) -->
+          <circle cx="400" cy="500" r="5" fill="transparent" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="4,4"/>
+          <text x="412" y="504" class="pin-label">5V</text>
+          <text x="412" y="514" class="pin-gpio">NC - Open</text>
+
+          <!-- Left Side Pins (J2) - x=0 -->
+          <!-- 1: GND -->
+          <circle cx="0" cy="50" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="-12" y="54" class="pin-label" text-anchor="end">GND</text>
+          <text x="-12" y="64" class="pin-gpio" text-anchor="end">Ground</text>
+
+          <!-- 2: P23 (GPIO23) - DHT22 DATA -->
+          <circle cx="0" cy="75" r="5" fill="#3a2a0d" stroke="#d29922" stroke-width="2"/>
+          <text x="-12" y="79" class="pin-label" text-anchor="end">P23 ⚡</text>
+          <text x="-12" y="89" class="pin-gpio" text-anchor="end">GPIO23 DATA</text>
+
+          <!-- 3: P22 (GPIO22) -->
+          <circle cx="0" cy="100" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="-12" y="104" class="pin-label" text-anchor="end">P22</text>
+          <text x="-12" y="114" class="pin-gpio" text-anchor="end">GPIO22</text>
+
+          <!-- 4: TX (GPIO23 dup) -->
+          <circle cx="0" cy="125" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="-12" y="129" class="pin-label" text-anchor="end">TX</text>
+          <text x="-12" y="139" class="pin-gpio" text-anchor="end">GPIO23</text>
+
+          <!-- 5: RX (GPIO22 dup) -->
+          <circle cx="0" cy="150" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="-12" y="154" class="pin-label" text-anchor="end">RX</text>
+          <text x="-12" y="164" class="pin-gpio" text-anchor="end">GPIO22</text>
+
+          <!-- 6: GND -->
+          <circle cx="0" cy="175" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="-12" y="179" class="pin-label" text-anchor="end">GND</text>
+          <text x="-12" y="189" class="pin-gpio" text-anchor="end">Ground</text>
+
+          <!-- 7: P21 (GND) -->
+          <circle cx="0" cy="200" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="-12" y="204" class="pin-label" text-anchor="end">P21</text>
+          <text x="-12" y="214" class="pin-gpio" text-anchor="end">Ground</text>
+
+          <!-- 8: P19 (GPIO3) -->
+          <circle cx="0" cy="225" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="-12" y="229" class="pin-label" text-anchor="end">P19</text>
+          <text x="-12" y="239" class="pin-gpio" text-anchor="end">GPIO3</text>
+
+          <!-- 9: P18 (GPIO34, Input Only) - W5500 INT -->
+          <circle cx="0" cy="250" r="5" fill="#3a0d0d" stroke="#f85149" stroke-width="2" stroke-dasharray="6,3"/>
+          <text x="-12" y="254" class="pin-label" text-anchor="end">P18 ⚠</text>
+          <text x="-12" y="264" class="pin-gpio" text-anchor="end">GPIO34 In</text>
+
+          <!-- 10: P5 (GPIO23 dup) -->
+          <circle cx="0" cy="275" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="-12" y="279" class="pin-label" text-anchor="end">P5</text>
+          <text x="-12" y="289" class="pin-gpio" text-anchor="end">GPIO23</text>
+
+          <!-- 11: P17 (GPIO22 dup) -->
+          <circle cx="0" cy="300" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="-12" y="304" class="pin-label" text-anchor="end">P17</text>
+          <text x="-12" y="314" class="pin-gpio" text-anchor="end">GPIO22</text>
+
+          <!-- 12: P16 (GPIO21) - W5500 RST Alt -->
+          <circle cx="0" cy="325" r="5" fill="#3a2a0d" stroke="#d29922" stroke-width="2"/>
+          <text x="-12" y="329" class="pin-label" text-anchor="end">P16</text>
+          <text x="-12" y="339" class="pin-gpio" text-anchor="end">GPIO21 RST</text>
+
+          <!-- 13: P4 (GND - NOT GPIO4!) -->
+          <circle cx="0" cy="350" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="-12" y="354" class="pin-label" text-anchor="end">P4</text>
+          <text x="-12" y="364" class="pin-gpio" text-anchor="end">GND ≠GPIO4</text>
+
+          <!-- 14: P0 (GPIO13 dup) -->
+          <circle cx="0" cy="375" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="-12" y="379" class="pin-label" text-anchor="end">P0</text>
+          <text x="-12" y="389" class="pin-gpio" text-anchor="end">GPIO13</text>
+
+          <!-- 15: P2 (GPIO12 dup) -->
+          <circle cx="0" cy="400" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="-12" y="404" class="pin-label" text-anchor="end">P2</text>
+          <text x="-12" y="414" class="pin-gpio" text-anchor="end">GPIO12</text>
+
+          <!-- 16: P15 (GPIO14 dup) -->
+          <circle cx="0" cy="425" r="5" fill="#1a1a2a" stroke="#8b949e" stroke-width="1.5"/>
+          <text x="-12" y="429" class="pin-label" text-anchor="end">P15</text>
+          <text x="-12" y="439" class="pin-gpio" text-anchor="end">GPIO14</text>
+
+          <!-- 17: SD1 (GPIO27 Flash) -->
+          <circle cx="0" cy="450" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="3,3"/>
+          <text x="-12" y="454" class="pin-label" text-anchor="end">SD1</text>
+          <text x="-12" y="464" class="pin-gpio" text-anchor="end">GPIO27 Flash</text>
+
+          <!-- 18: SD0 (GPIO26 Flash) -->
+          <circle cx="0" cy="475" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="3,3"/>
+          <text x="-12" y="479" class="pin-label" text-anchor="end">SD0</text>
+          <text x="-12" y="489" class="pin-gpio" text-anchor="end">GPIO26 Flash</text>
+
+          <!-- 19: CLK (GPIO25 Flash) -->
+          <circle cx="0" cy="500" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="3,3"/>
+          <text x="-12" y="504" class="pin-label" text-anchor="end">CLK</text>
+          <text x="-12" y="514" class="pin-gpio" text-anchor="end">GPIO25 Flash</text>
+        </g>
+
+        <!-- W5500 Module -->
+        <g transform="translate(850, 150)">
+          <rect x="0" y="0" width="220" height="320" rx="8" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+          <text x="110" y="24" class="comp-label" text-anchor="middle">
+            <tspan x="110" dy="0">W5500 Ethernet Module</tspan>
+            <tspan x="110" dy="1.2em">(HanRun HR911105A RJ45)</tspan>
+          </text>
+
+          <!-- 3.3V -->
+          <circle cx="0" cy="50" r="5" fill="#1a3a1a" stroke="#7ee787" stroke-width="2"/>
+          <text x="-12" y="54" class="pin-label" text-anchor="end">3.3V</text>
+
+          <!-- GND -->
+          <circle cx="0" cy="80" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="-12" y="84" class="pin-label" text-anchor="end">GND</text>
+
+          <!-- SCLK -->
+          <circle cx="0" cy="110" r="5" fill="#0d1a3a" stroke="#58a6ff" stroke-width="2"/>
+          <text x="-12" y="114" class="pin-label" text-anchor="end">SCLK</text>
+
+          <!-- MISO -->
+          <circle cx="0" cy="140" r="5" fill="#0d1a3a" stroke="#58a6ff" stroke-width="2"/>
+          <text x="-12" y="144" class="pin-label" text-anchor="end">MISO</text>
+
+          <!-- MOSI -->
+          <circle cx="0" cy="170" r="5" fill="#0d1a3a" stroke="#58a6ff" stroke-width="2"/>
+          <text x="-12" y="174" class="pin-label" text-anchor="end">MOSI</text>
+
+          <!-- SCS/CS -->
+          <circle cx="0" cy="200" r="5" fill="#0d1a3a" stroke="#58a6ff" stroke-width="2"/>
+          <text x="-12" y="204" class="pin-label" text-anchor="end">SCS/CS</text>
+
+          <!-- RST -->
+          <circle cx="0" cy="230" r="5" fill="#3a2a0d" stroke="#d29922" stroke-width="2"/>
+          <text x="-12" y="234" class="pin-label" text-anchor="end">RSTn</text>
+
+          <!-- INT -->
+          <circle cx="0" cy="260" r="5" fill="#3a2a0d" stroke="#d29922" stroke-width="2"/>
+          <text x="-12" y="264" class="pin-label" text-anchor="end">INTn</text>
+
+          <!-- 5V (Optional) -->
+          <circle cx="0" cy="290" r="5" fill="transparent" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="4,4"/>
+          <text x="-12" y="294" class="pin-label" text-anchor="end">5V (Opt)</text>
+
+          <!-- RJ45 Jack indicator on right side -->
+          <rect x="210" y="100" width="30" height="50" rx="3" fill="#30363d" stroke="#58a6ff" stroke-width="1.5"/>
+          <text x="225" y="132" class="pin-label" text-anchor="middle" font-size="8" fill="#58a6ff">RJ45</text>
+        </g>
+
+        <!-- DHT22 Sensor -->
+        <g transform="translate(850, 520)">
+          <rect x="0" y="0" width="200" height="180" rx="8" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+          <text x="100" y="24" class="comp-label" text-anchor="middle">
+            <tspan x="100" dy="0">DHT22 / AM2302</tspan>
+            <tspan x="100" dy="1.2em">(Aosong ASAIR)</tspan>
+          </text>
+
+          <!-- VDD -->
+          <circle cx="0" cy="50" r="5" fill="#1a3a1a" stroke="#7ee787" stroke-width="2"/>
+          <text x="-12" y="54" class="pin-label" text-anchor="end">VDD</text>
+
+          <!-- DATA -->
+          <circle cx="0" cy="80" r="5" fill="#3a2a0d" stroke="#d29922" stroke-width="2"/>
+          <text x="-12" y="84" class="pin-label" text-anchor="end">DATA ⚡</text>
+
+          <!-- NC -->
+          <circle cx="0" cy="110" r="5" fill="transparent" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="4,4"/>
+          <text x="-12" y="114" class="pin-label" text-anchor="end">NC</text>
+
+          <!-- GND -->
+          <circle cx="0" cy="140" r="5" fill="#1a1a1a" stroke="#8b949e" stroke-width="2"/>
+          <text x="-12" y="144" class="pin-label" text-anchor="end">GND</text>
+
+          <!-- Pull-up Resistor symbol -->
+          <g transform="translate(-60, 60)">
+            <rect x="0" y="0" width="40" height="20" rx="3" fill="#1a1a1a" stroke="#d29922" stroke-width="1.5"/>
+            <text x="20" y="14" class="pin-label" text-anchor="middle" font-size="9" fill="#d29922">5kΩ</text>
+            <text x="20" y="28" class="pin-label" text-anchor="middle" font-size="7" fill="#8b949e">Pull-up</text>
+            <!-- Leads -->
+            <line x1="0" y1="10" x2="-20" y2="10" stroke="#d29922" stroke-width="2"/>
+            <line x1="40" y1="10" x2="60" y2="10" stroke="#d29922" stroke-width="2"/>
+          </g>
+        </g>
+
+        <!-- Connection labels for key nets -->
+        <g font-family="'Vazirmatn', Tahoma, Arial" font-size="11" fill="#8b949e">
+          <!-- Net labels -->
+          <text x="650" y="140" text-anchor="middle" fill="#7ee787" font-weight="600">3.3V Rail</text>
+          <text x="650" y="480" text-anchor="middle" fill="#7ee787" font-weight="600">GND Rail</text>
+          <text x="650" y="340" text-anchor="middle" fill="#58a6ff" font-weight="600">HSPI Bus</text>
+          <text x="650" y="570" text-anchor="middle" fill="#d29922" font-weight="600">DHT22 Single-Bus</text>
+        </g>
+
+      </svg>
+    </div>
+
+    <div class="notes">
+      <h3>📋 نکات حیاتی اجرا</h3>
+      <ul>
+        <li><span class="ok">✓ آداپتور YS-502 + USB همزمان امن</span> — دیود شاتکی 1N5819 (D1) روی برد ESP32 از برگشت جریان جلوگیری می‌کند.</li>
+        <li><span class="ok">✓ W5500 تغذیه ۳.۳V مستقیم از ESP32 3V3</span> — پین ۵V ماژول OPTIONAL (خالی بگذار). ماژول HanRun HR911105A شامل مگنتیک یکپارچه.</li>
+        <li><span class="critical">✗ GPIO4 روی هدر وجود ندارد</span> — J2-13 (P4) = GND. برای W5500 RST از GPIO25 (J1-9) یا GPIO21 (J2-12) استفاده کنید.</li>
+        <li><span class="critical">✗ J1-19 برچسب 5V دارد اما NC است</span> — به هیچ‌چیز وصل نکنید.</li>
+        <li><span class="critical">✗ فلش داخلی GPIO6-11 روی هدر موجودند</span> — SD2,SD3,SD1,SD0,CLK = GPIO9,10,27,26,25 ❌ استفاده نکنید.</li>
+        <li><span class="warning">⚠ تضاد GPIO23</span> — DHT22 DATA و W5500 CS هر دو می‌خواهند GPIO23. <strong>حل:</strong> W5500 CS → GPIO21 (J2-12 P16), DHT22 DATA → GPIO23 (J2-2 P23).</li>
+        <li><span class="warning">⚠ Pull-up ۵kΩ برای DHT22 DATA الزامی</span> — بین GPIO23 و 3V3.</li>
+        <li><span class="warning">⚠ فقط‌ورودی: GPIO34,35,36,39</span> — SUP(J1-3), P35(J1-6), P18(J2-9) — خروجی ندهید.</li>
+        <li><span class="ok">✓ پورت سریال CP2102</span> — در لینوکس <code>/dev/ttyUSB0</code>، درایور پیش‌فرض.</li>
+        <li><span class="ok">✓ ESP32 Module: ZY-ESP32 (WROOM-32 equivalent)</span> — FCC/CE/SRRC، Cristal 40MHz داخلی.</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

@@ -20,8 +20,8 @@ from theme import (  # noqa: E402
     fa_clock, fa_date, txt,
 )
 from data import (  # noqa: E402
-    ALERTS_ACTIVE, live_available, live_employees, live_status,
-    remote_autostart, send_vibrate, ensure_has_role,
+    ALERTS_ACTIVE, internet_available, live_employees,
+    live_status, remote_autostart, send_vibrate, ensure_has_role, get_admin_name,
 )
 import applog  # noqa: E402
 from layout import is_phone  # noqa: E402
@@ -79,7 +79,7 @@ class App:
         self.state = {
             "view": initial, "emp": None, "filter": "all",
             "search": "", "back_to": "dashboard",
-            "logged_in": False, "admin_email": None,
+            "logged_in": False, "admin_email": None, "admin_name": "",
         }
         self.alerts_active = [dict(a) for a in ALERTS_ACTIVE]
         self.siren_on = True
@@ -95,12 +95,15 @@ class App:
                 with open(session_file) as f:
                     session_data = json.load(f)
                 expires = datetime.fromisoformat(session_data.get("expires", ""))
-                if datetime.now() < expires:
+                email = (session_data.get("email") or "").strip().lower()
+                if email and datetime.now() < expires:
                     self.state["logged_in"] = True
-                    email = session_data.get("email")
                     self.state["admin_email"] = email
+                    self.state["admin_name"] = get_admin_name(email)
                     # تعیین نقش
                     self.state["role"] = ensure_has_role(email)
+                    if initial == "login":
+                        self.state["view"] = "map"
             except Exception:
                 pass
         # ── پایان بازیابی سشن ──
@@ -120,12 +123,27 @@ class App:
         """پوستهٔ برنامه را با حالت فعلی (موبایل/دسکتاپ) هماهنگ می‌کند."""
         phone = self.mode == "phone"
         ui = self.ui
+        authenticated = bool(self.state.get("logged_in") and self.state.get("admin_email"))
         if ui.get("sidebar") is not None:
             ui["sidebar"].visible = not phone
         if ui.get("menu_btn") is not None:
             ui["menu_btn"].visible = phone
         if ui.get("user_box") is not None:
-            ui["user_box"].visible = not phone
+            ui["user_box"].visible = authenticated
+        if ui.get("user_details") is not None:
+            ui["user_details"].width = 240
+        if ui.get("user_name") is not None:
+            display_name = self.state.get("admin_name") or "نام مسئول ثبت نشده"
+            ui["user_name"].value = display_name if authenticated else ""
+        if ui.get("user_email") is not None:
+            ui["user_email"].value = self.state["admin_email"] if authenticated else ""
+        if ui.get("conn_chip") is not None:
+            ui["conn_chip"].visible = True
+        if ui.get("topbar_row") is not None:
+            ui["topbar_row"].controls = [*ui["topbar_status_controls"], *([] if phone else [ui["user_box"]])]
+            ui["topbar_column"].controls = [ui["topbar_row"], *([ui["user_box"]] if phone else [])]
+        if ui.get("user_avatar") is not None:
+            ui["user_avatar"].visible = not phone
         if ui.get("pad") is not None:
             ui["pad"].padding = ft.Padding.all(10 if phone else 22)
         if ui.get("topbar") is not None:
@@ -239,9 +257,8 @@ class App:
             current_view = "login"
         # اگر عرض صفحه از آخرین رندر عوض شده باشد، پوسته را هماهنگ کن
         mode = self.detect_mode()
-        if mode != self.mode:
-            self.mode = mode
-            self._apply_chrome()
+        self.mode = mode
+        self._apply_chrome()
         if self.mode == "desktop":
             holder = self.ui.get("sidebar")
             if holder is not None:
@@ -352,28 +369,35 @@ def main(page: ft.Page):
     # ── نوار بالایی ──
     time_txt = txt("", size=16, font=FONT_MED, color=INK)
     date_txt = txt("", size=11, font=FONT, color=TEXT_MUTED)
-    # نشان اتصال — از وضعیت واقعی پل محلی پر می‌شود
+    # نشان اینترنت — «زنده» فقط وقتی اینترنت واقعاً هست
     conn_dot = ft.Container(width=8, height=8, border_radius=4, bgcolor="#9AA0A6")
-    conn_txt = txt("در حال بررسی گیت‌وی…", size=12, font=FONT_MED, color=TEXT_MUTED)
+    conn_txt = txt("در حال بررسی اینترنت…", size=12, font=FONT_MED, color=TEXT_MUTED)
     conn_chip = ft.Container(
         content=ft.Row([conn_dot, conn_txt], spacing=6, tight=True),
         bgcolor="#F1F2F4", border_radius=999,
         padding=ft.Padding.symmetric(horizontal=12, vertical=5),
+        tooltip="دسترسی به اینترنت",
     )
+    user_name = txt("", size=13, font=FONT_MED, color=INK,
+                    data="account-name", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+    user_email = txt("", size=11, font=FONT, color=TEXT_MUTED,
+                     data="account-email", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
+                     rtl=False)
+    user_details = ft.Column([user_name, user_email], spacing=0, width=240)
+    user_avatar = ft.CircleAvatar(radius=16, bgcolor="#E9EBEE",
+                                 content=ft.Icon(ft.Icons.PERSON, size=15, color=TEXT_MAIN))
     user_box = ft.Row([
-        ft.CircleAvatar(radius=16, bgcolor="#E9EBEE",
-                        content=ft.Icon(ft.Icons.PERSON, size=15, color=TEXT_MAIN)),
-        ft.Column([
-            txt(app.state.get("admin_email") or "مهندس رستگاری", size=13, font=FONT_MED, color=INK),
-            txt("مسئول HSE", size=11, font=FONT, color=TEXT_MUTED),
-        ], spacing=0),
+        user_avatar,
+        user_details,
         ft.Container(width=8),
         ft.IconButton(
             ft.Icons.LOGOUT, icon_size=18, icon_color=TEXT_MUTED,
             tooltip="خروج از حساب",
+            data="account-logout",
             on_click=lambda e: _do_logout(app),
         ),
-    ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    ], spacing=8, tight=True, visible=False, data="account-box",
+        vertical_alignment=ft.CrossAxisAlignment.CENTER)
     
     def _do_logout(app):
         import json
@@ -382,6 +406,7 @@ def main(page: ft.Page):
             os.remove(session_file)
         app.state["logged_in"] = False
         app.state["admin_email"] = None
+        app.state["admin_name"] = ""
         app.state["role"] = ""
         app.state["view"] = "login"
         app.render()
@@ -393,18 +418,20 @@ def main(page: ft.Page):
                              shape=ft.RoundedRectangleBorder(radius=10)),
     )
 
-    topbar = ft.Container(
-        bgcolor=WHITE,
-        padding=ft.Padding.symmetric(horizontal=22, vertical=9),
-        border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
-        content=ft.Row([
+    topbar_status_controls = [
             menu_btn,
             ft.Column([time_txt, date_txt], spacing=0),
             ft.Container(expand=True),
             conn_chip,
-            ft.Container(width=14),
-            user_box,
-        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+    ]
+    topbar_row = ft.Row([*topbar_status_controls, user_box],
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    topbar_column = ft.Column([topbar_row], spacing=8)
+    topbar = ft.Container(
+        bgcolor=WHITE,
+        padding=ft.Padding.symmetric(horizontal=22, vertical=9),
+        border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
+        content=topbar_column,
     )
 
     pad_holder = ft.Container(content=app.content_holder, expand=True,
@@ -415,6 +442,10 @@ def main(page: ft.Page):
     app.ui.update({
         "sidebar": sidebar_holder, "menu_btn": menu_btn,
         "user_box": user_box, "pad": pad_holder, "topbar": topbar,
+        "user_name": user_name, "user_email": user_email,
+        "user_details": user_details, "user_avatar": user_avatar,
+        "conn_chip": conn_chip, "topbar_row": topbar_row,
+        "topbar_column": topbar_column, "topbar_status_controls": topbar_status_controls,
     })
     app.mode = app.detect_mode()
     app._apply_chrome()
@@ -538,7 +569,8 @@ def main(page: ft.Page):
                 date_txt.value = fa_date()
                 time_txt.update()
                 date_txt.update()
-                # نشان اتصال هر چند ثانیه از پل محلی تازه می‌شود
+                # نشان اینترنت هر چند ثانیه تازه می‌شود — بررسی در ترد جدا
+                # تا پنجره هنگام نبود اینترنت قفل نشود
                 now = time.time()
                 if now - last_check >= 5:
                     last_check = now
@@ -548,13 +580,9 @@ def main(page: ft.Page):
                         app.on_resize()
                     except Exception:
                         pass
-                    online = live_available()
+                    online = await asyncio.to_thread(internet_available)
                     conn_dot.bgcolor = "#1E8E4E" if online else "#9AA0A6"
-                    if app.mode == "phone":
-                        conn_txt.value = "آنلاین" if online else "آفلاین"
-                    else:
-                        conn_txt.value = ("گیت‌وی آنلاین — دادهٔ زنده" if online
-                                          else "گیت‌وی در دسترس نیست")
+                    conn_txt.value = "زنده" if online else "آفلاین"
                     conn_txt.color = "#1E8E4E" if online else TEXT_MUTED
                     conn_chip.bgcolor = "#E6F4EB" if online else "#F1F2F4"
                     conn_chip.update()
