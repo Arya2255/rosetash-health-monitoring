@@ -12,6 +12,7 @@ wheels/
 
 # Single-file distribution output
 dist-single/
+private-deployment/
 
 # Flet dev cache
 .flet/

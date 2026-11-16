@@ -202,7 +202,8 @@ def _bin_path() -> str:
 
 
 def bin_ready() -> bool:
-    return bool(shutil.which("cloudflared")) or os.path.exists(_bin_path())
+    bundled = _env("ROZTASH_CLOUDFLARED", "ROSETASH_CLOUDFLARED")
+    return bool(bundled and os.path.isfile(bundled)) or bool(shutil.which("cloudflared")) or os.path.exists(_bin_path())
 
 
 def ensure_binary() -> tuple[bool, str]:
@@ -231,7 +232,8 @@ def ensure_binary() -> tuple[bool, str]:
 
 
 def _exe() -> str:
-    return shutil.which("cloudflared") or _bin_path()
+    bundled = _env("ROZTASH_CLOUDFLARED", "ROSETASH_CLOUDFLARED")
+    return bundled or shutil.which("cloudflared") or _bin_path()
 
 
 def _run(args: list[str], timeout: int = 40) -> tuple[int, str]:
@@ -364,7 +366,9 @@ def tunnel_up() -> tuple[bool, str]:
     env["TUNNEL_TOKEN"] = tok
     kwargs: dict = {}
     if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200  # detached
+        kwargs["creationflags"] = (subprocess.CREATE_NO_WINDOW
+                                    if os.environ.get("ROZTASH_HOME") else
+                                    0x00000008 | 0x00000200)
     else:
         kwargs["start_new_session"] = True
     try:

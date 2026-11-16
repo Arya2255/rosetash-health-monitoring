@@ -313,7 +313,19 @@ def photo_src(emp) -> str | None:
     photo = emp.get("photo") if isinstance(emp, dict) else None
     if not photo:
         return None
-    return BRIDGE + str(photo)
+    if not str(photo).startswith("/api/photo/"):
+        return None
+    # Fetch on the app host: a remote browser's localhost is another computer.
+    try:
+        import base64
+        with urllib.request.urlopen(BRIDGE + str(photo), timeout=3) as response:
+            mime = response.headers.get("Content-Type", "").split(";")[0]
+            blob = response.read(1_600_001)
+        if mime not in ("image/png", "image/jpeg", "image/webp") or len(blob) > 1_600_000:
+            return None
+        return "data:" + mime + ";base64," + base64.b64encode(blob).decode("ascii")
+    except Exception:
+        return None
 
 
 def save_band(doc: dict) -> tuple[bool, str]:

@@ -12,6 +12,13 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import portable_runtime
+from state_paths import config_file
+
+if __name__ == "__main__":
+    portable_runtime.prepare_entrypoint()
 
 import flet as ft  # noqa: E402
 
@@ -87,7 +94,7 @@ class App:
         self.root = None
         
         # ── بازیابی سشن ──
-        session_file = os.path.expanduser("~/.config/roztash/session.json")
+        session_file = str(config_file("session.json"))
         if not getattr(page, "web", False) and os.path.exists(session_file):
             try:
                 from datetime import datetime
@@ -231,7 +238,7 @@ class App:
         # ═══════════ بررسی قفل اضطراری ═══════════
         # چک کردن فایل قفل بدون ایمپورت
         import os
-        lock_file = os.path.expanduser("~/.config/roztash/.emergency_lock")
+        lock_file = str(config_file(".emergency_lock"))
         if os.path.exists(lock_file):
             # صفحه سفید با پیام کوچک
             self.page.controls.clear()
@@ -287,8 +294,8 @@ def main(page: ft.Page):
     import os
     import hashlib
     
-    lock_file = os.path.expanduser("~/.config/roztash/.emergency_lock")
-    key_file = os.path.expanduser("~/.config/roztash/.emergency_key")
+    lock_file = str(config_file(".emergency_lock"))
+    key_file = str(config_file(".emergency_key"))
     
     # تابع بررسی کلید
     def _verify_key(key):
@@ -400,7 +407,7 @@ def main(page: ft.Page):
         vertical_alignment=ft.CrossAxisAlignment.CENTER)
     
     def _do_logout(app):
-        session_file = os.path.expanduser("~/.config/roztash/session.json")
+        session_file = str(config_file("session.json"))
         if not getattr(app.page, "web", False) and os.path.exists(session_file):
             os.remove(session_file)
         app.state["logged_in"] = False
@@ -519,7 +526,7 @@ def main(page: ft.Page):
 
     # ── دسترسی از اینترنت — بالا آوردن خودکار تونل (اگر روشن باشد) ──
     try:
-        if not getattr(page, "web", False):
+        if not getattr(page, "web", False) and not portable_runtime.portable_enabled():
             remote_autostart()
     except Exception:
         applog.exception("اتصال خودکار تونل با خطا متوقف شد")
@@ -602,14 +609,32 @@ def main(page: ft.Page):
 def run_app(web=False):
     """Run the desktop UI, or a loopback web server via ``--web``."""
     assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+    services = portable_runtime.start_services(web=web)
     if web:
         import threading
         os.environ["FLET_FORCE_WEB_SERVER"] = "true"
         # Start the configured tunnel once per server, not per visitor.
-        threading.Thread(target=remote_autostart, daemon=True).start()
-        ft.run(main, host="127.0.0.1", port=8550, assets_dir=assets, no_cdn=True)
+        def start_tunnel_when_ready():
+            if portable_runtime.portable_enabled():
+                for _ in range(100):
+                    if portable_runtime.web_healthy():
+                        break
+                    time.sleep(.2)
+                else:
+                    return
+            remote_autostart()
+        threading.Thread(target=start_tunnel_when_ready, daemon=True).start()
+        try:
+            ft.run(main, host="127.0.0.1", port=8550, assets_dir=assets, no_cdn=True)
+        finally:
+            if services:
+                services.close()
     else:
-        ft.run(main, assets_dir=assets)
+        try:
+            ft.run(main, assets_dir=assets)
+        finally:
+            if services:
+                services.close()
 
 
 if __name__ == "__main__":

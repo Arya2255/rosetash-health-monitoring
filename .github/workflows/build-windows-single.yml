@@ -2,6 +2,11 @@ name: Build single-file Windows EXE
 
 on:
   workflow_dispatch:
+    inputs:
+      run_checks:
+        description: Run regression and Windows smoke tests
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -41,12 +46,24 @@ jobs:
           python -c "import flet.version, flet_desktop.version, PyInstaller; print('Flet:', flet.version.flet_version, 'desktop:', flet_desktop.version.version, 'PyInstaller:', PyInstaller.__version__)"
 
       - name: Test frozen paths and validate package inputs
+        if: inputs.run_checks
         run: |
           python -B tests/test_frozen_bundle.py -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B tests/test_bundle_layout.py -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B scripts/validate_windows_single.py --inputs-only
+
+      - name: Fetch verified broker and tunnel runtimes
+        run: python -B scripts/fetch_windows_runtime.py
+
+      - name: Test portable startup and profile import
+        if: inputs.run_checks
+        run: |
+          python -B -m unittest discover -s tests -p "test_portable*.py" -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B tests/test_private_profile.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build one windowed executable
         working-directory: src
@@ -61,20 +78,27 @@ jobs:
             --distpath ../dist-single `
             --add-data "assets;assets" `
             --add-data "../distribution/gateway-provisioner;distribution/gateway-provisioner" `
-            --hidden-import flet_desktop flet_web http.server http.client smtplib urllib.request urllib.error email.mime.text email.mime.multipart tzdata `
-            -- --clean --noupx --runtime-hook ../scripts/pyi_windowed_stdio.py --collect-data tzdata --collect-data flet_web --collect-submodules flet_web --collect-submodules uvicorn
+            --add-data "../build/windows-runtime;runtime/windows" `
+            --hidden-import flet_desktop flet_web http.server http.client smtplib urllib.request urllib.error email.mime.text email.mime.multipart tzdata backend.bridge backend.battery_alerts tools.discovery_udp `
+            -- --clean --noupx --paths .. --runtime-hook ../scripts/pyi_windowed_stdio.py --collect-data tzdata --collect-data flet_web --collect-submodules flet_web --collect-submodules uvicorn
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Inspect the actual EXE archive and payload hashes
         run: python -B scripts/validate_windows_single.py dist-single/RosetashHealthMonitoring.exe
 
       - name: Smoke launch the standalone EXE with an empty profile
+        if: inputs.run_checks
         timeout-minutes: 3
         run: ./scripts/smoke_windows_single.ps1 -ExePath ./dist-single/RosetashHealthMonitoring.exe
 
       - name: Smoke serve web UI and local assets from the standalone EXE
+        if: inputs.run_checks
         timeout-minutes: 3
         run: ./scripts/smoke_windows_single.ps1 -ExePath ./dist-single/RosetashHealthMonitoring.exe -Mode web
+
+      - name: Verify private profile auto-import with synthetic settings
+        if: inputs.run_checks
+        run: python -B scripts/test_private_exe_install.py dist-single/RosetashHealthMonitoring.exe
 
       - name: Upload the single executable
         uses: actions/upload-artifact@v4

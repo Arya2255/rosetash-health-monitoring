@@ -22,10 +22,11 @@ from datetime import datetime
 from typing import Optional
 
 import applog
+from state_paths import config_file
 
 # ═══════════ تنظیمات ═══════════
 
-ROLES_FILE = os.path.expanduser("~/.config/roztash/admin_roles.json")
+ROLES_FILE = str(config_file("admin_roles.json"))
 
 # ادمین پیش‌فرض — اولین ادمین اصلی
 DEFAULT_OWNER = "i.s.1377.1999@gmail.com"

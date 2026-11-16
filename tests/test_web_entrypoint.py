@@ -20,7 +20,9 @@ class WebEntrypointTests(unittest.TestCase):
             self.assertTrue(run.call_args.kwargs['no_cdn'])
             self.assertTrue(Path(run.call_args.kwargs['assets_dir']).is_absolute())
             self.assertTrue((Path(run.call_args.kwargs['assets_dir']) / 'logo-white.png').is_file())
-            self.assertIs(worker.call_args.kwargs['target'], app_main.remote_autostart)
+            with patch.object(app_main, 'remote_autostart') as tunnel:
+                worker.call_args.kwargs['target']()
+                tunnel.assert_called_once()
             worker.return_value.start.assert_called_once()
 
     def test_desktop_mode_remains_desktop(self):

@@ -27,6 +27,7 @@ $env:TEMP = $tempDir
 $env:TMP = $tempDir
 $env:ROZTASH_CF_HOME = Join-Path $profileDir '.cloudflared'
 $env:ROZTASH_LOG_DIR = Join-Path $smokeRoot 'logs'
+$env:ROZTASH_HOME = Join-Path $profileDir 'Roztash'
 $env:ROZTASH_VIEW = 'login'
 $env:ROZTASH_LIVE = 'off'
 # Fail immediately if the packed client attempts a first-run download.
@@ -101,6 +102,40 @@ try {
         }
     }
     # A bootloader or error dialog alone is not a pass: require the Flet window
+    # Both launch modes must bootstrap the actual local data bridge and broker.
+    $health = Invoke-RestMethod 'http://127.0.0.1:8726/health' -TimeoutSec 5
+    if (-not $health.ok) { throw 'Bundled data bridge is not healthy' }
+    if (-not ([IO.Path]::GetFullPath($health.db)).StartsWith($env:ROZTASH_HOME, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Database is not in the persistent Windows profile'
+    }
+    $runtime = Get-ChildItem (Join-Path $env:ROZTASH_HOME 'runtime') -Directory | Select-Object -First 1
+    $publisher = Join-Path $runtime.FullName 'mosquitto/mosquitto_pub.exe'
+    & $publisher -h 127.0.0.1 -p 1884 -t 'roztash/ci-gateway/status' -m '{"zone":"CI","fw":"synthetic-ci","ip":"127.0.0.1","uptime_s":10}'
+    if ($LASTEXITCODE -ne 0) { throw 'Bundled MQTT publisher could not publish' }
+    $ingested = $false
+    for ($i = 0; $i -lt 20; $i++) {
+        $snap = Invoke-RestMethod 'http://127.0.0.1:8726/api/snapshot' -TimeoutSec 3
+        if ($snap.gateways | Where-Object { $_.gw -eq 'ci-gateway' }) { $ingested = $true; break }
+        Start-Sleep -Milliseconds 250
+    }
+    if (-not $ingested) { throw 'MQTT message did not reach the bundled SQLite bridge' }
+    $udp = [System.Net.Sockets.UdpClient]::new()
+    try {
+        $udp.Client.ReceiveTimeout = 5000
+        $query = [Text.Encoding]::ASCII.GetBytes('ROZTASH_DISCOVERYWHERE_ARE_YOU')
+        $udp.Send($query, $query.Length, '127.0.0.1', 19198) | Out-Null
+        $peer = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
+        $answer = [Text.Encoding]::UTF8.GetString($udp.Receive([ref]$peer))
+        if (-not $answer.StartsWith('ROZTASH_DISCOVERYHERE_I_AM')) { throw 'Discovery response missing' }
+        $details = $answer.Substring('ROZTASH_DISCOVERYHERE_I_AM'.Length) | ConvertFrom-Json
+        if ($details.mqtt_port -ne 1884 -or $details.mqtt_host -ne '127.0.0.1') { throw 'Invalid discovery address' }
+    } finally { $udp.Dispose() }
+    $web = Invoke-WebRequest 'http://127.0.0.1:8550/' -TimeoutSec 5
+    if ($web.StatusCode -ne 200) { throw 'Web did not auto-start alongside desktop' }
+    $cloudflared = Join-Path $runtime.FullName 'cloudflared.exe'
+    & $cloudflared --version
+    if ($LASTEXITCODE -ne 0) { throw 'Bundled tunnel binary does not execute' }
+    Write-Host 'PASS: bundled MQTT -> SQLite/HTTP, UDP discovery, automatic web and cloudflared binary'
     # or web server and the Python process to remain alive through settling.
     Start-Sleep -Seconds 10
     $process.Refresh()
@@ -123,7 +158,7 @@ try {
     $errors = $diagnosticFiles | Select-String -Pattern `
         'Traceback|ModuleNotFoundError|ImportError|Failed to execute script|\|\s*(ERROR|CRITICAL)\s*\|'
     if ($errors) { throw ($errors | Out-String) }
-    if (Test-Path (Join-Path $profileDir '.config/roztash/session.json')) {
+    if (Test-Path (Join-Path $env:ROZTASH_HOME 'session.json')) {
         throw 'Smoke launch unexpectedly created a login session'
     }
     Write-Host "PASS: standalone windowed EXE $Mode smoke with an empty profile, embedded Flet runtime, and no Python on PATH; alive after 10 seconds."

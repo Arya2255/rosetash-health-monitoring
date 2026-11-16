@@ -70,7 +70,7 @@ def send_otp_email(to_email: str, code: str) -> tuple[bool, str]:
         # اتصال به SMTP
         context = ssl.create_default_context()
         
-        with smtplib.SMTP(host, port) as server:
+        with smtplib.SMTP(host, port, timeout=20) as server:
             server.starttls(context=context)
             server.login(user, password)
             server.sendmail(user, to_email, msg.as_string())

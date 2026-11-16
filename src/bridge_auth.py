@@ -11,11 +11,12 @@ import os
 import secrets
 import time
 from pathlib import Path
+from state_paths import config_file
 
 
 def _key_path() -> Path:
     return Path(os.environ.get("ROZTASH_BRIDGE_AUTH_FILE") or
-                Path.home() / ".config" / "roztash" / "bridge-auth.key")
+                config_file("bridge-auth.key"))
 
 
 def _load_key(create=False) -> bytes:

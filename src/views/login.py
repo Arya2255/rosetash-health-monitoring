@@ -11,6 +11,7 @@ import flet as ft
 from theme import FONT, FONT_B, FONT_MED, INK, R_BTN, TEXT_MUTED, WHITE, txt
 from data import remote_emails as allowed_emails, get_admin_name
 from email_otp import send_otp_email
+from state_paths import config_file
 
 
 OTP_STORE = {}
@@ -298,7 +299,7 @@ def login_view(app):
                 "email": email,
                 "expires": (datetime.now() + timedelta(days=1)).isoformat()
             }
-            session_file = os.path.expanduser("~/.config/roztash/session.json")
+            session_file = str(config_file("session.json"))
             os.makedirs(os.path.dirname(session_file), exist_ok=True)
             with open(session_file, "w") as f:
                 json.dump(session_data, f)

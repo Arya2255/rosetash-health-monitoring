@@ -85,6 +85,7 @@ class LoginUiTests(unittest.IsolatedAsyncioTestCase):
             return expanduser(path)
 
         self.patchers = [
+            patch.dict(os.environ, {"ROZTASH_CONFIG_HOME": self.tmp.name}),
             patch.object(os.path, "expanduser", side_effect=isolated_path),
             patch.object(admin_roles, "ROLES_FILE", str(Path(self.tmp.name) / "admin_roles.json")),
             patch.object(ft.Page, "run_task", self.schedule),

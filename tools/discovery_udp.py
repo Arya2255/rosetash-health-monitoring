@@ -5,6 +5,8 @@ Works on ANY network - factory LAN, home WiFi, bridged networks.
 No mDNS, no complex setup required.
 """
 
+import ipaddress
+import os
 import socket
 import struct
 import threading
@@ -14,39 +16,52 @@ import argparse
 import sys
 from typing import Callable, Optional
 
-DISCOVERY_PORT = 19198
+DISCOVERY_PORT = int(os.environ.get("ROZTASH_DISCOVERY_PORT", "19198"))
 DISCOVERY_GROUP = "255.255.255.255"  # Broadcast to all devices
 MAGIC = b"ROZTASH_DISCOVERY"
+
+
+def _is_local_host(host: str) -> bool:
+    """Loopback/wildcard broker settings need a gateway-reachable address."""
+    if host.lower().rstrip(".") == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+        return address.is_loopback or address.is_unspecified
+    except ValueError:
+        return False
+
 
 class DiscoveryServer:
     """Server that listens for gateway discovery requests."""
     
     def __init__(self, mqtt_host: Optional[str] = None, mqtt_port: int = 1883):
-        self.mqtt_host = mqtt_host or self._get_local_ip()
+        self.mqtt_host = mqtt_host or "127.0.0.1"
         self.mqtt_port = mqtt_port
         self.sock: Optional[socket.socket] = None
         self.running = False
         self.gateways_seen = []
         
-    def _get_local_ip(self) -> str:
+    def _get_local_ip(self, peer=None) -> str:
+        if peer is not None:
+            try:
+                # UDP connect selects the route without sending a packet.
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+                    route.connect(peer)
+                    local_ip = route.getsockname()[0]
+                    if local_ip and local_ip != "0.0.0.0":
+                        return local_ip
+            except OSError:
+                pass
         try:
-            # Get actual network interface IP - prefer 192.168.x.x over 10.x.x.x
-            import subprocess
-            result = subprocess.run(
-                ["ip", "-4", "addr", "show"],
-                capture_output=True, text=True
-            )
-            best_ip = None
-            for line in result.stdout.split('\n'):
-                if 'inet ' in line and not line.strip().startswith('inet 127'):
-                    ip = line.strip().split()[1].split('/')[0]
-                    if ip.startswith('192.168.'):
-                        return ip
-                    if not best_ip:
-                        best_ip = ip
-            return best_ip or "127.0.0.1"
-        except Exception:
-            return "127.0.0.1"
+            for result in socket.getaddrinfo(socket.gethostname(), None,
+                                             socket.AF_INET, socket.SOCK_DGRAM):
+                local_ip = str(result[4][0])
+                if not _is_local_host(local_ip):
+                    return local_ip
+        except OSError:
+            pass
+        return "127.0.0.1"
     
     def start(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -79,7 +94,8 @@ class DiscoveryServer:
         if msg == b"WHERE_ARE_YOU":
             # Gateway is asking for us
             response = json.dumps({
-                "mqtt_host": self.mqtt_host,
+                "mqtt_host": (self._get_local_ip(addr) if _is_local_host(self.mqtt_host)
+                              else self.mqtt_host),
                 "mqtt_port": self.mqtt_port,
                 "server": "roztash-bridge"
             }).encode()

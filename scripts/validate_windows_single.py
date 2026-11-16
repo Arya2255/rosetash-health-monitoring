@@ -104,6 +104,19 @@ def validate_exe(executable, root=ROOT):
     extract = lambda name: archive.extract(names[name])
     expected = payload_files(root)
     validate_payload(names, extract, expected)
+    runtime_manifest = "runtime/windows/runtime-manifest.json"
+    require(runtime_manifest in names, "Bundled broker/tunnel runtime missing")
+    runtime = json.loads(extract(runtime_manifest))
+    for name in ("mosquitto/mosquitto.exe", "mosquitto/mosquitto_pub.exe",
+                 "mosquitto/mosquitto_sub.exe", "cloudflared.exe"):
+        require(name in runtime, "Missing service executable: " + name)
+    for name, metadata in runtime.items():
+        item = "runtime/windows/" + name
+        require(item in names, "Missing service runtime file: " + name)
+        data = extract(item)
+        require(len(data) == metadata['size'] and
+                hashlib.sha256(data).hexdigest() == metadata['sha256'],
+                "Service runtime hash mismatch: " + name)
     require(not any(entry[-1] == "d" for entry in archive.toc.values()),
             "Archive references an external PyInstaller dependency")
     require(any(name.startswith("python3") and name.endswith(".dll") for name in names),
@@ -112,7 +125,9 @@ def validate_exe(executable, root=ROOT):
     modules = archive.open_embedded_archive(names["PYZ.pyz"]).toc
     for module in ("flet", "flet_desktop", "flet_web.fastapi.serve_fastapi_web_app",
                    "uvicorn", "uvicorn.protocols.websockets.websockets_impl",
-                   "provisioner", "views.login", "remote",
+                   "provisioner", "views.login", "remote", "portable_runtime",
+                   "private_profile", "state_paths", "backend.bridge", "backend.battery_alerts",
+                   "tools.discovery_udp",
                    "http.server", "smtplib", "urllib.request", "tzdata"):
         require(module in modules, f"Missing Python module: {module}")
     require("tzdata/zoneinfo/Asia/Tehran" in names, "Missing Tehran timezone data")

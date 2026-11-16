@@ -53,11 +53,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 import applog
-from tools.discovery_udp import DiscoveryServer
-import battery_alerts as battery_policy
-from battery_alerts import (claim as claim_battery, observe as observe_battery,
-                         pending_rows as pending_battery_rows, record_publish as record_battery_publish,
-                         record_result as record_battery_result, visible_alerts as visible_battery_alerts)
+from tools.discovery_udp import DISCOVERY_PORT, DiscoveryServer
+if __package__:
+    from . import battery_alerts as battery_policy
+else:  # Direct script execution and legacy ``import bridge`` callers.
+    import battery_alerts as battery_policy
+
+claim_battery = battery_policy.claim
+observe_battery = battery_policy.observe
+pending_battery_rows = battery_policy.pending_rows
+record_battery_publish = battery_policy.record_publish
+record_battery_result = battery_policy.record_result
+visible_battery_alerts = battery_policy.visible_alerts
 from admin_roles import (can_manage_employee_scanning,
                          can_manage_employee_schedules, get_role)
 from employee_schedule import (DAY_KEYS, MAX_ACTIVE_MACS, TEHRAN, active_employee_macs,
@@ -1109,10 +1116,18 @@ def _gateways_view(c: sqlite3.Connection, now: float) -> list[dict]:
 # نبود ابزار سیستمی یعنی رشتهٔ خالی، نه خطا.
 
 
+def _child_process_options() -> dict:
+    """Keep CLI children quiet in a windowed Windows bundle."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def _run_cmd(args: list[str], timeout: float = 8.0) -> str | None:
     """اجرای یک فرمان سیستمی کوتاه — متن یا None؛ هرگز استثنا نمی‌دهد."""
     try:
-        res = subprocess.run(args, capture_output=True, timeout=timeout)
+        res = subprocess.run(args, capture_output=True, timeout=timeout,
+                             **_child_process_options())
         return (res.stdout or b"").decode("utf-8", errors="replace")
     except Exception:
         return None
@@ -1186,7 +1201,23 @@ def _current_wifi() -> dict:
 def _host_ip_candidates() -> list[dict]:
     """آدرس‌های IPv4 محلی این سیستم — حدس آدرس وصل‌شدن گیتوی‌ها."""
     cands: list[dict] = []
-    out = _run_cmd(["ip", "-o", "-4", "addr", "show"])
+    if sys.platform.startswith("win"):
+        out = _run_cmd(["powershell", "-NoProfile", "-Command",
+                        "Get-NetIPAddress -AddressFamily IPv4 | Select-Object InterfaceAlias,IPAddress,PrefixLength | ConvertTo-Json -Compress"])
+        try:
+            rows = json.loads(out or "[]")
+            if isinstance(rows, dict):
+                rows = [rows]
+            for row in rows:
+                ip = str(row.get("IPAddress", ""))
+                if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+                    cands.append({"iface": str(row.get("InterfaceAlias", "")),
+                                  "ip": ip, "prefix": str(row.get("PrefixLength", ""))})
+        except (ValueError, TypeError, AttributeError):
+            pass
+        out = None
+    else:
+        out = _run_cmd(["ip", "-o", "-4", "addr", "show"])
     if out:
         for line in out.splitlines():
             parts = line.split()
@@ -1721,13 +1752,15 @@ def scan_policy_loop() -> None:
 
 
 def subscriber_loop() -> None:
-    cmd = ["mosquitto_sub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
+    cmd = [os.environ.get("ROZTASH_MOSQUITTO_SUB") or "mosquitto_sub",
+           "-h", MQTT_HOST, "-p", str(MQTT_PORT),
            "-t", MQTT_TOPIC, "-F", "%t %p"]
     while True:
         p = None
         try:
             p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                 stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                                 **_child_process_options())
             log(f"subscribed {MQTT_TOPIC} on {MQTT_HOST}:{MQTT_PORT}")
             for line in p.stdout:  # type: ignore[union-attr]
                 line = line.rstrip("\n")
@@ -1758,13 +1791,14 @@ ACTIONS = {"vibrate"}
 def publish(topic: str, payload: str, retained: bool = False) -> tuple[bool, str]:
     """انتشار یک پیام روی بروکر — برای فرمان‌ها و سیاست اسکن retained."""
     try:
-        cmd = ["mosquitto_pub", "-h", MQTT_HOST, "-p", str(MQTT_PORT)]
+        cmd = [os.environ.get("ROZTASH_MOSQUITTO_PUB") or "mosquitto_pub",
+               "-h", MQTT_HOST, "-p", str(MQTT_PORT)]
         if retained:
             cmd.append("-r")
         cmd.extend(["-t", topic, "-m", payload])
         p = subprocess.run(
             cmd,
-            capture_output=True, text=True, timeout=5)
+            capture_output=True, text=True, timeout=5, **_child_process_options())
         if p.returncode == 0:
             return True, "sent"
         return False, (p.stderr or p.stdout or "mosquitto_pub failed").strip()[:200]
@@ -1977,12 +2011,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    db()  # Finish schema setup before either worker can access the connection.
     
     # Start discovery server for zero-config networking
     discovery_server = DiscoveryServer(MQTT_HOST, int(MQTT_PORT))
     threading.Thread(target=discovery_server.start, daemon=True).start()
-    log(f"discovery server started on port 19198")
+    log(f"discovery server started on port {DISCOVERY_PORT}")
     
     threading.Thread(target=subscriber_loop, daemon=True).start()
     threading.Thread(target=scan_policy_loop, daemon=True).start()
