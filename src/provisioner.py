@@ -29,7 +29,11 @@ import tempfile
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_DEFAULT_BUNDLE = _HERE.parent / "distribution" / "gateway-provisioner"
+# PyInstaller places modules directly in _MEIPASS; source/Flet builds use src/app.
+_BUNDLE_ROOT = (Path(sys._MEIPASS)
+                if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+                else _HERE.parent)
+_DEFAULT_BUNDLE = _BUNDLE_ROOT / "distribution" / "gateway-provisioner"
 
 # هندسهٔ پارتیشن min_spiffs هستهٔ ۳٫۳٫۱۲ — مطابق firmware/gateway و docs
 LITTLEFS_SIZE = "0x20000"

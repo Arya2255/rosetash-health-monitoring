@@ -289,17 +289,19 @@ def login_view(app):
         _set_loading(True, "در حال ورود…")
         del OTP_STORE[email]
 
-        # ذخیره سشن برای یک روز
-        from datetime import datetime, timedelta
-        import json
-        session_data = {
-            "email": email,
-            "expires": (datetime.now() + timedelta(days=1)).isoformat()
-        }
-        session_file = os.path.expanduser("~/.config/roztash/session.json")
-        os.makedirs(os.path.dirname(session_file), exist_ok=True)
-        with open(session_file, "w") as f:
-            json.dump(session_data, f)
+        # Only desktop may persist its login on this machine. Web state belongs
+        # to this Flet page/session, never to a file shared by all visitors.
+        if not getattr(app.page, "web", False):
+            from datetime import datetime, timedelta
+            import json
+            session_data = {
+                "email": email,
+                "expires": (datetime.now() + timedelta(days=1)).isoformat()
+            }
+            session_file = os.path.expanduser("~/.config/roztash/session.json")
+            os.makedirs(os.path.dirname(session_file), exist_ok=True)
+            with open(session_file, "w") as f:
+                json.dump(session_data, f)
 
         from data import ensure_has_role
         role = ensure_has_role(email)

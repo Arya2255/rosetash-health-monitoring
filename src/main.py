@@ -88,7 +88,7 @@ class App:
         
         # ── بازیابی سشن ──
         session_file = os.path.expanduser("~/.config/roztash/session.json")
-        if os.path.exists(session_file):
+        if not getattr(page, "web", False) and os.path.exists(session_file):
             try:
                 from datetime import datetime
                 import json
@@ -400,9 +400,8 @@ def main(page: ft.Page):
         vertical_alignment=ft.CrossAxisAlignment.CENTER)
     
     def _do_logout(app):
-        import json
         session_file = os.path.expanduser("~/.config/roztash/session.json")
-        if os.path.exists(session_file):
+        if not getattr(app.page, "web", False) and os.path.exists(session_file):
             os.remove(session_file)
         app.state["logged_in"] = False
         app.state["admin_email"] = None
@@ -520,7 +519,8 @@ def main(page: ft.Page):
 
     # ── دسترسی از اینترنت — بالا آوردن خودکار تونل (اگر روشن باشد) ──
     try:
-        remote_autostart()
+        if not getattr(page, "web", False):
+            remote_autostart()
     except Exception:
         applog.exception("اتصال خودکار تونل با خطا متوقف شد")
 
@@ -599,5 +599,19 @@ def main(page: ft.Page):
         page.update()
 
 
+def run_app(web=False):
+    """Run the desktop UI, or a loopback web server via ``--web``."""
+    assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+    if web:
+        import threading
+        os.environ["FLET_FORCE_WEB_SERVER"] = "true"
+        # Start the configured tunnel once per server, not per visitor.
+        threading.Thread(target=remote_autostart, daemon=True).start()
+        ft.run(main, host="127.0.0.1", port=8550, assets_dir=assets, no_cdn=True)
+    else:
+        ft.run(main, assets_dir=assets)
+
+
 if __name__ == "__main__":
-    ft.run(main)
+    run_app(web="--web" in sys.argv[1:]
+            or os.environ.get("FLET_FORCE_WEB_SERVER", "").lower() in ("1", "true", "yes"))

@@ -344,6 +344,43 @@ class LoginUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app.ui["user_name"].value, NAME)
         self.assertEqual(app.ui["user_email"].value, EMAIL)
 
+    async def test_web_does_not_restore_the_hosts_desktop_session(self):
+        self.session_file.write_text(json.dumps({
+            "email": EMAIL, "expires": (datetime.now() + timedelta(hours=1)).isoformat(),
+        }))
+        self.page.web = True
+        app = self.start_shell()
+        self.assertFalse(app.state["logged_in"])
+        self.assertEqual(app.state["view"], "login")
+        self.assertFalse(app.ui["user_box"].visible)
+
+    async def test_web_login_does_not_persist_a_shared_session_for_other_visitors(self):
+        self.page.web = True
+        await self.finish_request()
+        self.control("code").value = "123456"
+        self.control("verify").on_click(None)
+        self.assertTrue(self.app.state["logged_in"])
+        self.assertFalse(self.session_file.exists())
+        second_session = Session(self.conn)
+        second_session.page.web = True
+        visitor = app_main.App(second_session.page)
+        self.assertFalse(visitor.state["logged_in"])
+
+    async def test_web_logout_keeps_the_desktop_session_file(self):
+        self.page.web = True
+        app = self.start_shell()
+        desktop_session = json.dumps({
+            "email": "desktop@example.com",
+            "expires": (datetime.now() + timedelta(hours=1)).isoformat(),
+        })
+        self.session_file.write_text(desktop_session)
+        app.state.update(logged_in=True, admin_email=EMAIL, admin_name=NAME)
+        app._apply_chrome()
+        by_tag(app.root, "account-logout").on_click(None)
+        self.assertFalse(app.state["logged_in"])
+        self.assertTrue(self.session_file.exists())
+        self.assertEqual(self.session_file.read_text(), desktop_session)
+
     async def test_missing_name_does_not_invent_a_person_for_the_account(self):
         self.session_file.write_text(json.dumps({
             "email": EMAIL,

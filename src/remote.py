@@ -698,19 +698,32 @@ def setup(progress=None) -> tuple[bool, str]:
 
 # ═══════════ یک نگاه ═══════════
 
+def web_origin_running() -> bool:
+    """Check the configured local Flet origin, not the Access login page."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8550/", timeout=2) as response:
+            return (response.status == 200
+                    and b"flutter_bootstrap.js" in response.read(65536))
+    except Exception:
+        return False
+
+
 def status() -> dict:
     """خلاصهٔ وضعیت برای نمایش در صفحهٔ تنظیمات — هرگز استثنا نمی‌دهد."""
     try:
         cfg = ensure_config()
         running = tunnel_running()
+        web_running = web_origin_running() if running else False
         emails = allowed_emails() if cfg.get("ok") else []
         locked = bool(emails)
         if not cfg.get("ok"):
             label = "تنظیم نشده"
             detail = cfg.get("err") or "توکن API کلادفلر روی این سیستم نیست"
         elif running and locked:
-            label = "فعال"
-            detail = "پنل از اینترنت با قفل ایمیلی کلادفلر باز است"
+            label = "فعال" if web_running else "سرور وب خاموش است"
+            detail = ("تونل و سرور وب فعال‌اند؛ ورود عمومی با قفل ایمیلی انجام می‌شود"
+                      if web_running else
+                      "تونل وصل است ولی برنامهٔ وب روی پورت ۸۵۵۰ پاسخ نمی‌دهد")
         elif running and not locked:
             label = "بدون قفل"
             detail = ("تونل وصل است ولی ایمیل ادمین تعریف نشده — تا آن موقع "
@@ -725,6 +738,7 @@ def status() -> dict:
             "url": public_url(),
             "installed": bin_ready(),
             "running": running,
+            "web_running": web_running,
             "locked": locked,
             "emails": emails,
             "auto_start": bool(cfg.get("auto_start", True)),
@@ -735,6 +749,6 @@ def status() -> dict:
     except Exception as exc:
         applog.exception("خواندن وضعیت دسترسی از اینترنت ناکام ماند")
         return {"ok": False, "zone": "", "host": "", "url": "",
-                "installed": False, "running": False, "locked": False,
+                "installed": False, "running": False, "web_running": False, "locked": False,
                 "emails": [], "auto_start": True, "label": "نامعلوم",
                 "detail": str(exc), "err": str(exc)}
