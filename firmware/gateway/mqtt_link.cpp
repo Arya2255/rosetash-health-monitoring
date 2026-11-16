@@ -6,6 +6,7 @@
 #include <SPI.h>
 
 #include "network_config.h"
+#include "scan_policy_json.h"
 
 static const char* kQueuePath = "/queue.jsonl";
 static const size_t kQueueMaxBytes = 32 * 1024;  // drop oldest wholesale when full
@@ -60,35 +61,59 @@ static const char* failName(BleCentral::Fail f) {
     case BleCentral::Fail::Subscribe: return "subscribe";
     case BleCentral::Fail::Write: return "write";
     case BleCentral::Fail::Timeout: return "timeout";
+    case BleCentral::Fail::Policy: return "policy";
   }
   return "?";
 }
 
-void MqttLink::begin(const GatewayConfig& cfg) {
+void MqttLink::begin(const GatewayConfig& cfg, BleCentral& ble, roztash::HealthSchedule& schedule) {
+  ble_ = &ble;
+  schedule_ = &schedule;
   cfg_ = cfg;
   snprintf(base_, sizeof base_, "roztash/%s", cfg_.gw_id);
 
   startEthernet();
 
   mqtt_.setServer(cfg_.mqtt_host, cfg_.mqtt_port);
-  mqtt_.setBufferSize(2048);  // presence batches can exceed the default 256
+  buffer_ready_ = mqtt_.setBufferSize(16384);  // both 256-MAC arrays plus envelope
+  mqtt_.setSocketTimeout(2);
+  if (!buffer_ready_) Serial.println("[mqtt] scan_policy_error: buffer allocation failed");
 
   // Remote commands (roztash/<gw>/cmd). The callback runs inside mqtt_.loop()
   // (single task) — parsing here and handing over via takeCommand() is safe.
   mqtt_.setCallback([this](char* topic, uint8_t* payload, unsigned int len) {
+    char expected[64];
+    snprintf(expected, sizeof expected, "%s/scan-policy", base_);
+    if (strcmp(topic, expected) == 0) {
+      if (net_.guard.retained()) {
+        revokePolicy();
+        publishEvent("scan_policy_error", "", "retained_policy_rejected");
+      } else receivePolicy(payload, len);
+      return;
+    }
+    snprintf(expected, sizeof expected, "%s/cmd", base_);
+    if (strcmp(topic, expected) != 0) return;
     JsonDocument doc;
-    if (deserializeJson(doc, payload, len)) return;
+    if (deserializeJson(doc, payload, len)) { publishEvent("cmd_reject", "", "invalid JSON"); return; }
     const char* action = doc["action"] | "";
-    if (!action[0]) return;
+    const char* mac = doc["mac"] | "";
+    if (!roztash::canonicalMac(mac) || !policy_.allows(mac, millis())) {
+      publishEvent("cmd_reject", "", "off-duty, malformed MAC or no valid policy");
+      return;
+    }
+    if (strlen(action) >= sizeof cmd_action_ || !action[0] || cmd_pending_) {
+      publishEvent("cmd_reject", mac, "invalid action or command queue busy");
+      return;
+    }
     strlcpy(cmd_action_, action, sizeof cmd_action_);
-    strlcpy(cmd_mac_, doc["mac"] | "", sizeof cmd_mac_);
+    strlcpy(cmd_mac_, mac, sizeof cmd_mac_);
     cmd_pending_ = true;
-    Serial.printf("[mqtt] command received: %s %s\n", cmd_action_, cmd_mac_);
   });
 }
 
 void MqttLink::setBroker(const char* host, uint16_t port) {
   if (!host || !host[0]) return;
+  revokePolicy();
   if (mqtt_.connected()) mqtt_.disconnect();
   strlcpy(cfg_.mqtt_host, host, sizeof cfg_.mqtt_host);
   cfg_.mqtt_port = port;
@@ -102,18 +127,25 @@ bool MqttLink::networkReady() const {
 // --- connection maintenance -------------------------------------------------
 void MqttLink::poll() {
   const uint32_t now = millis();
-  if (!networkReady()) {
+  if (policy_.expire(now)) {
+    revokePolicy();
+    publishEvent("scan_policy_error", "", "lease_expired");
+  }
+  if (!networkReady() || !buffer_ready_) {
+    revokePolicy();
     if (mqtt_.connected()) mqtt_.disconnect();
     return;
   }
 
   if (!mqtt_.connected()) {
+    revokePolicy();  // reconnect never reuses an old policy or command
     if (now - last_mqtt_attempt_ms_ < 5000) return;
     last_mqtt_attempt_ms_ = now;
 
     char will_topic[48];
     snprintf(will_topic, sizeof will_topic, "%s/status", base_);
     const char* will_msg = "{\"online\":false}";
+    net_.guard.reset();
     const bool ok = mqtt_.connect(cfg_.gw_id, nullptr, nullptr, will_topic, 1,
                                   true, will_msg);
     if (ok) {
@@ -122,12 +154,55 @@ void MqttLink::poll() {
       char cmd_topic[48];
       snprintf(cmd_topic, sizeof cmd_topic, "%s/cmd", base_);
       mqtt_.subscribe(cmd_topic);
+      char policy_topic[64];
+      snprintf(policy_topic, sizeof policy_topic, "%s/scan-policy", base_);
+      if (!mqtt_.subscribe(policy_topic)) publishEvent("scan_policy_error", "", "subscribe_failed");
+      status_pending_ = true;  // discover gateway before waiting for the first policy
       flushQueue();
     }
     return;
   }
 
   mqtt_.loop();
+  if (net_.guard.takeError()) {
+    revokePolicy();
+    publishEvent("scan_policy_error", "", "mqtt_packet_oversize_or_malformed");
+  }
+  if (!mqtt_.connected()) revokePolicy();
+}
+
+void MqttLink::revokePolicy() {
+  cmd_pending_ = false;
+  if (!policy_installed_) return;
+  policy_installed_ = false;
+  policy_.revoke();
+  ble_->stopScanPolicy();
+  schedule_->sync(policy_, millis());
+  status_pending_ = true;
+}
+
+void MqttLink::receivePolicy(const uint8_t* payload, size_t len) {
+  const uint32_t received = millis();
+  if (!policy_.ready(received)) revokePolicy();
+  const char* error = nullptr;
+  if (!roztash::parseScanPolicy(reinterpret_cast<const char*>(payload), len, incoming_policy_, error)) {
+    revokePolicy();
+    publishEvent("scan_policy_error", "", error);
+    return;
+  }
+  const auto& old = policy_.policy();
+  const bool changed = !policy_.ready(received) || old.active_count != incoming_policy_.active_count ||
+      old.health_count != incoming_policy_.health_count ||
+      old.health_interval_s != incoming_policy_.health_interval_s ||
+      memcmp(old.active.data(), incoming_policy_.active.data(), incoming_policy_.active_count * sizeof(roztash::PolicyMac)) ||
+      memcmp(old.health.data(), incoming_policy_.health.data(), incoming_policy_.health_count * sizeof(roztash::PolicyMac));
+  policy_.apply(incoming_policy_, received);
+  policy_installed_ = true;
+  ble_->setScanPolicy(incoming_policy_, received);
+  schedule_->sync(policy_, received);  // removes revoked entries without resetting progress
+  if (cmd_pending_ && !policy_.allows(cmd_mac_, received)) cmd_pending_ = false;
+  if (changed) status_pending_ = true;
+  flushQueue();
 }
 
 // Consume-once read of the last received command (callback-set).
@@ -159,7 +234,11 @@ void MqttLink::publishStatus(const char* fw, const char* ip,
   doc["transport"] = "ethernet";
   doc["uptime_s"] = (uint32_t)(millis() / 1000UL);
   doc["bands_seen"] = bands_seen;
-  doc["adv_seen"] = adv_seen;  // total adv packets since boot (radio liveness)
+  doc["adv_seen"] = adv_seen;  // permitted advertisements only
+  doc["scan_policy_ready"] = policy_.ready(millis()) && ble_->policyReady();
+  doc["scan_enabled"] = ble_->scanEnabled();
+  doc["health_interval_s"] = policy_.policy().health_interval_s;
+  doc["health_job_active"] = ble_->healthBusy();
   String out;
   serializeJson(doc, out);
   char topic[48];
@@ -172,13 +251,21 @@ void MqttLink::publishPresence(BleCentral& ble) {
   doc["gw"] = cfg_.gw_id;
   doc["ts"] = (uint32_t)(millis() / 1000UL);
   JsonArray arr = doc["bands"].to<JsonArray>();
-  const int count = ble.sightingCount();
+  int count = 0;
+  if (ble.healthBusy() && policy_.allows(ble.jobMac(), millis())) {
+    doc["connected_mac"] = ble.jobMac();
+    doc["advertising_gap"] = true;  // this band's location may be stale while connected
+  }
   for (int i = 0; i < BleCentral::kMaxBands; ++i) {
     BleCentral::Sighting s;
-    if (!ble.getSlot(i, s) || !s.used) continue;
+    if (!ble.getSlot(i, s) || !s.used || !policy_.allows(s.mac, millis())) continue;
+    const uint32_t age = uint32_t(millis() - s.seen_ms);
+    if (age > roztash::kSightingFreshMs) continue;
+    ++count;
     JsonObject o = arr.add<JsonObject>();
     o["mac"] = s.mac;
     o["rssi"] = s.rssi;
+    o["age_ms"] = age;
   }
   doc["n"] = count;
   String out;
@@ -189,6 +276,7 @@ void MqttLink::publishPresence(BleCentral& ble) {
 }
 
 void MqttLink::publishHealth(const BleCentral& ble) {
+  if (!policy_.allowsHealth(ble.jobMac(), millis()) || ble.jobRevoked()) return;
   JsonDocument doc;
   doc["gw"] = cfg_.gw_id;
   doc["mac"] = ble.jobMac();
@@ -223,6 +311,7 @@ static void rawToHex(const BleCentral::RawFrame& f, char* out, size_t cap) {
 }
 
 void MqttLink::publishVitals(const BleCentral& ble) {
+  if (!policy_.allowsHealth(ble.jobMac(), millis()) || ble.jobRevoked()) return;
   const BleCentral::Vitals& v = ble.vitals();
   JsonDocument doc;
   doc["gw"] = cfg_.gw_id;
@@ -285,6 +374,7 @@ void MqttLink::queueLine(const char* topic, const char* payload) {
 }
 
 void MqttLink::flushQueue() {
+  if (!policy_.ready(millis())) return;  // reconnect has no authority to replay band data
   File f = LittleFS.open(kQueuePath, "r");
   if (!f) return;
   if ((size_t)f.size() > kQueueMaxBytes) {
@@ -297,9 +387,12 @@ void MqttLink::flushQueue() {
     if (line.isEmpty()) continue;
     JsonDocument doc;
     if (deserializeJson(doc, line)) continue;
+    const char* mac = doc["p"]["mac"] | "";
+    if (mac[0] && !policy_.allows(mac, millis())) continue;
     if (!mqtt_.connected()) break;
     char topic[48];
     snprintf(topic, sizeof topic, "%s%s", base_, (const char*)(doc["t"] | ""));
+    doc["p"]["replayed"] = true;  // bridge must not label queued readings as current
     String payload;
     serializeJson(doc["p"], payload);
     mqtt_.publish(topic, payload.c_str());

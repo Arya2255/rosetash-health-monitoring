@@ -229,6 +229,16 @@ def can_edit_map(role: str) -> bool:
     return role == "owner"
 
 
+def can_manage_employee_scanning(role: str) -> bool:
+    """ویرایش شیفت و مکث اسکن برای ادمین اصلی و ادمین‌های فرعی."""
+    return role in ("owner", "viewer")
+
+
+def can_manage_employee_schedules(role: str) -> bool:
+    """تنظیم ساعات شیفت کارکنان برای همهٔ ادمین‌های مجاز."""
+    return role in ("owner", "viewer")
+
+
 def can_manage_admins(role: str) -> bool:
     """آیا می‌تواند ادمین‌های دیگر را مدیریت کند؟"""
     return role == "owner"

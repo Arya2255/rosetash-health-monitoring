@@ -17,13 +17,14 @@ from theme import (
     BORDER, DANGER, FONT, FONT_B, FONT_MED, INK, OFFLINE, OK, R_BTN, R_CARD,
     TEXT_MAIN, TEXT_MUTED, WARN, WHITE, fa_num, txt,
 )
-from data import EMPLOYEES, live_employees, photo_src
+from data import EMPLOYEES, live_employees, photo_src, save_employee_monitoring
 from layout import is_phone, list_card, page_scroll
 from components.common import (
     ISSUE_LABELS, SHADOW, avatar_circle, person_avatar, rel_age, status_chip,
 )
 from components.employee_card import STATUS_ORDER
 from components.employee_form import open_employee_form
+from components.monitoring import monitoring_admin, monitoring_reason_text
 
 STATUS_RANK = {"danger": 0, "warn": 1, "ok": 2, "off": 3}
 
@@ -101,6 +102,20 @@ def employees_view(app):
         on_click=lambda e: open_employee_form(app, on_saved=_refresh_now),
     )
 
+    def _toggle_monitoring(employee):
+        if not monitoring_admin(app):
+            app.snack("اجازهٔ تغییر پایش را ندارید")
+            return
+        paused = not bool(employee.get("scan_paused"))
+        ok, error = save_employee_monitoring({
+            "mac": employee["mac"], "actor": app.state["admin_email"],
+            "scan_paused": paused,
+        })
+        app.snack(("پایش متوقف شد؛ تا فعال‌سازی دستی متوقف می‌ماند" if paused else
+                   "توقف دستی برداشته شد؛ پایش تابع ساعت کاری است") if ok else error)
+        if ok:
+            _refresh_now()
+
     # ── ردیف کارکن واقعی ──
     def _live_row(e):
         st = e.get("status") or "off"
@@ -121,6 +136,9 @@ def employees_view(app):
             txt(sub, size=11, font=FONT, color=TEXT_MUTED, max_lines=1,
                 overflow=ft.TextOverflow.ELLIPSIS),
         ]
+        monitor_text = monitoring_reason_text(e)
+        if monitor_text:
+            name_col.append(txt(monitor_text, size=11, font=FONT, color=TEXT_MUTED))
         if issue_lbl and st in ("warn", "danger"):
             name_col.append(txt(issue_lbl, size=11, font=FONT,
                                 color=DANGER if st == "danger" else WARN,
@@ -140,7 +158,17 @@ def employees_view(app):
                                                         max_lines=1,
                                                         overflow=ft.TextOverflow.ELLIPSIS)),
                 ]),
-                ft.Container(width=None if phone else 140, content=status_chip(st)),
+                ft.Container(width=None if phone else 140,
+                             content=(txt("توقف پایش", size=12, font=FONT, color=TEXT_MUTED)
+                                      if e.get("scan_paused") else
+                                      txt("خارج از شیفت", size=12, font=FONT, color=TEXT_MUTED)
+                                      if e.get("scan_allowed") is False else status_chip(st))),
+                *([ft.IconButton(
+                    icon=ft.Icons.PLAY_ARROW if e.get("scan_paused") else ft.Icons.PAUSE,
+                    tooltip="فعال‌سازی پایش" if e.get("scan_paused") else "توقف پایش — مرخصی",
+                    data="monitoring:toggle:" + e["mac"],
+                    on_click=lambda event, employee=dict(e): _toggle_monitoring(employee),
+                )] if monitoring_admin(app) else []),
                 *([] if phone else [
                     ft.Container(width=110, content=txt(
                         rel_age(e.get("last_seen_age_s")), size=11, font=FONT,

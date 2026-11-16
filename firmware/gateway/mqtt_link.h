@@ -6,6 +6,7 @@
 //   /health     finished measurement: {mac, bpm[], n, avg, wearing, ended, state}
 //   /vitals     battery percent, device info and raw SpO2/HRV frames (same job)
 //   /event      errors worth surfacing: wearing_error, connect_fail, ...
+//   /scan-policy SUBSCRIBED, v1 leased non-retained software MAC policy
 //   /cmd        SUBSCRIBED — remote commands: {"action":"vibrate","mac":"..."}
 #pragma once
 
@@ -16,10 +17,28 @@
 #include "ble_central.h"
 #include "config.h"
 #include "network_config.h"
+#include "health_schedule.h"
+#include "mqtt_packet_guard.h"
+
+class PolicyNetworkClient : public NetworkClient {
+ public:
+  roztash::MqttPacketGuard guard;
+  int read() override {
+    uint8_t b;
+    return read(&b, 1) == 1 ? b : -1;
+  }
+  int read(uint8_t* out, size_t size) override {
+    const int n = NetworkClient::read(out, size);
+    for (int i = 0; i < n; ++i) guard.feed(out[i]);
+    return n;
+  }
+};
 
 class MqttLink {
  public:
-  void begin(const GatewayConfig& cfg);  // starts W5500 Ethernet with DHCP
+  void begin(const GatewayConfig& cfg, BleCentral& ble, roztash::HealthSchedule& schedule);
+  const roztash::PolicyState& policy() const { return policy_; }
+  bool takeStatusRequest() { bool requested = status_pending_; status_pending_ = false; return requested; }
   void setBroker(const char* host, uint16_t port);
   void poll();  // Ethernet/MQTT reconnect + queue flush; call every loop()
   bool online() { return mqtt_.connected(); }
@@ -40,8 +59,17 @@ class MqttLink {
             bool queue_if_offline);
   void queueLine(const char* topic, const char* payload);
   void flushQueue();
+  void revokePolicy();
+  void receivePolicy(const uint8_t* payload, size_t len);
 
-  NetworkClient net_;
+  BleCentral* ble_ = nullptr;
+  roztash::HealthSchedule* schedule_ = nullptr;
+  roztash::PolicyState policy_;
+  roztash::ScanPolicy incoming_policy_;  // large parser scratch, never on loop task stack
+  bool status_pending_ = true;
+  bool policy_installed_ = false;
+  bool buffer_ready_ = false;
+  PolicyNetworkClient net_;
   PubSubClient mqtt_{net_};
   GatewayConfig cfg_{};
   char base_[40] = {0};

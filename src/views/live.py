@@ -21,10 +21,11 @@ from theme import (
 from data import live_status, send_vibrate
 from layout import flow, is_phone
 from components.common import card, section_header
+from components.monitoring import monitoring_interval_card
 
 CHART_LEN = 60          # ستون‌های نمودار
 FEED_LEN = 6            # ردیف‌های خوراک رویداد
-NOISE_KINDS = {"presence", "status", "health", "measure_fail"}
+NOISE_KINDS = {"presence", "status", "health", "measure_fail", "offline_replay"}
 
 _FAIL_FA = {
     "connect": "اتصال برقرار نشد",
@@ -511,6 +512,11 @@ def live_view(app):
             kind = e.get("kind")
             if kind in NOISE_KINDS:
                 continue
+            if kind == "measure_unavailable":
+                who = e.get("employee_name") or e.get("mac") or "کارکن"
+                entries.append((_epoch(e.get("ts")), "warn",
+                                f"{who} — مچ‌بند هنگام نوبت اندازه‌گیری در دسترس نبود"))
+                continue
             if kind == "vitals":
                 entries.append((_epoch(e.get("ts")), "ok",
                                 "باتری و اطلاعات دستگاه به‌روز شد"))
@@ -557,6 +563,7 @@ def live_view(app):
         section_header("پایش زندهٔ گیت‌وی",
                        "دادهٔ واقعی از پل محلی — به‌روزرسانی هر ثانیه",
                        trailing=conn_chip),
+        monitoring_interval_card(app),
         kpi_row,
         vitals_row,
         devices_card,

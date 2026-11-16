@@ -23,6 +23,7 @@ from components.common import (
     mini_caption, person_avatar, rel_age, rssi_quality, status_chip,
 )
 from components.employee_form import open_delete_confirm, open_employee_form
+from components.monitoring import monitoring_reason_text
 
 BAR_BLUE = "#8FB4DE"
 BAR_EMPTY = "#E3E5E8"
@@ -353,7 +354,10 @@ def _live_detail(app, mac):
         med_meds_val.value = meds_v or "ثبت نشده"
         med_meds_val.color = TEXT_MAIN if meds_v else TEXT_MUTED
         med_hint.visible = not (cond_v or meds_v)
-        status_holder.content = status_chip(e.get("status") or "off")
+        monitor_text = monitoring_reason_text(e)
+        status_holder.content = (txt(monitor_text, size=12, font=FONT, color=TEXT_MUTED)
+                                 if e.get("scan_allowed") is False or e.get("scan_paused")
+                                 else status_chip(e.get("status") or "off"))
         edit_btn.content = "ویرایش" if e.get("registered") else "ثبت کارکن"
         del_btn.visible = bool(e.get("registered"))
 
@@ -371,7 +375,8 @@ def _live_detail(app, mac):
             sig_txt.color = TEXT_MUTED
 
         issues = [ISSUE_LABELS.get(i, i) for i in (e.get("issues") or [])]
-        if issues and e.get("present"):
+        if issues and (e.get("present") or
+                       (e.get("scan_allowed") and "measure_unavailable" in (e.get("issues") or []))):
             danger = e.get("status") == "danger"
             issues_banner.visible = True
             issues_text.value = " — ".join(issues)

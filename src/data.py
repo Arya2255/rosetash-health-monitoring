@@ -54,6 +54,9 @@ from live import (  # noqa: E402,F401
     save_band,
     save_catalog,
     save_employee,
+    save_employee_monitoring,
+    monitoring_settings,
+    save_monitoring_settings,
     save_gateway,
     send_vibrate,
 )
@@ -82,6 +85,8 @@ from admin_roles import (  # noqa: E402,F401
     can_backup,
     can_edit_map,
     can_manage_admins,
+    can_manage_employee_scanning,
+    can_manage_employee_schedules,
     can_manage_gateways,
     can_manage_remote,
     can_view_logs,

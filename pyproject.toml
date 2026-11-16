@@ -9,6 +9,7 @@ dependencies = [
     "flet-cli>=1.0.4",
     "flet-desktop>=1.0.4",
     "flet-web>=1.0.4",
+    "tzdata>=2025.2",
 ]
 
 [tool.flet]

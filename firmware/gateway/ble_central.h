@@ -11,12 +11,16 @@
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
+#include <atomic>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+#include "scan_policy.h"
 
 #include "protocol.h"
 
 class BleCentral {
  public:
-  static constexpr int kMaxBands = 32;
+  static constexpr int kMaxBands = roztash::kMaxPolicyMacs;
   static constexpr int kMaxSamples = 32;
   static constexpr int kMaxClients = 3;
 
@@ -29,14 +33,22 @@ class BleCentral {
   };
 
   enum class JobState : uint8_t { Idle, Connecting, Measuring, Done, Failed };
-  enum class Fail : uint8_t { None, Connect, Subscribe, Write, Timeout };
+  enum class Fail : uint8_t { None, Connect, Subscribe, Write, Timeout, Policy };
 
   void begin(uint16_t scan_interval_ms, uint16_t scan_window_ms,
              uint32_t measure_timeout_ms);
 
+  void setScanPolicy(const roztash::ScanPolicy& policy, uint32_t received_ms);
+  void stopScanPolicy();
+  bool scanPolicyAllows(const char* mac) const;
+  bool scanEnabled() const;
+  bool policyReady() const;
+  bool hasFreshSighting(const char* mac, uint32_t now);
+  bool jobRevoked() const { return cancelled_.load(); }
+
   // ---- presence -------------------------------------------------------------
   int sightingCount();
-  uint32_t advCount() const { return adv_count_; }  // adv packets since boot
+  uint32_t advCount() const { return adv_count_.load(); }  // permitted packets only
   bool getSlot(int slot, Sighting& out);  // slot in [0, kMaxBands)
   int findSighting(const char* mac);      // -1 when unseen
   void pruneStale(uint32_t now, uint32_t ttl_ms);
@@ -44,18 +56,17 @@ class BleCentral {
   // ---- health jobs ----------------------------------------------------------
   bool healthBusy() const;
   bool jobFinished() const;
-  // Blocking connect (bounded), then async collection. `vitals` adds the SpO2
-  // and HRV measurement stages after the heart-rate stage; battery and device
-  // information are always read right after connecting.
+  // Enqueue one GATT job on the dedicated worker. MQTT/presence never wait
+  // for connection/discovery. The worker owns all measurement state until done.
   bool startHealth(const char* mac, bool vitals = false);
   // Connects, sends (05,50) and disconnects: makes the band vibrate (find-device).
   bool startVibrate(const char* mac);
   bool wasVibrate() const { return vibrate_mode_; }
   bool vibrated() const { return vibrated_; }
-  void poll();                        // drives measure timeout; call from loop()
+  void poll();  // policy monitor only: lease, cancel and scan watchdog
 
   // finished-job accessors — valid until clearJob()
-  JobState state() const { return state_; }
+  JobState state() const { return state_.load(); }
   Fail failure() const { return fail_; }
   const char* jobMac() const { return job_mac_; }
   uint8_t sampleCount() const { return sample_count_; }
@@ -100,13 +111,24 @@ class BleCentral {
 
   void onResult(const NimBLEAdvertisedDevice* dev);
   void onNotifyData(const uint8_t* data, size_t len);
+  void enqueueNotify(uint32_t generation, const uint8_t* data, size_t len);
+  bool launchJob(const char* mac, bool vitals, bool vibrate);
+  bool runHealth(const char* mac, bool vitals);
+  bool runVibrate(const char* mac);
+  bool jobAllowed() const;
+  void cancelRevokedJob();
+  void pollMeasurement();
+  static void workerEntry(void* self);
+  static void controlEntry(void* self);
+  void workerLoop();
   void finishJob(JobState st, Fail f);
   NimBLEClient* clientFor(const NimBLEAddress& addr);
 
   // sightings — mutated from the BLE task, guarded by mux_
   Sighting sightings_[kMaxBands]{};
-  volatile uint32_t adv_count_ = 0;  // every adv packet the controller reports
-  portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
+  std::atomic<uint32_t> adv_count_{0};
+  mutable portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
+  roztash::PolicyState policy_;
 
   // scan
   NimBLEScan* scan_ = nullptr;
@@ -114,11 +136,21 @@ class BleCentral {
   uint16_t scan_window_ms_ = 80;
 
   // health job
-  volatile JobState state_ = JobState::Idle;
+  std::atomic<JobState> state_{JobState::Idle};
+  std::atomic<bool> worker_active_{false};
+  std::atomic<bool> cancelled_{false};
+  std::atomic<bool> connecting_{false};
+  TaskHandle_t worker_ = nullptr;
+  std::atomic<bool> control_ready_{false};
+  QueueHandle_t notifications_ = nullptr;
+  SemaphoreHandle_t lifecycle_ = nullptr;
+  struct Notification { uint32_t generation; size_t len; uint8_t data[64]; };
+  uint32_t job_generation_ = 0;  // guarded by mux_
+  uint32_t last_scan_retry_ms_ = 0;
   Fail fail_ = Fail::None;
   char job_mac_[18] = {0};
   uint8_t samples_[kMaxSamples]{};
-  volatile uint8_t sample_count_ = 0;
+  uint8_t sample_count_ = 0;
   bool wearing_ok_ = true;
   bool ended_ = false;
   uint32_t job_started_ms_ = 0;

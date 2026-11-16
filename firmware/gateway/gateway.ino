@@ -26,7 +26,7 @@
 #include "mqtt_link.h"
 #include "discovery.h"
 
-const char* kFwVersion = "0.4.0-ethernet";
+const char* kFwVersion = "0.5.0-shifts";
 
 // SpO2 + HRV stages run only every Nth health window: three PPG measurements
 // back to back on every window would drain the band's battery. Battery and
@@ -39,10 +39,7 @@ static MqttLink mqtt;
 
 static uint32_t last_presence_ms = 0;
 static uint32_t last_status_ms = 0;
-static uint32_t window_started_ms = 0;
-static bool window_active = false;
-static uint16_t window_gen = 1;
-static uint16_t attempted_gen[BleCentral::kMaxBands];  // per-sighting-slot
+static roztash::HealthSchedule health_schedule;
 static DiscoveryClient discovery;
 static bool broker_resolved = false;
 static uint32_t last_broker_discovery_ms = 0;
@@ -71,19 +68,19 @@ static void resolveMqttHost() {
   broker_resolved = true;
 }
 
-// Picks the next band not yet measured in this window.
-static bool pickNextBand() {
+// Consume one assigned MAC, even when absent or a connection fails. Advancing
+// by MAC snapshot avoids slot reuse/expiry making an employee repeat or vanish.
+static void pickNextBand() {
+  roztash::PolicyMac mac{};
   const uint32_t now = millis();
-  for (int slot = 0; slot < BleCentral::kMaxBands; ++slot) {
-    BleCentral::Sighting s;
-    if (!ble.getSlot(slot, s) || !s.used) continue;
-    if (attempted_gen[slot] == window_gen) continue;
-    if ((now - s.seen_ms) > 120000) continue;  // stale sighting, skip
-    attempted_gen[slot] = window_gen;
-    const bool vitals = (window_gen % kVitalsEveryN) == 0;
-    return ble.startHealth(s.mac, vitals);
+  if (!health_schedule.next(mqtt.policy(), now, mac)) return;
+  if (!ble.hasFreshSighting(mac.data(), now)) {
+    mqtt.publishEvent("measure_unavailable", mac.data(), "no fresh advertisement within 60s");
+    return;
   }
-  return false;
+  const bool vitals = (health_schedule.generation() % kVitalsEveryN) == 0;
+  if (!ble.startHealth(mac.data(), vitals))
+    mqtt.publishEvent("measure_fail", mac.data(), "job could not start");
 }
 
 static void setupWatchdog() {
@@ -102,7 +99,6 @@ static void normalBegin() {
 
   broker_resolved = false;
   last_broker_discovery_ms = 0;
-  window_started_ms = millis();
   last_presence_ms = millis();
   last_status_ms = millis();
   Serial.println("[gw] BLE ready; waiting for Ethernet DHCP");
@@ -116,14 +112,14 @@ void setup() {
   configLoad(cfg);
   setupWatchdog();
 
-  mqtt.begin(cfg);  // starts W5500; DHCP runs automatically on link-up
+  mqtt.begin(cfg, ble, health_schedule);  // W5500 DHCP, then leased BLE policy
   normalBegin();
   Serial.println("[gw] ready");
 }
 
 void loop() {
-  const uint32_t now = millis();
   mqtt.poll();
+  const uint32_t now = millis();
 
   // Discover the HSE broker only after W5500 has link and a DHCP lease.
   if (mqtt.networkReady() && !broker_resolved &&
@@ -132,7 +128,7 @@ void loop() {
     resolveMqttHost();
   }
 
-  ble.poll();
+  // BLE control task enforces lease expiry even during network calls.
 
   // A) presence batch every 10 s
   if (now - last_presence_ms >= 10000) {
@@ -141,24 +137,18 @@ void loop() {
     mqtt.publishPresence(ble);
   }
 
-  // B) health windows
-  if (!window_active &&
-      (now - window_started_ms) >= (uint32_t)cfg.health_interval_s * 1000UL) {
-    window_active = true;
-    window_started_ms = now;
-    window_gen++;
-    Serial.printf("[gw] health window %u open (%d bands seen)\n",
-                  (unsigned)window_gen, ble.sightingCount());
-  }
+  // B) sequential health windows. No catch-up overlap when a cycle overruns.
+  if (!ble.healthBusy() && !ble.jobFinished() && health_schedule.openIfDue(mqtt.policy(), millis()))
+    Serial.printf("[gw] health window %lu open\n", (unsigned long)health_schedule.generation());
   if (!ble.healthBusy()) {
     if (ble.jobFinished()) {
-      if (ble.wasVibrate()) {
-        mqtt.publishEvent(ble.vibrated() ? "vibrated" : "vibrate_fail", ble.jobMac(),
-                          "");
-        Serial.printf("[gw] vibrate result: ack=%d\n", (int)ble.vibrated());
+      if (ble.jobRevoked() || !mqtt.policy().allows(ble.jobMac(), millis())) {
+        // Discard all results of revoked work; do not leak an off-duty sample.
+      } else if (ble.wasVibrate()) {
+        mqtt.publishEvent(ble.vibrated() ? "vibrated" : "vibrate_fail", ble.jobMac(), "");
       } else {
         mqtt.publishHealth(ble);
-        mqtt.publishVitals(ble);  // battery / device info / SpO2+HRV frames
+        mqtt.publishVitals(ble);
         if (ble.state() == BleCentral::JobState::Failed)
           mqtt.publishEvent("measure_fail", ble.jobMac(), "");
         else if (!ble.wearingOk())
@@ -166,32 +156,20 @@ void loop() {
       }
       ble.clearJob();
     } else {
-      if (window_active && !pickNextBand()) {
-        window_active = false;  // every candidate attempted
-        Serial.println("[gw] health window closed");
-      }
-      // D) remote commands (vibrate) — run whenever no measurement is in flight
-      if (!window_active) {
-        char act[16] = {0};
-        char cmac[20] = {0};
-        if (mqtt.takeCommand(act, sizeof act, cmac, sizeof cmac)) {
-          if (strcmp(act, "vibrate") == 0 && cmac[0]) {
-            if (!ble.startVibrate(cmac))
-              mqtt.publishEvent("cmd_reject", cmac, "vibrate: not seen or busy");
-            else
-              Serial.printf("[gw] vibrate command -> %s\n", cmac);
-          } else if (strcmp(act, "vibrate") == 0) {
-            mqtt.publishEvent("cmd_reject", cmac, "vibrate: missing mac");
-          } else {
-            mqtt.publishEvent("cmd_unknown", cmac, act);
-          }
-        }
-      }
+      // Commands get a turn between jobs; never overlap a health connection.
+      char act[16] = {0};
+      char cmac[20] = {0};
+      if (mqtt.takeCommand(act, sizeof act, cmac, sizeof cmac)) {
+        if (strcmp(act, "vibrate") == 0) {
+          if (!ble.startVibrate(cmac))
+            mqtt.publishEvent("cmd_reject", cmac, "vibrate: off-duty, unseen or busy");
+        } else mqtt.publishEvent("cmd_unknown", cmac, act);
+      } else if (health_schedule.active()) pickNextBand();
     }
   }
 
-  // C) status heartbeat every 60 s
-  if (now - last_status_ms >= 60000) {
+  // C) immediate status on connect/policy change, then every 60 seconds.
+  if (mqtt.takeStatusRequest() || now - last_status_ms >= 60000) {
     last_status_ms = now;
     mqtt.publishStatus(kFwVersion, ETH.localIP().toString().c_str(),
                        ble.sightingCount(), ble.advCount());

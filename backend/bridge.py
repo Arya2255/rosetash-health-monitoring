@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import re
 import socket
@@ -43,14 +44,22 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 # Auto-discovery for zero-config networking
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "src"))
+import applog
 from tools.discovery_udp import DiscoveryServer
+from admin_roles import (can_manage_employee_scanning,
+                         can_manage_employee_schedules, get_role)
+from employee_schedule import (DAY_KEYS, MAX_ACTIVE_MACS, TEHRAN, active_employee_macs,
+                               eligible_employee, is_scheduled,
+                               next_schedule_transition, normalize_schedule)
+from bridge_auth import verify_request
 
 MQTT_HOST = os.environ.get("ROZTASH_MQTT_HOST", "127.0.0.1")
 MQTT_PORT = os.environ.get("ROZTASH_MQTT_PORT", "1884")
@@ -89,7 +98,11 @@ CREATE TABLE IF NOT EXISTS gateways(
   gw TEXT PRIMARY KEY, zone TEXT, fw TEXT, ip TEXT, rssi REAL,
   uptime_s REAL, bands_seen REAL, adv_seen REAL, last_seen REAL, payload TEXT);
 CREATE TABLE IF NOT EXISTS bands(
-  mac TEXT PRIMARY KEY, gw TEXT, rssi REAL, seen_at REAL);
+  mac TEXT PRIMARY KEY, gw TEXT, rssi REAL, seen_at REAL, address_type INTEGER);
+CREATE TABLE IF NOT EXISTS band_observations(
+  mac TEXT NOT NULL, gw TEXT NOT NULL, rssi REAL NOT NULL, seen_at REAL NOT NULL,
+  address_type INTEGER, PRIMARY KEY(mac,gw));
+CREATE INDEX IF NOT EXISTS idx_band_observations_seen ON band_observations(seen_at);
 CREATE TABLE IF NOT EXISTS health(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts REAL, gw TEXT, mac TEXT, state TEXT, fail TEXT, wearing INTEGER,
@@ -104,7 +117,12 @@ CREATE INDEX IF NOT EXISTS idx_vitals_ts ON vitals(ts);
 CREATE TABLE IF NOT EXISTS employees(
   mac TEXT PRIMARY KEY, name TEXT NOT NULL, dept TEXT, role TEXT, shift TEXT,
   note TEXT, conditions TEXT, medications TEXT, photo TEXT,
-  company TEXT, line TEXT, age INTEGER, created_at REAL, updated_at REAL);
+  company TEXT, line TEXT, age INTEGER, weekly_schedule TEXT NOT NULL DEFAULT '{}',
+  scan_paused INTEGER NOT NULL DEFAULT 0, scan_pause_by TEXT, scan_pause_at REAL,
+  scan_resume_at REAL,
+  schedule_updated_by TEXT, schedule_updated_at REAL, created_at REAL, updated_at REAL);
+CREATE TABLE IF NOT EXISTS monitoring_settings(
+  key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_by TEXT, updated_at REAL);
 CREATE TABLE IF NOT EXISTS band_registry(
   mac TEXT PRIMARY KEY, label TEXT, note TEXT, created_at REAL, updated_at REAL);
 CREATE TABLE IF NOT EXISTS catalogs(
@@ -138,13 +156,28 @@ def db() -> sqlite3.Connection:
         cols = {r[1] for r in _db.execute("PRAGMA table_info(employees)")}
         for col, coltype in (("conditions", "TEXT"), ("medications", "TEXT"),
                              ("photo", "TEXT"), ("company", "TEXT"),
-                             ("line", "TEXT"), ("age", "INTEGER")):
+                             ("line", "TEXT"), ("age", "INTEGER"),
+                             ("weekly_schedule", "TEXT NOT NULL DEFAULT '{}'"),
+                             ("scan_paused", "INTEGER NOT NULL DEFAULT 0"),
+                             ("scan_pause_by", "TEXT"), ("scan_pause_at", "REAL"),
+                             ("scan_resume_at", "REAL"),
+                             ("schedule_updated_by", "TEXT"),
+                             ("schedule_updated_at", "REAL")):
             if col not in cols:
                 _db.execute(f"ALTER TABLE employees ADD COLUMN {col} {coltype}")
         gcols = {r[1] for r in _db.execute("PRAGMA table_info(gateway_registry)")}
+        if "address_type" not in {r[1] for r in _db.execute("PRAGMA table_info(bands)")}:
+            _db.execute("ALTER TABLE bands ADD COLUMN address_type INTEGER")
         if "mac" not in gcols:
             # مک برد گیت‌وی — برای تشخیص «برد اشتباه» در آماده‌سازی
             _db.execute("ALTER TABLE gateway_registry ADD COLUMN mac TEXT")
+        _db.execute(
+            "INSERT OR IGNORE INTO band_observations(mac,gw,rssi,seen_at,address_type) "
+            "SELECT mac,gw,rssi,seen_at,address_type FROM bands "
+            "WHERE gw IS NOT NULL AND seen_at IS NOT NULL AND rssi >= -127 AND rssi < 0")
+        _db.execute(
+            "INSERT OR IGNORE INTO monitoring_settings(key,value) VALUES(?,?)",
+            ("health_interval_s", "600"))
         _db.commit()
         os.makedirs(PHOTOS_DIR, exist_ok=True)
     return _db
@@ -158,6 +191,120 @@ def _iso(ts: float | None) -> str | None:
 
 # ───────────────────────────── ingest ─────────────────────────────
 
+def _mac_scan_eligible(c: sqlite3.Connection, mac: str, now: float) -> bool:
+    """Unknown bands remain discoverable; assigned bands obey shift and pause."""
+    row = c.execute("SELECT * FROM employees WHERE mac=?",
+                    (_norm_mac(mac),)).fetchone()
+    if row is None:
+        return True
+    return _monitoring_state(row, now)["scan_allowed"]
+
+
+def _schedule_window_start(schedule: dict, now_dt: datetime) -> datetime | None:
+    """Start of the currently effective Tehran interval, if any."""
+    try:
+        schedule = normalize_schedule(schedule)
+    except (TypeError, ValueError):
+        return None
+    now_dt = now_dt.astimezone(TEHRAN) if now_dt.tzinfo else now_dt.replace(tzinfo=TEHRAN)
+    intervals = []
+    index = (now_dt.date().weekday() + 2) % 7
+    for offset in range(-8, 1):
+        date = now_dt.date() + timedelta(days=offset)
+        day = DAY_KEYS[(index + offset) % 7]
+        for item in schedule.get(day, []):
+            start = datetime.combine(date, datetime.strptime(item["start"], "%H:%M").time(), TEHRAN)
+            end = datetime.combine(date, datetime.strptime(item["end"], "%H:%M").time(), TEHRAN)
+            if end <= start:
+                end += timedelta(days=1)
+            intervals.append((start, end))
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return next((start for start, end in merged if start <= now_dt < end), None)
+
+
+def _monitoring_state(row, now: float) -> dict:
+    """Return effective schedule state and the freshness floor for live data."""
+    try:
+        schedule = normalize_schedule(json.loads(row["weekly_schedule"] or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        schedule = {}
+    now_dt = datetime.fromtimestamp(now, TEHRAN)
+    scheduled = bool(schedule) and is_scheduled(schedule, now_dt)
+    if not schedule:
+        reason = "unconfigured"
+    elif bool(row["scan_paused"]):
+        reason = "paused"
+    elif not scheduled:
+        reason = "outside_shift"
+    else:
+        reason = "active"
+    allowed = reason == "active"
+    floor = None
+    if allowed:
+        starts = [_schedule_window_start(schedule, now_dt)]
+        for key in ("schedule_updated_at", "scan_resume_at"):
+            value = row[key] if key in row.keys() else None
+            if value is not None:
+                starts.append(datetime.fromtimestamp(float(value), TEHRAN))
+        floor = max(value.timestamp() for value in starts if value is not None)
+    return {"weekly_schedule": schedule, "scheduled_now": scheduled,
+            "scan_paused": bool(row["scan_paused"]), "scan_allowed": allowed,
+            "monitoring_reason": reason, "data_floor": floor}
+
+
+def _monitoring_state_for_mac(c: sqlite3.Connection, mac: str, now: float) -> dict:
+    row = c.execute("SELECT * FROM employees WHERE mac=?", (_norm_mac(mac),)).fetchone()
+    if row is None:
+        return {"weekly_schedule": {}, "scheduled_now": False, "scan_paused": False,
+                "scan_allowed": True, "monitoring_reason": "unconfigured",
+                "data_floor": None}
+    return _monitoring_state(row, now)
+
+
+def _mac_data_visible(c: sqlite3.Connection, mac: str, data_ts: float, now: float) -> bool:
+    state = _monitoring_state_for_mac(c, mac, now)
+    return bool(data_ts <= now and state["scan_allowed"] and
+                (state["data_floor"] is None or data_ts >= state["data_floor"]))
+
+
+def _valid_rssi(value) -> bool:
+    return (type(value) in (int, float) and math.isfinite(value)
+            and -127 <= value < 0)
+
+
+def _fresh_bands(c: sqlite3.Connection, now: float, *, installed_only=False) -> dict:
+    """Strongest fresh observation per band; lexical gateway ID breaks ties.
+
+    Registered installed gateways take precedence over discovery-only receivers.
+    The latter can still expose unassigned bands, but cannot supply a map point.
+    """
+    rows = c.execute(
+        "SELECT b.*,g.zone,g.x,g.y,g.kind FROM band_observations b "
+        "LEFT JOIN gateway_registry g ON g.gw=b.gw "
+        "WHERE b.seen_at >= ? AND b.seen_at <= ? "
+        "ORDER BY CASE WHEN g.kind='installed' THEN 0 ELSE 1 END,b.rssi DESC,b.gw",
+        (now - PRESENCE_TTL, now))
+    winners = {}
+    for row in rows:
+        if (installed_only and row["kind"] != "installed") or not _valid_rssi(row["rssi"]):
+            continue
+        if _mac_data_visible(c, row["mac"], row["seen_at"], now):
+            winners.setdefault(row["mac"], dict(row))
+    return winners
+
+
+def _band_location(b) -> dict | None:
+    if not b or b.get("kind") != "installed" or b["x"] is None or b["y"] is None:
+        return None
+    return {"gw": b["gw"], "zone": b["zone"], "x": b["x"], "y": b["y"],
+            "rssi": b["rssi"], "seen_at": _iso(b["seen_at"])}
+
+
 def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
     """یک پیام MQTT را در پایگاه داده ثبت می‌کند.
 
@@ -168,22 +315,59 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
     parts = topic.split("/")
     gw = parts[1] if len(parts) > 1 else "?"
     leaf = parts[-1] if parts else "?"
+    if leaf in ("scan-policy", "cmd"):
+        return
     try:
         doc = json.loads(payload)
     except Exception:
         doc = {}
+    if not isinstance(doc, dict):
+        return
 
     with _lock:
         c = db()
-        if leaf == "presence":
-            for b in (doc.get("bands") or []):
-                c.execute(
-                    "INSERT INTO bands(mac,gw,rssi,seen_at) VALUES(?,?,?,?) "
-                    "ON CONFLICT(mac) DO UPDATE SET gw=excluded.gw, rssi=excluded.rssi, "
-                    "seen_at=excluded.seen_at",
-                    (b.get("mac", "?"), gw, b.get("rssi"), ts))
+        if doc.get("replayed") is True and leaf in ("health", "vitals", "event"):
+            # Arrival time cannot be used as measurement time after an offline queue.
+            mac = _norm_mac(doc.get("mac"))
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
-                      (ts, gw, "presence", None, payload))
+                      (ts, gw, "offline_replay", mac or None, payload))
+            c.execute("DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?", (EVENTS_KEEP,))
+            c.commit()
+            return
+        if leaf == "presence":
+            accepted = []
+            for b in (doc.get("bands") or []):
+                if not isinstance(b, dict):
+                    continue
+                mac = _norm_mac(b.get("mac"))
+                if (not _valid_mac(mac) or not _valid_rssi(b.get("rssi"))
+                        or not _mac_scan_eligible(c, mac, ts)):
+                    continue
+                age_ms = b.get("age_ms", 0)
+                if type(age_ms) is not int or not 0 <= age_ms <= PRESENCE_TTL * 1000:
+                    continue
+                observed_at = ts - age_ms / 1000.0
+                if not _mac_data_visible(c, mac, observed_at, ts):
+                    continue
+                old = c.execute("SELECT seen_at FROM band_observations WHERE mac=? AND gw=?",
+                                (mac, gw)).fetchone()
+                if old is not None and old["seen_at"] > observed_at:
+                    continue
+                accepted.append({"mac": mac, "rssi": b.get("rssi"), "age_ms": age_ms})
+                c.execute(
+                    "INSERT INTO band_observations(mac,gw,rssi,seen_at,address_type) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(mac,gw) DO UPDATE SET rssi=excluded.rssi, "
+                    "seen_at=excluded.seen_at,address_type=excluded.address_type",
+                    (mac, gw, b["rssi"], observed_at, b.get("address_type")))
+                c.execute(
+                    "INSERT INTO bands(mac,gw,rssi,seen_at,address_type) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(mac) DO UPDATE SET gw=excluded.gw, rssi=excluded.rssi, "
+                    "seen_at=excluded.seen_at, address_type=excluded.address_type "
+                    "WHERE excluded.seen_at >= bands.seen_at",
+                    (mac, gw, b.get("rssi"), observed_at, b.get("address_type")))
+            c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
+                      (ts, gw, "presence", None,
+                       json.dumps({"bands": accepted}, ensure_ascii=False)))
         elif leaf == "status":
             # پیام LWT (آفلاین) نه فیلدها را بازنویسی می‌کند نه تازگی می‌سازد —
             # وگرنه بازپخش retained بعد از ری‌استارت پل، گیت‌وی را آنلاین جلوه می‌دهد.
@@ -204,34 +388,45 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
                       (ts, gw, "status", None, payload))
         elif leaf == "health":
+            mac = _norm_mac(doc.get("mac"))
+            if not _valid_mac(mac) or not _mac_data_visible(c, mac, ts, ts):
+                return
             c.execute(
                 "INSERT INTO health(ts,gw,mac,state,fail,wearing,ended,bpm,n,avg,payload) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (ts, gw, doc.get("mac"), doc.get("state"), doc.get("fail"),
+                (ts, gw, mac, doc.get("state"), doc.get("fail"),
                  1 if doc.get("wearing") else 0, 1 if doc.get("ended") else 0,
                  json.dumps(doc.get("bpm") or []), doc.get("n"), doc.get("avg"), payload))
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
-                      (ts, gw, "health", doc.get("mac"), payload))
+                      (ts, gw, "health", mac, payload))
         elif leaf == "vitals":
+            mac = _norm_mac(doc.get("mac"))
+            if not _valid_mac(mac) or not _mac_data_visible(c, mac, ts, ts):
+                return
             c.execute(
                 "INSERT INTO vitals(ts,gw,mac,battery,dev_fw,dev_hw,dev_maker,"
                 "spo2_ack,hrv_ack,steps,spo2_raw,hrv_raw,payload) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (ts, gw, doc.get("mac"), doc.get("battery"), doc.get("dev_fw"),
+                (ts, gw, mac, doc.get("battery"), doc.get("dev_fw"),
                  doc.get("dev_hw"), doc.get("dev_maker"),
                  1 if doc.get("spo2_ack") else 0, 1 if doc.get("hrv_ack") else 0,
                  doc.get("steps"), json.dumps(doc.get("spo2_raw") or []),
                  json.dumps(doc.get("hrv_raw") or []), payload))
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
-                      (ts, gw, "vitals", doc.get("mac"), payload))
+                      (ts, gw, "vitals", mac, payload))
         else:
+            mac = _norm_mac(doc.get("mac"))
+            if mac and (not _valid_mac(mac) or not _mac_data_visible(c, mac, ts, ts)):
+                return
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
-                      (ts, gw, doc.get("type", leaf), doc.get("mac"), payload))
+                      (ts, gw, doc.get("type", leaf), mac or None, payload))
         # هرس سبک
         c.execute("DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?", (EVENTS_KEEP,))
         c.execute("DELETE FROM health WHERE id <= (SELECT MAX(id) FROM health) - ?", (HEALTH_KEEP,))
         c.execute("DELETE FROM vitals WHERE id <= (SELECT MAX(id) FROM vitals) - ?", (VITALS_KEEP,))
         c.commit()
+    if leaf in ("status", "presence"):
+        _scan_policy_wake.set()
 
 
 # ─────────────────── دفتر کارکنان — نگاشت مک مچ‌بند ↔ کارکن ───────────────────
@@ -268,7 +463,7 @@ def upsert_employee(doc: dict) -> tuple[bool, str]:
     name = str(doc.get("name") or "").strip()
     if not _valid_mac(mac):
         return False, "invalid mac"
-    if not name:
+    if "name" in doc and not name:
         return False, "name required"
 
     # عکس پرسنلی: data URI → ذخیرهٔ فایل؛ "" → پاک‌کردن؛ غایب → دست‌نخورده
@@ -301,6 +496,10 @@ def upsert_employee(doc: dict) -> tuple[bool, str]:
     with _lock:
         c = db()
         row = c.execute("SELECT * FROM employees WHERE mac=?", (mac,)).fetchone()
+        if "name" not in doc:
+            name = str(row["name"] or "") if row is not None else ""
+        if not name:
+            return False, "name required"
 
         def pick(key: str) -> str:
             if key in doc:
@@ -317,10 +516,18 @@ def upsert_employee(doc: dict) -> tuple[bool, str]:
             age_val = int((row["age"] if row is not None else 0) or 0)
         else:
             age_val = age_new
+        schedule_val = str((row["weekly_schedule"] if row is not None else "{}") or "{}")
+        paused = int(row["scan_paused"] if row is not None else 0)
+        pause_by = row["scan_pause_by"] if row is not None else None
+        pause_at = row["scan_pause_at"] if row is not None else None
+        resume_at = row["scan_resume_at"] if row is not None else None
+        schedule_by = row["schedule_updated_by"] if row is not None else None
+        schedule_at = row["schedule_updated_at"] if row is not None else None
         c.execute(
             "INSERT INTO employees(mac,name,dept,role,shift,note,conditions,"
-            "medications,photo,company,line,age,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "medications,photo,company,line,age,weekly_schedule,scan_paused,"
+            "scan_pause_by,scan_pause_at,scan_resume_at,schedule_updated_by,schedule_updated_at,"
+            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(mac) DO UPDATE SET name=excluded.name, "
             "dept=excluded.dept, role=excluded.role, shift=excluded.shift, "
             "note=excluded.note, conditions=excluded.conditions, "
@@ -329,9 +536,138 @@ def upsert_employee(doc: dict) -> tuple[bool, str]:
             "updated_at=excluded.updated_at",
             (mac, name, pick("dept"), pick("role"), pick("shift"), pick("note"),
              pick("conditions"), pick("medications"), photo_val,
-             pick("company"), pick("line"), age_val, now, now))
+             pick("company"), pick("line"), age_val, schedule_val, paused,
+             pause_by, pause_at, resume_at, schedule_by, schedule_at, now, now))
         c.commit()
     log(f"employee saved mac={mac} name={name!r}")
+    _scan_policy_wake.set()
+    return True, ""
+
+
+def _monitoring_settings(c: sqlite3.Connection) -> dict:
+    row = c.execute("SELECT * FROM monitoring_settings WHERE key='health_interval_s'").fetchone()
+    return {"health_interval_s": int(row["value"]), "updated_by": row["updated_by"],
+            "updated_at": row["updated_at"]}
+
+
+def monitoring_settings() -> dict:
+    with _lock:
+        settings = _monitoring_settings(db())
+        settings["policy_delivery"] = {gw: dict(value) for gw, value in _scan_policy_last.items()}
+    return {"ok": True, **settings}
+
+
+def set_monitoring_settings(doc: dict) -> tuple[bool, str]:
+    actor = str(doc.get("actor") or "").strip().lower()
+    if not can_manage_employee_scanning(get_role(actor) if actor else ""):
+        return False, "forbidden"
+    interval = doc.get("health_interval_s")
+    if type(interval) is not int or not 60 <= interval <= 86400:
+        return False, "invalid health interval"
+    with _lock:
+        c = db()
+        c.execute("UPDATE monitoring_settings SET value=?,updated_by=?,updated_at=? "
+                  "WHERE key='health_interval_s'", (str(interval), actor, time.time()))
+        c.commit()
+    _scan_policy_wake.set()
+    return True, ""
+
+
+def employee_scan_policy(now: float | None = None) -> dict:
+    """Fail closed on overflow; assign each expected health scan to one receiver."""
+    now = now if now is not None else time.time()
+    now_dt = datetime.fromtimestamp(now, TEHRAN)
+    with _lock:
+        c = db()
+        employees = []
+        transitions = []
+        for row in c.execute("SELECT * FROM employees ORDER BY mac"):
+            state = _monitoring_state(row, now)
+            employees.append({**dict(row), "weekly_schedule": state["weekly_schedule"]})
+            transition = next_schedule_transition(state["weekly_schedule"], now_dt)
+            if transition:
+                transitions.append(transition.timestamp())
+        error = None
+        try:
+            active = sorted(active_employee_macs(employees, now_dt, limit=MAX_ACTIVE_MACS))
+        except ValueError as exc:
+            active, error = [], str(exc)
+        transition = min(transitions) if transitions else None
+        remaining = transition - now if transition is not None else 90
+        lease = max(1, min(90, math.floor(remaining)))
+        # Whole-second firmware leases cannot safely cross a fractional boundary.
+        if remaining < 1:
+            active = []
+        installed = [r["gw"] for r in c.execute(
+            "SELECT gw FROM gateway_registry WHERE kind='installed' ORDER BY gw")]
+        health_by_gateway = {gw: [] for gw in installed}
+        winners = _fresh_bands(c, now, installed_only=True)
+        last_seen = {}
+        for row in c.execute(
+                "SELECT b.mac,b.gw FROM band_observations b JOIN gateway_registry g ON g.gw=b.gw "
+                "WHERE g.kind='installed' AND b.seen_at<=? ORDER BY b.seen_at DESC,b.rssi DESC,b.gw", (now,)):
+            last_seen.setdefault(row["mac"], row["gw"])
+        for mac in active:
+            gw = winners.get(mac, {}).get("gw") or last_seen.get(mac)
+            if gw is None and installed:
+                gw = installed[0]
+            if gw in health_by_gateway:
+                health_by_gateway[gw].append(mac)
+        interval = _monitoring_settings(c)["health_interval_s"]
+    return {"v": 1, "active_macs": active, "health_by_gateway": health_by_gateway,
+            "health_interval_s": interval, "generated_at": now, "lease_s": lease,
+            "next_transition_at": transition, "error": error, "allow_unassigned": False}
+
+
+def set_employee_monitoring(doc: dict) -> tuple[bool, str]:
+    """Update an employee scan schedule or explicit pause, with role checks."""
+    doc = dict(doc or {})
+    mac = _norm_mac(doc.get("mac"))
+    actor = str(doc.get("actor") or "").strip().lower()
+    if not _valid_mac(mac):
+        return False, "invalid mac"
+    role = get_role(actor) if actor else ""
+    if not can_manage_employee_scanning(role):
+        return False, "forbidden"
+    if "weekly_schedule" in doc and not can_manage_employee_schedules(role):
+        return False, "forbidden"
+    has_schedule = "weekly_schedule" in doc
+    has_pause = "scan_paused" in doc
+    if not has_schedule and not has_pause:
+        return False, "no monitoring changes"
+    try:
+        schedule_json = (json.dumps(normalize_schedule(doc["weekly_schedule"]),
+                                    ensure_ascii=False) if has_schedule else None)
+    except (TypeError, ValueError):
+        return False, "invalid schedule"
+    if has_pause and type(doc["scan_paused"]) is not bool:
+        return False, "invalid scan state"
+    now = time.time()
+    with _lock:
+        c = db()
+        row = c.execute("SELECT mac,scan_paused FROM employees WHERE mac=?", (mac,)).fetchone()
+        if row is None:
+            return False, "not found"
+        assignments, values = [], []
+        if has_schedule:
+            assignments.extend(("weekly_schedule=?", "schedule_updated_by=?",
+                                "schedule_updated_at=?"))
+            values.extend((schedule_json, actor, now))
+        if has_pause:
+            paused = int(bool(doc["scan_paused"]))
+            assignments.extend(("scan_paused=?", "scan_pause_by=?", "scan_pause_at=?"))
+            values.extend((paused, actor if paused else None, now if paused else None))
+            if not paused and row["scan_paused"]:
+                assignments.append("scan_resume_at=?")
+                values.append(now)
+        assignments.append("updated_at=?")
+        values.extend((now, mac))
+        c.execute("UPDATE employees SET " + ",".join(assignments) + " WHERE mac=?", values)
+        c.commit()
+    _scan_policy_wake.set()
+    applog.info("پایش کارکن تغییر کرد — فیلدهای %s، نقش %s",
+                ",".join(k for k in ("weekly_schedule" if has_schedule else None,
+                                     "scan_paused" if has_pause else None) if k), role)
     return True, ""
 
 
@@ -348,6 +684,7 @@ def remove_employee(mac) -> tuple[bool, str]:
         return False, "not found"
     _delete_photos(mac)
     log(f"employee removed mac={mac}")
+    _scan_policy_wake.set()
     return True, ""
 
 
@@ -682,6 +1019,7 @@ def upsert_gateway(doc: dict) -> tuple[bool, str]:
             (gw, label, pick("zone"), kind, x_val, y_val, pick("note"), mac, now, now))
         c.commit()
     log(f"gateway saved gw={gw} label={label!r}")
+    _scan_policy_wake.set()
     return True, ""
 
 
@@ -697,6 +1035,7 @@ def remove_gateway(gw) -> tuple[bool, str]:
     if cur.rowcount == 0:
         return False, "not found"
     log(f"gateway removed gw={gw}")
+    _scan_policy_wake.set()
     return True, ""
 
 
@@ -972,7 +1311,7 @@ def _employee_vitals(c: sqlite3.Connection, v, now: float) -> dict | None:
             "SELECT * FROM vitals WHERE gw=? AND mac=? AND "
             "(spo2_ack=1 OR hrv_ack=1 OR spo2_raw != '[]' OR hrv_raw != '[]') "
             "ORDER BY ts DESC LIMIT 1", (v["gw"], v["mac"])).fetchone()
-        if back:
+        if back and back["ts"] >= now - VITALS_TTL and _mac_data_visible(c, v["mac"], back["ts"], now):
             spo2_ack, hrv_ack = bool(back["spo2_ack"]), bool(back["hrv_ack"])
             spo2_raw = json.loads(back["spo2_raw"] or "[]")
             hrv_raw = json.loads(back["hrv_raw"] or "[]")
@@ -993,24 +1332,36 @@ def _employees_view(c: sqlite3.Connection, now: float) -> list[dict]:
     """
     reg = {r["mac"]: r for r in c.execute("SELECT * FROM employees")}
     breg = {r["mac"]: r for r in c.execute("SELECT mac, label FROM band_registry")}
-    seen = {r["mac"]: r for r in c.execute("SELECT * FROM bands")}
-    zones = {r["gw"]: r["zone"] for r in c.execute("SELECT gw, zone FROM gateways")}
+    seen = _fresh_bands(c, now)
+    zones = {r["gw"]: r["zone"] for r in c.execute("SELECT gw, zone FROM gateway_registry WHERE kind='installed'")}
     health_latest = {}
     for r in c.execute("SELECT * FROM health WHERE ts >= ? ORDER BY ts DESC",
                        (now - HEALTH_TTL,)):
-        health_latest.setdefault(r["mac"], r)
+        if _mac_data_visible(c, r["mac"], r["ts"], now):
+            health_latest.setdefault(r["mac"], r)
     vitals_latest = {}
     for r in c.execute("SELECT * FROM vitals WHERE ts >= ? ORDER BY ts DESC",
                        (now - VITALS_TTL,)):
-        vitals_latest.setdefault(r["mac"], r)
+        if _mac_data_visible(c, r["mac"], r["ts"], now):
+            vitals_latest.setdefault(r["mac"], r)
+    attempts = {}
+    for r in c.execute("SELECT * FROM events WHERE ts >= ? AND kind IN "
+                       "('measure_unavailable','measure_ok','measure_fail') ORDER BY ts DESC,id DESC",
+                       (now - HEALTH_TTL,)):
+        if _mac_data_visible(c, r["mac"], r["ts"], now):
+            attempts.setdefault(r["mac"], r)
 
-    fresh = {m for m, b in seen.items() if b["seen_at"] >= now - PRESENCE_TTL}
+    fresh = {m for m, b in seen.items()
+             if b["seen_at"] >= now - PRESENCE_TTL
+             and _mac_scan_eligible(c, m, now)}
     rows = []
     for mac in sorted(set(reg) | fresh):
         e = reg.get(mac)
         b = seen.get(mac)
         present = mac in fresh
-        h = health_latest.get(mac)
+        monitoring = _monitoring_state_for_mac(c, mac, now)
+        active = monitoring["scan_allowed"]
+        h = health_latest.get(mac) if active else None
         health = None
         if h:
             health = {
@@ -1019,8 +1370,14 @@ def _employees_view(c: sqlite3.Connection, now: float) -> list[dict]:
                 "bpm": json.loads(h["bpm"] or "[]"), "n": h["n"], "avg": h["avg"],
                 "ts": _iso(h["ts"]), "age_s": round(now - h["ts"], 1),
             }
-        vitals = _employee_vitals(c, vitals_latest.get(mac), now)
+        vitals = _employee_vitals(c, vitals_latest.get(mac), now) if active else None
         status, issues = _employee_status(present, health, vitals)
+        attempt = attempts.get(mac)
+        if (active and attempt is not None and attempt["kind"] == "measure_unavailable"
+                and (h is None or attempt["ts"] >= h["ts"])):
+            issues.append("measure_unavailable")
+            if status != "danger":
+                status = "warn"
         rows.append({
             "mac": mac,
             "registered": e is not None,
@@ -1028,6 +1385,13 @@ def _employees_view(c: sqlite3.Connection, now: float) -> list[dict]:
             "dept": e["dept"] if e else None,
             "role": e["role"] if e else None,
             "shift": e["shift"] if e else None,
+            "weekly_schedule": monitoring["weekly_schedule"],
+            "scheduled_now": monitoring["scheduled_now"],
+            "scan_allowed": active if e else False,
+            "monitoring_reason": monitoring["monitoring_reason"],
+            "scan_paused": bool(e["scan_paused"]) if e else False,
+            "scan_pause_by": e["scan_pause_by"] if e else None,
+            "scan_pause_at": e["scan_pause_at"] if e else None,
             "note": e["note"] if e else None,
             "company": e["company"] if e else None,
             "line": e["line"] if e else None,
@@ -1042,6 +1406,7 @@ def _employees_view(c: sqlite3.Connection, now: float) -> list[dict]:
             "rssi": b["rssi"] if b else None,
             "gw": b["gw"] if b else None,
             "zone": zones.get(b["gw"]) if b else None,
+            "location": _band_location(b),
             "last_seen": _iso(b["seen_at"]) if b else None,
             "last_seen_age_s": round(now - b["seen_at"], 1) if b else None,
             "health": health,
@@ -1059,13 +1424,15 @@ def _bands_known_view(c: sqlite3.Connection, now: float) -> list[dict]:
     تخصیص‌داده‌شده به کارکنان. هر ردیف وضعیت دید و صاحبش را دارد.
     """
     reg = {r["mac"]: r for r in c.execute("SELECT * FROM band_registry")}
-    seen = {r["mac"]: r for r in c.execute("SELECT * FROM bands")}
-    zones = {r["gw"]: r["zone"] for r in c.execute("SELECT gw, zone FROM gateways")}
+    historical = {r["mac"]: r for r in c.execute("SELECT * FROM bands")}
+    seen = _fresh_bands(c, now)
+    zones = {r["gw"]: r["zone"] for r in c.execute("SELECT gw, zone FROM gateway_registry WHERE kind='installed'")}
     emp = {r["mac"]: r["name"] for r in c.execute("SELECT mac, name FROM employees")}
     rows = []
-    for mac in sorted(set(reg) | set(seen) | set(emp)):
+    for mac in sorted(set(reg) | set(historical) | set(emp)):
         b = seen.get(mac)
-        in_view = bool(b is not None and b["seen_at"] >= now - PRESENCE_TTL)
+        in_view = bool(b is not None and b["seen_at"] >= now - PRESENCE_TTL
+                       and _mac_scan_eligible(c, mac, now))
         entry = reg.get(mac)
         rows.append({
             "mac": mac,
@@ -1107,12 +1474,13 @@ def snapshot(now: float | None = None) -> dict:
         bands = [{
             "mac": r["mac"], "gw": r["gw"], "rssi": r["rssi"], "seen_at": _iso(r["seen_at"]),
             "age_s": round(now - r["seen_at"], 1),
-        } for r in c.execute("SELECT * FROM bands WHERE seen_at >= ? ORDER BY seen_at DESC",
-                             (now - PRESENCE_TTL,))]
+        } for r in _fresh_bands(c, now).values()]
         health = []
         seen_pairs = set()
         for r in c.execute("SELECT * FROM health WHERE ts >= ? ORDER BY ts DESC",
                            (now - HEALTH_TTL,)):
+            if not _mac_data_visible(c, r["mac"], r["ts"], now):
+                continue
             key = (r["gw"], r["mac"])
             if key in seen_pairs:
                 continue
@@ -1125,11 +1493,16 @@ def snapshot(now: float | None = None) -> dict:
             })
         events = [{
             "ts": _iso(r["ts"]), "gw": r["gw"], "kind": r["kind"], "mac": r["mac"],
-        } for r in c.execute("SELECT * FROM events ORDER BY id DESC LIMIT 50")]
+            "employee_name": r["employee_name"],
+        } for r in c.execute("SELECT e.*,p.name AS employee_name FROM events e "
+                             "LEFT JOIN employees p ON p.mac=e.mac ORDER BY e.id DESC LIMIT 50")
+            if r["kind"] != "measure_unavailable" or _mac_data_visible(c, r["mac"], r["ts"], now)]
         vitals = []
         seen_pairs = set()
         for r in c.execute("SELECT * FROM vitals WHERE ts >= ? ORDER BY ts DESC",
                            (now - VITALS_TTL,)):
+            if not _mac_data_visible(c, r["mac"], r["ts"], now):
+                continue
             key = (r["gw"], r["mac"])
             if key in seen_pairs:
                 continue
@@ -1150,7 +1523,7 @@ def snapshot(now: float | None = None) -> dict:
                     "SELECT * FROM vitals WHERE gw=? AND mac=? AND "
                     "(spo2_ack=1 OR hrv_ack=1 OR spo2_raw != '[]' OR hrv_raw != '[]') "
                     "ORDER BY ts DESC LIMIT 1", (r["gw"], r["mac"])).fetchone()
-                if back:
+                if back and back["ts"] >= now - VITALS_TTL and _mac_data_visible(c, r["mac"], back["ts"], now):
                     v["spo2_ack"] = bool(back["spo2_ack"])
                     v["hrv_ack"] = bool(back["hrv_ack"])
                     v["spo2_raw"] = json.loads(back["spo2_raw"] or "[]")
@@ -1176,6 +1549,80 @@ def snapshot(now: float | None = None) -> dict:
 
 
 # ───────────────────────────── MQTT ─────────────────────────────
+
+SCAN_POLICY_PREFIX = "scan-policy"
+_SCAN_POLICY_REFRESH_S = 5
+_scan_policy_lock = threading.Lock()
+_scan_policy_wake = threading.Event()
+_scan_policy_cleared: set[str] = set()
+_scan_policy_last: dict[str, dict] = {}
+
+
+def gateway_ids() -> list[str]:
+    """All known receiver topics, including receivers needing an empty revoke."""
+    with _lock:
+        rows = db().execute(
+            "SELECT gw FROM gateway_registry UNION SELECT gw FROM gateways "
+            "UNION SELECT gw FROM band_observations").fetchall()
+    return sorted({str(row["gw"]) for row in rows if row["gw"] and _valid_gw(row["gw"])})
+
+
+def publish_scan_policies() -> dict[str, str]:
+    """Clear legacy retained permissions once, then send fresh non-retained leases."""
+    results = {}
+    with _scan_policy_lock:
+        current_gateways = sorted(set(gateway_ids()) | set(_scan_policy_last))
+        for gw in current_gateways:
+            topic = f"roztash/{gw}/{SCAN_POLICY_PREFIX}"
+            clear_error = None
+            if gw not in _scan_policy_cleared:
+                try:
+                    cleared, detail = publish(topic, "", retained=True)
+                except Exception as exc:
+                    cleared, detail = False, str(exc)
+                if cleared:
+                    _scan_policy_cleared.add(gw)
+                else:
+                    clear_error = "retained clear failed: " + detail
+            # Re-evaluate after slow I/O and between gateways: never renew an old shift.
+            policy = employee_scan_policy()
+            payload = {key: policy[key] for key in
+                       ("v", "active_macs", "health_interval_s", "lease_s", "generated_at")}
+            payload["health_macs"] = policy["health_by_gateway"].get(gw, [])
+            try:
+                ok, detail = publish(topic, json.dumps(payload, separators=(",", ":")), retained=False)
+            except Exception as exc:
+                ok, detail = False, str(exc)
+            error = clear_error or (None if ok else detail)
+            results[gw] = error or "sent"
+            with _lock:
+                previous = _scan_policy_last.get(gw, {})
+                _scan_policy_last[gw] = {"attempted_at": time.time(),
+                    "sent_at": time.time() if ok else previous.get("sent_at"),
+                    "ok": ok and clear_error is None, "error": error,
+                    "policy_error": policy["error"], "retained_cleared": gw in _scan_policy_cleared}
+    return results
+
+
+def scan_policy_loop() -> None:
+    while True:
+        _scan_policy_wake.clear()
+        started = time.monotonic()
+        try:
+            results = publish_scan_policies()
+            for gw, result in results.items():
+                if result != "sent":
+                    log(f"scan policy not delivered to {gw}: {result}")
+            policy = employee_scan_policy()
+            transition = policy["next_transition_at"]
+            delay = max(0.05, _SCAN_POLICY_REFRESH_S - (time.monotonic() - started))
+            if transition is not None:
+                delay = min(delay, max(0.05, transition - time.time()))
+        except Exception as exc:
+            log(f"scan policy refresh failed: {exc!r}")
+            delay = _SCAN_POLICY_REFRESH_S
+        _scan_policy_wake.wait(delay)
+
 
 def subscriber_loop() -> None:
     cmd = ["mosquitto_sub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
@@ -1212,12 +1659,15 @@ def subscriber_loop() -> None:
 ACTIONS = {"vibrate"}
 
 
-def publish(topic: str, payload: str) -> tuple[bool, str]:
-    """انتشار یک پیام روی بروکر — برای فرمان‌های خروجی مثل لرزاندن مچ‌بند."""
+def publish(topic: str, payload: str, retained: bool = False) -> tuple[bool, str]:
+    """انتشار یک پیام روی بروکر — برای فرمان‌ها و سیاست اسکن retained."""
     try:
+        cmd = ["mosquitto_pub", "-h", MQTT_HOST, "-p", str(MQTT_PORT)]
+        if retained:
+            cmd.append("-r")
+        cmd.extend(["-t", topic, "-m", payload])
         p = subprocess.run(
-            ["mosquitto_pub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
-             "-t", topic, "-m", payload],
+            cmd,
             capture_output=True, text=True, timeout=5)
         if p.returncode == 0:
             return True, "sent"
@@ -1251,6 +1701,14 @@ def command(doc: dict) -> tuple[bool, str, dict]:
                 gw = row["gw"]
     if not gw:
         return False, "no gateway known yet", {}
+    try:
+        policy = employee_scan_policy()
+    except ValueError:
+        return False, "gateway scan capacity exceeded", {}
+    with _lock:
+        assigned = db().execute("SELECT mac FROM employees WHERE mac=?", (mac,)).fetchone()
+    if assigned is not None and mac not in policy["active_macs"]:
+        return False, "employee monitoring is paused or outside scheduled hours", {}
     topic = f"roztash/{gw}/cmd"
     payload = json.dumps({"action": action, "mac": mac}, ensure_ascii=False)
     ok, detail = publish(topic, payload)
@@ -1296,6 +1754,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "events": snap["events"]})
         elif path == "/api/employees":
             self._send(200, {"ok": True, "employees": employees_list()})
+        elif path == "/api/monitoring":
+            self._send(200, {"ok": True, "scan_policy": employee_scan_policy()})
+        elif path == "/api/monitoring/settings":
+            self._send(200, monitoring_settings())
         elif path == "/api/bands":
             self._send(200, {"ok": True, "bands": bands_list()})
         elif path == "/api/catalogs":
@@ -1326,19 +1788,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        if path not in ("/api/command", "/api/employees", "/api/bands",
-                        "/api/catalogs", "/api/gateways"):
+        if path not in ("/api/command", "/api/employees", "/api/monitoring", "/api/monitoring/settings",
+                        "/api/bands", "/api/catalogs", "/api/gateways"):
             self._send(404, {"ok": False, "error": "not found"})
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)
+            if length < 0:
+                raise ValueError("invalid content length")
             if length > 8_000_000:  # عکس پرسنلی base64 هم جا می‌شود
                 self._send(413, {"ok": False, "error": "body too large"})
                 return
-            doc = json.loads(self.rfile.read(length) or b"{}")
+            body = self.rfile.read(length)
+            doc = json.loads(body or b"{}")
+            if not isinstance(doc, dict):
+                raise ValueError("body must be an object")
         except Exception:
             self._send(400, {"ok": False, "error": "bad json body"})
             return
+        if path in ("/api/monitoring", "/api/monitoring/settings"):
+            actor = verify_request("POST", self.path, body, self.headers)
+            if not actor or doc.get("actor") != actor:
+                self._send(401, {"ok": False, "error": "unauthorized"})
+                return
         if path == "/api/command":
             ok, err, info = command(doc)
             self._send(200 if ok else 400,
@@ -1352,6 +1824,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/gateways":
             ok, err = upsert_gateway(doc)
             self._send(200 if ok else 400, {"ok": ok, "error": err or None})
+        elif path == "/api/monitoring":
+            ok, err = set_employee_monitoring(doc)
+            code = 200 if ok else (403 if err == "forbidden" else 400)
+            self._send(code, {"ok": ok, "error": err or None})
+        elif path == "/api/monitoring/settings":
+            ok, err = set_monitoring_settings(doc)
+            code = 200 if ok else (403 if err == "forbidden" else 400)
+            self._send(code, {"ok": ok, "error": err or None})
         else:
             ok, err = upsert_employee(doc)
             self._send(200 if ok else 400, {"ok": ok, "error": err or None})
@@ -1409,6 +1889,7 @@ def main() -> None:
     log(f"discovery server started on port 19198")
     
     threading.Thread(target=subscriber_loop, daemon=True).start()
+    threading.Thread(target=scan_policy_loop, daemon=True).start()
     srv = Server((HTTP_HOST, HTTP_PORT), Handler)
     log(f"http on http://{HTTP_HOST}:{HTTP_PORT}  db={DB_PATH}")
     try:

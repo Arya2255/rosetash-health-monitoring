@@ -211,6 +211,16 @@ def main() -> None:
     assert len(cats["company"]) == 2 and len(cats["unit"]) == 1
     assert len(cats["line"]) == 1 and len(cats["role"]) == 1
 
+    assert bridge.upsert_gateway({"gw":GW,"kind":"installed","zone":"test","x":0.3,"y":0.4})[0]
+    # Isolated legacy telemetry fixture: explicitly put this employee on duty.
+    # No real admin settings or live database are used by this test.
+    from employee_schedule import DAY_KEYS
+    schedule = {day: [{"start": "00:00", "end": "23:59"}] for day in DAY_KEYS}
+    with bridge._lock:
+        bridge.db().execute("UPDATE employees SET weekly_schedule=?, schedule_updated_at=?, "
+                            "created_at=? WHERE mac=?",
+                            (json.dumps(schedule), NOW - 100, NOW - 100, MAC))
+        bridge.db().commit()
     # حضور تازه: مک اصلی با RSSI تازه + مچ‌بند دومِ ثبت‌نشده
     bridge.ingest(f"roztash/{GW}/presence", json.dumps({
         "gw": GW, "ts": 1020, "bands": [{"mac": MAC, "rssi": -70},

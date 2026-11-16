@@ -38,7 +38,7 @@ LITTLEFS_OFFSET = "0x3D0000"
 DEFAULT_BAUD = 460800
 TARGET_CHIP = "esp32s3"
 TARGET_FLASH_SIZE = "16MB"
-TARGET_FW_VERSION = "0.4.0-ethernet"
+TARGET_FW_VERSION = "0.5.0-shifts"
 
 _GW_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,31}$")  # همان قاعدهٔ پل
 _LIMITS = {"gw_id": 23, "zone": 39, "mqtt_host": 47}

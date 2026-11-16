@@ -189,10 +189,10 @@ def _worker_dots(W, H, doc=None, rows=None):
     """
     dots = []
     try:
-        reg = rows if rows else MAP_GATEWAYS
+        reg = rows if rows is not None else MAP_GATEWAYS
         pos = {g.get("gw"): g for g in reg
-               if g.get("gw") and g.get("x") is not None
-               and g.get("y") is not None}
+               if g.get("gw") and g.get("kind") == "installed"
+               and g.get("x") is not None and g.get("y") is not None}
         if not pos:
             return dots
         d = doc if doc is not None else (live_status() or {})

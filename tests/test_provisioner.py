@@ -184,7 +184,7 @@ def main():
     boot = next(f for f in mani["flash"]["files"]
                 if f["file"] == "firmware/bootloader.bin")
     assert int(boot["addr"], 16) == 0, "ESP32-S3 bootloader must be at 0x0"
-    assert mani["fw_version"] == "0.4.0-ethernet", mani["fw_version"]
+    assert mani["fw_version"] == "0.5.0-shifts", mani["fw_version"]
     assert mani["fqbn"] == (
         "esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,"
         "PartitionScheme=min_spiffs,CDCOnBoot=cdc"), mani["fqbn"]

@@ -1,0 +1,175 @@
+{
+  "checked_at": "2026-11-16T06:27:30+00:00",
+  "test_script_count": 24,
+  "passed": 24,
+  "scripts": [
+    {
+      "file": "tests/test_applog.py",
+      "exit_code": 0,
+      "seconds": 2.06,
+      "output": "OK   — فایل سشن ساخته شد\nOK   — نام فایل با پیشوند app-\nOK   — مهر زمانی کامل + سطح INFO\nOK   — سطربندی INFO\nOK   — سطربندی WARNING\nOK   — سطربندی ERROR\nOK   — متن پیام‌ها\nOK   — تازه‌ترین سطر اول است\nOK   — سطح در خروجی tail\nOK   — ساعت در خروجی tail\nOK   — فیلتر error فقط خطا\nOK   — فیلتر warn شامل هشدار و خطا\nOK   — جستجو\nOK   — خطای traceback در لاگ\nOK   — رد کامل (Traceback) پیوست شده\nOK   — پیام خطای اصلی در رد\nOK   — ماسک مک کامل\nOK   — ماسک مک خالی\nOK   — ماسک رشتهٔ بی‌قالب\nOK   — نصب قلاب بار دوم بی‌اثر است\nOK   — قلاب به قلاب قبلی می‌سپارد\nOK   — خطای نادیده‌گرفته‌شده در لاگ\nOK   — رد کامل خطای نادیده‌گرفته‌شده\nOK   — پل خاموش None برمی‌گرداند\nOK   — خطای اتصال فقط یک‌بار ثبت شد (بدون اسپم)\nOK   — جزئیات خطا در پیام (نشانی پل)\nOK   — جزئیات خطا در پیام (نوع خطا)\nOK   — خطای اتصال با سطح ERROR ثبت شد\nOK   — مهر زمانی خطا مال امروز است\nOK   — پل تازه پاسخ می‌دهد\nOK   — بازگشت به دادهٔ زنده ثبت شد\nOK   — فرمان لرزش از پل تست موفق بود\nOK   — فرمان لرزش در لاگ\nOK   — مک در لاگ ماسک شده\nOK   — مک کامل هرگز در لاگ نیست\nOK   — مقدار خام ضربان در لاگ نیست\nOK   — مقدار خام اکسیژن در لاگ نیست\nOK   — zip ساخته شد\nOK   — zip چند سشن اخیر را دارد\nOK   — zip فایل توضیح دارد\nOK   — zip فایل هر دو سشن را دارد\nOK   — zip بیرون از برنامه خواندنی است\nOK   — فایل توضیح نسخه و سیستم دارد\nOK   — خود خروجی هم در لاگ ثبت شد\nOK   — سقف نگهداری سشن‌ها رعایت شد\nOK   — با ROZTASH_LOG=0 فایلی ساخته نمی‌شود\nOK   — خاموشی موقتی بود — لاگ دوباره کار می‌کند\n\nنتیجه: همهٔ بررسی‌ها پاس شد\n"
+    },
+    {
+      "file": "tests/test_bands_ui.py",
+      "exit_code": 0,
+      "seconds": 0.59,
+      "output": "OK   — برچسب مچ‌بند\nOK   — مک مچ‌بند\nOK   — وضعیت در دید\nOK   — وضعیت خارج از دید\nOK   — صاحب مچ‌بند\nOK   — مچ‌بند بی‌صاحب\nOK   — دکمهٔ ثبت کارکن برای بی‌صاحب‌ها\nOK   — یادداشت مچ‌بند\nOK   — شمارندهٔ فهرست\nOK   — شمارندهٔ در دید\nOK   — شمارندهٔ ثبت‌شده\nOK   — شمارندهٔ بی‌صاحب\nOK   — چیپ دریافت زنده\nOK   — بنر نمایشی مخفی است\nOK   — بنر دادهٔ نمایشی\nOK   — فهرست نمونه\nOK   — شمارندهٔ نمایشی\nOK   — دیالوگ‌ها ساخته شدند\nOK   — دیالوگ ثبت: فیلد مک\nOK   — دیالوگ ثبت: فیلد برچسب\nOK   — دیالوگ پیش‌انتخاب: مک قفل\nOK   — دیالوگ حذف: نام مچ‌بند\n\nنتیجه: همهٔ بررسی‌ها پاس شد\n"
+    },
+    {
+      "file": "tests/test_bridge.py",
+      "exit_code": 0,
+      "seconds": 2.68,
+      "output": "[bridge 09:54:19] command vibrate mac=f3:b6:d6:b7:47:d7 gw=gw-test-1: sent\n[bridge 09:54:19] command vibrate mac=aa:bb:cc:dd:ee:ff gw=gw-test-1: sent\n[bridge 09:54:19] employee saved mac=f3:b6:d6:b7:47:d7 name='رضا محمدی'\n[bridge 09:54:19] employee saved mac=aa:11:bb:22:cc:33 name='مهدی کریمی'\n[bridge 09:54:19] employee saved mac=f3:b6:d6:b7:47:d7 name='رضا محمدی ۲'\n[bridge 09:54:19] employee saved mac=f3:b6:d6:b7:47:d7 name='رضا محمدی'\n[bridge 09:54:19] employee saved mac=f3:b6:d6:b7:47:d7 name='رضا محمدی'\n[bridge 09:54:19] employee saved mac=f3:b6:d6:b7:47:d7 name='رضا محمدی'\n[bridge 09:54:19] employee saved mac=f3:b6:d6:b7:47:d7 name='رضا محمدی'\n[bridge 09:54:19] band saved mac=aa:bb:cc:dd:ee:02 label='مچ\\u200cبند انبار'\n[bridge 09:54:19] band saved mac=f3:b6:d6:b7:47:d7 label='مچ\\u200cبند رضا'\n[bridge 09:54:19] band saved mac=f3:b6:d6:b7:47:d7 label='مچ\\u200cبند رضا'\n[bridge 09:54:19] catalog saved kind=company id=1 name='موتوسل'\n[bridge 09:54:19] catalog saved kind=company id=2 name='روزتاش'\n[bridge 09:54:19] catalog saved kind=unit id=3 name='تولید روغن'\n[bridge 09:54:20] catalog saved kind=line id=4 name='خط روغن ۲'\n[bridge 09:54:20] catalog saved kind=role id=5 name='اپراتور'\n[bridge 09:54:20] gateway saved gw=gw-test-1 label='gw-test-1'\n[bridge 09:54:20] employee removed mac=f3:b6:d6:b7:47:d7\n[bridge 09:54:20] band removed mac=f3:b6:d6:b7:47:d7\nbridge tests PASSED — ingest/snapshot/TTL/command/employees/bands/catalogs/photos\n"
+    },
+    {
+      "file": "tests/test_bridge_auth.py",
+      "exit_code": 0,
+      "seconds": 0.33,
+      "output": "...\n----------------------------------------------------------------------\nRan 3 tests in 0.163s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_bundle_layout.py",
+      "exit_code": 0,
+      "seconds": 0.19,
+      "output": "......\n----------------------------------------------------------------------\nRan 6 tests in 0.017s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_definitions_ui.py",
+      "exit_code": 0,
+      "seconds": 0.54,
+      "output": "OK   — تب شرکت\nOK   — تب واحد\nOK   — تب خط\nOK   — تب سمت\nOK   — شرکت اصلی\nOK   — زیرشرکت با نشان\nOK   — زیرشرکت: نام والد\nOK   — واحد\nOK   — خط\nOK   — سمت\nOK   — شمارندهٔ کل\nOK   — دکمهٔ افزودن شرکت\nOK   — چیپ دریافت زنده\nOK   — بنر نمایشی مخفی است\nOK   — بنر دادهٔ نمایشی\nOK   — نمونهٔ نمایشی\nOK   — شمارندهٔ نمایشی\nOK   — دیالوگ‌ها ساخته شدند\nOK   — دیالوگ شرکت: فیلد نام\nOK   — دیالوگ شرکت: انتخاب والد\nOK   — گزینهٔ والد\nOK   — والدِ خودش در گزینه‌ها نیست\nOK   — دیالوگ حذف: نام شرکت\n\nنتیجه: همهٔ بررسی‌ها پاس شد\n"
+    },
+    {
+      "file": "tests/test_employee_schedule.py",
+      "exit_code": 0,
+      "seconds": 0.17,
+      "output": "........\n----------------------------------------------------------------------\nRan 8 tests in 0.055s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_employees_ui.py",
+      "exit_code": 0,
+      "seconds": 0.7,
+      "output": "OK   — نام کارکن ثبت‌شده\nOK   — نام کارکن غایب\nOK   — چیپ وضعیت عادی\nOK   — چیپ قطع اتصال (غایب)\nOK   — ستون شیفت\nOK   — میانگین ضربان\nOK   — منطقهٔ گیت‌وی\nOK   — شمارندهٔ دفتر\nOK   — شمارندهٔ ثبت‌نشده\nOK   — مچ‌بند ثبت‌نشده\nOK   — مک مچ‌بند ثبت‌نشده\nOK   — دکمهٔ ثبت روی مچ‌بند\nOK   — چیپ دریافت زنده\nOK   — دکمهٔ افزودن کارکن\nOK   — شرکت در فهرست\nOK   — عکس پرسنلی در فهرست\nOK   — بنر نمایشی مخفی است\nOK   — برچسب مشکل شارژ باتری\nOK   — وضعیت هشدار\nOK   — بنر دادهٔ نمایشی\nOK   — فهرست نمونه\nOK   — شمارندهٔ نمایشی\nOK   — بدون دکمهٔ افزودن\nOK   — پروفایل: نام\nOK   — پروفایل: مک مچ‌بند\nOK   — پروفایل: میانگین ضربان\nOK   — پروفایل: نمونهٔ پنجره\nOK   — پروفایل: اکسیژن\nOK   — پروفایل: باتری\nOK   — پروفایل: وضعیت عادی\nOK   — پروفایل: حضور در دید\nOK   — پروفایل: کارت فاز بعد\nOK   — پروفایل: دکمهٔ ویرایش\nOK   — پروفایل: دکمهٔ حذف کارکن\nOK   — پروفایل: شرکت\nOK   — پروفایل: سن\nOK   — پروفایل: برچسب مچ‌بند\nOK   — پروفایل: کارت پروندهٔ پزشکی\nOK   — پروفایل: بیماری زمینه‌ای\nOK   — پروفایل: داروی خاص\nOK   — پروفایل: عکس پرسنلی\nOK   — ثبت‌نشده: دکمهٔ ثبت کارکن\nOK   — ثبت‌نشده: بدون دکمهٔ حذف\nOK   — ثبت‌نشده: نام پیش‌فرض\nOK   — پروفایل: بنر مشکل\nOK   — پروفایل: وضعیت اضطراری\nOK   — غایب: خارج از دید\nOK   — غایب: وضعیت قطع اتصال\nOK   — غایب: پروندهٔ پزشکی ثبت‌نشده\nOK   — پل قطع: پیام راهنما\nOK   — پل قطع: تلاش دوباره\nOK   — نمایشی: نام نمونه\nOK   — دیالوگ‌ها ساخته شدند\nOK   — فرم: فهرست مچ‌بند (برچسب و مک)\nOK   — فرم: مکِ مچ‌بند دیگران نیست\nOK   — فرم: بدون ورود دستی مک\nOK   — فرم: شرکت بعد از نام\nOK   — فرم: دراپ‌دون سال تولد\nOK   — فرم: گزینه‌های سال تولد\nOK   — فرم: پروندهٔ پزشکی\nOK   — فرم: انتخاب عکس\nOK   — فرم: شرکت از فهرست (زیرشرکت)\nOK   — فرم: گزینهٔ فعلی مچ‌بند\nOK   — فرم ویرایش: مچ‌بند قفل\nOK   — فرم ویرایش: سال تولد از سن فعلی\nOK   — فرم بی‌پل: ورود دستی مک\nOK   — فرم بی‌پل: شرکت متنی\n\nنتیجه: همهٔ بررسی‌ها پاس شد\n"
+    },
+    {
+      "file": "tests/test_gateway_registry.py",
+      "exit_code": 0,
+      "seconds": 1.89,
+      "output": "[bridge 09:54:23] gateway saved gw=gw-filter-2 label='سالن فیلتر ۲'\n[bridge 09:54:24] gateway saved gw=gw-filter-2 label='سالن فیلتر ۲'\n[bridge 09:54:24] gateway saved gw=gw-1 label='نقطهٔ تازه'\n[bridge 09:54:24] gateway saved gw=gw-filter-2 label='سالن فیلتر ۲'\n[bridge 09:54:24] gateway saved gw=gw-test-1 label='سالن فیلتر ۱'\n[bridge 09:54:24] gateway removed gw=gw-filter-2\nOK — همهٔ بررسی‌های دفتر گیت‌وی‌ها پاس شد\n"
+    },
+    {
+      "file": "tests/test_gateways_ui.py",
+      "exit_code": 0,
+      "seconds": 0.64,
+      "output": "OK — همهٔ بررسی‌های گیت‌وی‌ها و چیدن نقشه پاس شد\n"
+    },
+    {
+      "file": "tests/test_location_policy.py",
+      "exit_code": 0,
+      "seconds": 7.32,
+      "output": "[bridge 09:54:26] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:26] gateway saved gw=gw-a label='gw-a'\n[bridge 09:54:27] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:27] gateway saved gw=gw-a label='gw-a'\n[bridge 09:54:28] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:28] gateway saved gw=gw-a label='gw-a'\n[bridge 09:54:28] gateway saved gw=gw-b label='gw-b'\n[bridge 09:54:30] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:30] gateway saved gw=gw-a label='gw-a'\n[bridge 09:54:30] gateway saved gw=gw-b label='gw-b'\n[bridge 09:54:31] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:31] gateway saved gw=gw-real label='gw-real'\n[bridge 09:54:31] gateway saved gw=gw-future label='gw-future'\n.....\n----------------------------------------------------------------------\nRan 5 tests in 7.021s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_login.py",
+      "exit_code": 0,
+      "seconds": 0.31,
+      "output": ".....\n----------------------------------------------------------------------\nRan 5 tests in 0.025s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_logs_ui.py",
+      "exit_code": 0,
+      "seconds": 0.73,
+      "output": "OK   — عنوان صفحه\nOK   — سطر اطلاعاتی دیده می‌شود\nOK   — سطر هشدار دیده می‌شود\nOK   — سطر خطا دیده می‌شود\nOK   — برچسب سطح خطا\nOK   — دکمهٔ خروجی zip\nOK   — دکمهٔ بازگشت وجود دارد\nOK   — بازگشت به تنظیمات\nOK   — مسیر پوشهٔ لاگ دیده می‌شود\nOK   — شمارندهٔ خطوط\nOK   — کار در پس‌زمینه ثبت شد (به‌روزرسانی خودکار)\nOK   — فیلتر خطا: خطا می‌ماند\nOK   — فیلتر خطا: هشدار حذف می‌شود\nOK   — فیلتر خطا: اطلاعاتی حذف می‌شود\nOK   — فیلتر هشدار: هشدار می‌ماند\nOK   — فیلتر هشدار: خطا می‌ماند\nOK   — فیلتر هشدار: اطلاعاتی حذف می‌شود\nOK   — پیام نبود نتیجه\nOK   — جستجو: سطر هشدار می‌ماند\nOK   — جستجو: سطر خطا حذف می‌شود\nOK   — پوشهٔ خالی: پیام راهنما\nOK   — خروجی zip ساخته شد\nOK   — پیام خروجی برای کاربر\nOK   — zip بیرون از برنامه خواندنی است\nOK   — صفحه در BUILDERS ثبت شده\n\nنتیجه: همهٔ بررسی‌ها پاس شد\n"
+    },
+    {
+      "file": "tests/test_map_live.py",
+      "exit_code": 0,
+      "seconds": 0.5,
+      "output": "OK — همهٔ بررسی‌های نقشهٔ زنده پس شد\n"
+    },
+    {
+      "file": "tests/test_monitoring_client.py",
+      "exit_code": 0,
+      "seconds": 0.3,
+      "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.086s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_monitoring_integration.py",
+      "exit_code": 0,
+      "seconds": 3.03,
+      "output": "[bridge 09:54:35] employee saved mac=aa:bb:cc:dd:ee:01 name='Integration Fixture'\n[bridge 09:54:35] gateway saved gw=gw-a label='gw-a'\n[bridge 09:54:35] gateway saved gw=gw-b label='gw-b'\nLOOPBACK_INTEGRATION_PASS: HTTP save, signed roles, MQTT policy, strongest gateway, pause/resume, restart\n.\n----------------------------------------------------------------------\nRan 1 test in 2.664s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_monitoring_migration.py",
+      "exit_code": 0,
+      "seconds": 2.38,
+      "output": ".\n----------------------------------------------------------------------\nRan 1 test in 2.068s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_monitoring_policy.py",
+      "exit_code": 0,
+      "seconds": 6.64,
+      "output": "[bridge 09:54:40] employee saved mac=aa:bb:cc:dd:ee:01 name='Test Employee'\n[bridge 09:54:41] employee saved mac=aa:bb:cc:dd:ee:01 name='Test Employee'\n[bridge 09:54:42] employee saved mac=aa:bb:cc:dd:ee:01 name='Test Employee'\n[bridge 09:54:44] employee saved mac=aa:bb:cc:dd:ee:01 name='Test Employee'\n[bridge 09:54:45] employee saved mac=aa:bb:cc:dd:ee:01 name='Test Employee'\n[bridge 09:54:45] employee saved mac=aa:bb:cc:dd:ee:01 name='Test Employee'\n......\n----------------------------------------------------------------------\nRan 6 tests in 6.372s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_monitoring_runtime.py",
+      "exit_code": 0,
+      "seconds": 19.06,
+      "output": "[bridge 09:54:49] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:49] employee saved mac=aa:bb:cc:dd:ee:01 name='Edited'\n[bridge 09:54:50] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:51] employee saved mac=aa:bb:cc:dd:ee:01 name='Updated'\n[bridge 09:54:51] employee saved mac=aa:bb:cc:dd:ee:01 name='Updated'\n[bridge 09:54:52] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:53] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:53] gateway saved gw=gw-a label='gw-a'\n[bridge 09:54:55] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:55] gateway saved gw=gw-a label='gw-a'\n[bridge 09:54:57] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:57] gateway saved gw=gw-a label='gw-a'\n[bridge 09:54:58] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:54:58] gateway saved gw=gw-a label='gw-a'\n[bridge 09:55:00] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:55:00] employee saved mac=aa:bb:cc:dd:ee:02 name='Synthetic Employee'\n[bridge 09:55:00] employee saved mac=aa:bb:cc:dd:ee:03 name='Synthetic Employee'\n[bridge 09:55:00] gateway saved gw=gw-a label='gw-a'\n[bridge 09:55:00] gateway saved gw=gw-b label='gw-b'\n[bridge 09:55:02] employee saved mac=aa:bb:cc:dd:ee:01 name='Synthetic Employee'\n[bridge 09:55:02] gateway saved gw=gw-a label='gw-a'\n[bridge 09:55:05] gateway saved gw=gw-a label='gw-a'\n...........\n----------------------------------------------------------------------\nRan 11 tests in 18.733s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_monitoring_ui.py",
+      "exit_code": 0,
+      "seconds": 0.75,
+      "output": ".......\n----------------------------------------------------------------------\nRan 7 tests in 0.314s\n\nOK\n"
+    },
+    {
+      "file": "tests/test_multidev_ui.py",
+      "exit_code": 0,
+      "seconds": 0.5,
+      "output": "OK   — گیت‌وی اول در فهرست\nOK   — گیت‌وی دوم در فهرست\nOK   — مچ‌بند اول در فهرست\nOK   — مچ‌بند دوم در فهرست\nOK   — شمارندهٔ دستگاه‌ها\nOK   — کارت گیت‌وی شمارشی\nOK   — زیرنویس چند-مچ‌بندی\nOK   — منطقهٔ گیت‌وی دوم\nOK   — اترنت و IP گیت‌وی اول\nOK   — اترنت و IP گیت‌وی دوم\nOK   — گیت‌وی‌های اترنت: بدون وای‌فای\nOK   — سیگنال BLE مچ‌بند اول\nOK   — سیگنال BLE مچ‌بند دوم\nOK   — تک-گیت‌وی: نسخهٔ fw نمایش\nOK   — تک-گیت‌وی: اترنت و IP در کارت شاخص\nOK   — تک-گیت‌وی: اترنت و IP در فهرست\nOK   — تک-گیت‌وی اترنت: بدون وای‌فای\nOK   — تک-مچ‌بند: زیرنویس ساده\nOK   — تک-گیت‌وی: چیپ شمارشی نیست\nOK   — نوار داشبورد: ۲ گیت‌وی\nOK   — نوار داشبورد: ۲ مچ‌بند\nOK   — نوار داشبورد تک: نام گیت‌وی\n\nنتیجه: همهٔ بررسی‌ها پاس شد\n"
+    },
+    {
+      "file": "tests/test_provisioner.py",
+      "exit_code": 0,
+      "seconds": 0.14,
+      "output": "OK — همهٔ بررسی‌های موتور آماده‌سازی گیتوی پاس شد\n"
+    },
+    {
+      "file": "tests/test_provisioning_ui.py",
+      "exit_code": 0,
+      "seconds": 0.52,
+      "output": "OK — همهٔ بررسی‌های صفحهٔ آماده‌سازی گیتوی پاس شد\n"
+    },
+    {
+      "file": "tests/test_sidebar.py",
+      "exit_code": 0,
+      "seconds": 0.43,
+      "output": "OK — desktop sidebar: obsolete profile removed\nOK — mobile drawer: obsolete profile removed\n"
+    }
+  ],
+  "firmware": {
+    "version": "0.5.0-shifts",
+    "compile_exit": 0,
+    "program_bytes": 925839,
+    "static_ram_bytes": 81976,
+    "app_bytes": 925984,
+    "app_sha256": "abb017bff04e1d9c5d3a292209274f4e133591f78970352165c6762d9afe1b2e"
+  },
+  "other_checks": [
+    "host policy/queue/parser/frame-guard suites passed",
+    "production BLE gating with hardware doubles passed",
+    "real loopback Mosquitto + HTTP/app client integration passed",
+    "SQLite migration and preserved legacy fields passed",
+    "UI smoke desktop/mobile passed",
+    "actual Flet desktop/mobile rendered",
+    "user manually accepted mobile screenshot",
+    "live bridge restarted; GET monitoring settings and snapshot readback passed"
+  ],
+  "unverified": [
+    "physical flash and reboot",
+    "BLE/radio timing, multi-gateway coverage and GATT concurrency",
+    "DHCP/cable recovery and Windows build"
+  ],
+  "live_database_backup": "/home/alireza/Projects/rosetash-health-monitoring/backend/state/backups/before-monitoring-20261116-095143.sqlite"
+}

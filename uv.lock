@@ -1067,6 +1067,7 @@ dependencies = [
     { name = "flet-cli" },
     { name = "flet-desktop" },
     { name = "flet-web" },
+    { name = "tzdata" },
 ]
 
 [package.metadata]
@@ -1075,6 +1076,7 @@ requires-dist = [
     { name = "flet-cli", specifier = ">=1.0.4" },
     { name = "flet-desktop", specifier = ">=1.0.4" },
     { name = "flet-web", specifier = ">=1.0.4" },
+    { name = "tzdata", specifier = ">=2025.2" },
 ]
 
 [[package]]

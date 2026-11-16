@@ -26,6 +26,9 @@ import os
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
+
+from bridge_auth import sign_request
 
 import applog
 
@@ -159,6 +162,11 @@ def send_vibrate(mac: str | None = None, timeout: float = 2.5) -> tuple[bool, st
 _ERROR_FA = {
     "invalid mac": "مک مچ‌بند معتبر نیست — قالب درست: f3:b6:d6:b7:47:d7",
     "name required": "نام لازم است",
+    "forbidden": "این حساب اجازهٔ تغییر پایش را ندارد",
+    "unauthorized": "هویت درخواست پایش تأیید نشد؛ برنامه و پل را دوباره اجرا کنید",
+    "invalid schedule": "ساعت‌های برنامهٔ هفتگی معتبر نیست",
+    "invalid scan state": "وضعیت توقف پایش معتبر نیست",
+    "invalid health interval": "فاصلهٔ پایش باید بین ۱ تا ۱۴۴۰ دقیقه باشد",
     "not found": "این مورد در دفتر نیست",
     "duplicate": "این مورد از قبل ثبت شده است",
     "invalid kind": "نوع تعریف نامعتبر است",
@@ -188,16 +196,23 @@ def live_employees(force: bool = False):
     return doc.get("employees") or []
 
 
-def _post_json(path: str, payload: dict, timeout: float = 4.0) -> tuple[bool, str]:
+def _post_json(path: str, payload: dict, timeout: float = 4.0, *, actor: str | None = None) -> tuple[bool, str]:
     """POST به پل — هرگز استثنا بیرون نمی‌دهد؛ خطای پل را فارسی برمی‌گرداند."""
     if MODE == "0":
         return False, "حالت زنده خاموش است"
-    req = urllib.request.Request(
-        BRIDGE + path, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
     try:
+        if actor is not None:
+            headers.update(sign_request("POST", path, body, actor))
+        req = urllib.request.Request(BRIDGE + path, data=body, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             doc = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            doc = json.loads(exc.read().decode("utf-8"))
+        except (ValueError, OSError):
+            return False, "پل درخواست را رد کرد"
     except Exception as exc:
         applog.error("ارسال به پل ناموفق — %s — %s: %s", path,
                      type(exc).__name__, exc)
@@ -219,6 +234,27 @@ def save_employee(doc: dict) -> tuple[bool, str]:
     doc = dict(doc or {})
     doc["mac"] = str(doc.get("mac") or "").strip().lower()
     return _post_json("/api/employees", doc, timeout=10.0)
+
+
+def save_employee_monitoring(doc: dict) -> tuple[bool, str]:
+    doc = dict(doc or {})
+    return _post_json("/api/monitoring", doc, actor=str(doc.get("actor") or ""))
+
+
+def monitoring_settings():
+    if MODE == "0":
+        return None
+    try:
+        with urllib.request.urlopen(BRIDGE + "/api/monitoring/settings", timeout=2) as response:
+            doc = json.loads(response.read().decode("utf-8"))
+        return doc if doc.get("ok") else None
+    except Exception:
+        return None
+
+
+def save_monitoring_settings(doc: dict) -> tuple[bool, str]:
+    doc = dict(doc or {})
+    return _post_json("/api/monitoring/settings", doc, actor=str(doc.get("actor") or ""))
 
 
 def _delete_json(path: str, key: str, value, fallback: str) -> tuple[bool, str]:

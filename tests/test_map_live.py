@@ -123,4 +123,18 @@ texts2 = []
 walk(v, texts2)
 assert any("پل زنده در دسترس نیست" in t for t in texts2), "پیام نبود پل نیامد"
 
+# Explicit empty live registry must not borrow demo gateway positions.
+assert m._worker_dots(500, 800, doc=doc, rows=[]) == []
+strongest_doc = {"bands": [{"mac": "aa:bb:cc:dd:ee:01", "gw": "gw-winner",
+                            "rssi": -50, "age_s": 1}]}
+registry = [
+    {"gw": "gw-other", "label": "سالن دیگر", "kind": "installed", "x": 0.1, "y": 0.2},
+    {"gw": "gw-winner", "label": "نزدیک‌ترین ناحیه", "kind": "installed", "x": 0.8, "y": 0.7},
+]
+chosen = m._worker_dots(500, 800, doc=strongest_doc, rows=registry)
+assert len(chosen) == 1 and "نزدیک‌ترین ناحیه" in chosen[0].tooltip
+assert chosen[0].left > 300
+registry[1]["kind"] = "proposed"
+assert m._worker_dots(500, 800, doc=strongest_doc, rows=registry) == []
+
 print("OK — همهٔ بررسی‌های نقشهٔ زنده پس شد")

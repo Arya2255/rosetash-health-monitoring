@@ -1,7 +1,7 @@
 {
   "project": "نقشه راه مرحله‌به‌مرحله دمو و تست سخت‌افزار روزتاش",
   "scope": "مهاجرت نرم‌افزاری به ESP32-S3 و شبکهٔ اختصاصی؛ آزمون سخت‌افزاری جداگانه",
-  "generated_at": "2026-11-15T16:48:43+00:00",
+  "generated_at": "2026-11-16T06:27:30+00:00",
   "perspectives": [
     "Technical",
     "Critical",
@@ -306,6 +306,25 @@
           "comment": "برای تست اولیه خرید سوئیچ‌های کارخانه لازم نیست؛ روتر دارای DHCP هم قابل استفاده است."
         }
       ]
+    },
+    {
+      "id": "shift_monitoring_software",
+      "label": "پایش بر اساس شیفت و مکان گیتوی",
+      "category": "integration",
+      "temporal_state": "past_taken",
+      "description": "برنامهٔ هفتگی، مرخصی دستی، مکان از قوی‌ترین سیگنال و صف دوره‌ای سلامت پیاده و آزمون نرم‌افزاری شدند. بستهٔ 0.5.0-shifts ساخته شد؛ آزمون فیزیکی همچنان جداست.",
+      "reviews": [
+        {
+          "perspective": "Technical",
+          "type": "insight",
+          "comment": "۲۴ فایل آزمون نرم‌افزاری و آزمون یکپارچهٔ محلی موفق‌اند."
+        },
+        {
+          "perspective": "Critical",
+          "type": "warning",
+          "comment": "فلش و آزمون شبکه و مچ‌بند واقعی هنوز انجام نشده است."
+        }
+      ]
     }
   ],
   "links": [
@@ -397,6 +416,11 @@
     {
       "source": "ethernet_field_acceptance",
       "target": "step8_factory_rack_install",
+      "type": "dependency"
+    },
+    {
+      "source": "shift_monitoring_software",
+      "target": "ethernet_field_acceptance",
       "type": "dependency"
     }
   ]

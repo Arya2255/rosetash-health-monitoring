@@ -24,8 +24,10 @@ from theme import (
 )
 from data import (
     delete_employee, live_bands, live_catalogs, photo_src, save_employee,
+    save_employee_monitoring,
 )
 from layout import dialog_w
+from components.monitoring import WeeklyScheduleEditor, monitoring_admin
 
 SHIFTS = ("صبح", "عصر", "شب")
 _BIRTH_YOUNGEST, _BIRTH_OLDEST = 15, 80  # بازهٔ سنی فهرست «سال تولد»
@@ -229,6 +231,18 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
         options=[ft.DropdownOption(key=s, text=s) for s in SHIFTS],
     )
     note_f = ft.TextField(label="یادداشت", value=emp.get("note") or "", text_size=13)
+    can_monitor = monitoring_admin(app)
+    schedule_editor = WeeklyScheduleEditor(app, emp.get("weekly_schedule") or {},
+                                           enabled=can_monitor)
+    paused_f = ft.Switch(label="توقف دستی پایش مچ‌بند — مرخصی",
+                         value=bool(emp.get("scan_paused")), disabled=not can_monitor,
+                         data="monitoring:paused")
+    monitor_controls = [
+        ft.Divider(height=1, color=BORDER), schedule_editor.control, paused_f,
+        txt("توقف دستی تا زمانی می‌ماند که یکی از مدیران آن را خاموش کند؛ "
+            "شروع شیفت جدید آن را خودکار لغو نمی‌کند.",
+            size=12, font=FONT, color=TEXT_MUTED),
+    ]
 
     # ── پروندهٔ پزشکی (اختیاری) ──
     sec_med = txt("پروندهٔ پزشکی — اختیاری", size=12, font=FONT_B, color=TEXT_MUTED)
@@ -339,7 +353,7 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
 
     controls = [photo_block, name_f, company_f, birth_dd]
     controls += band_controls
-    controls += [dept_f, line_f, role_f, shift_f, note_f,
+    controls += [dept_f, line_f, role_f, shift_f, note_f, *monitor_controls,
                  ft.Divider(height=1, color=BORDER), sec_med, cond_f, med_f]
 
     def _save(e):
@@ -358,6 +372,23 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
                  if band_dd is not None else
                  "مک مچ‌بند لازم است — نمونه: f3:b6:d6:b7:47:d7")
             return
+        monitoring_payload = None
+        if can_monitor:
+            if not monitoring_admin(app):
+                _err("برای تغییر پایش باید با حساب مدیر وارد شوید")
+                return
+            try:
+                weekly = schedule_editor.value()
+            except (TypeError, ValueError):
+                _err("ساعت‌ها باید به صورت ساعت:دقیقه و معتبر باشند؛ شروع و پایان نباید برابر باشند")
+                return
+            changes = {}
+            if not editing or weekly != schedule_editor.original:
+                changes["weekly_schedule"] = weekly
+            if bool(paused_f.value) != bool(emp.get("scan_paused")):
+                changes["scan_paused"] = bool(paused_f.value)
+            if changes:
+                monitoring_payload = {"mac": mac_val, "actor": app.state["admin_email"], **changes}
         age_val = ""
         if birth_dd.value and birth_dd.value in year_keys:
             age_val = str(jy_now - int(birth_dd.value))
@@ -382,6 +413,11 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
         if not ok:
             _err(msg)
             return
+        if monitoring_payload is not None:
+            ok, msg = save_employee_monitoring(monitoring_payload)
+            if not ok:
+                _err("مشخصات کارکن ذخیره شد، ولی تنظیم پایش ذخیره نشد: " + msg)
+                return
         _pop(app)
         app.snack("اطلاعات کارکن به‌روز شد" if editing else "کارکن ثبت شد")
         if on_saved:
