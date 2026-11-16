@@ -64,7 +64,9 @@ class FrozenBundleTests(unittest.TestCase):
             with patch.object(sys, "frozen", True, create=True), \
                     patch.dict(os.environ, {}, clear=True):
                 pv = load_provisioner(app / "provisioner.py")
-                self.assertEqual(pv.bundle_dir(), base / "distribution/gateway-provisioner")
+                expected = base / "distribution/gateway-provisioner"
+                expected.mkdir(parents=True)
+                self.assertTrue(os.path.samefile(pv.bundle_dir(), expected))
 
     def test_environment_overrides_keep_both_spellings_and_precedence(self):
         with tempfile.TemporaryDirectory(prefix="override-bundle-") as tmp:
@@ -105,7 +107,7 @@ class FrozenBundleTests(unittest.TestCase):
             with patch.object(flet_app, "__file__", str(extracted / "flet/app.py")), \
                     patch.dict(os.environ, {}, clear=True):
                 resolved = getattr(flet_app, "__get_assets_dir_path")("assets")
-            self.assertEqual(Path(resolved), extracted / "assets")
+            self.assertTrue(os.path.samefile(Path(resolved), extracted / "assets"))
             self.assertTrue((Path(resolved) / "fonts/Vazirmatn-Regular.ttf").is_file())
             self.assertTrue((Path(resolved) / "logo-colored.png").is_file())
 
