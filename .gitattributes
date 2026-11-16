@@ -1,0 +1,2 @@
+# Keep shipped bundle bytes stable: manifest SHA-256 values cover these files.
+/distribution/gateway-provisioner/** -text
