@@ -6,8 +6,12 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
+# Virtual environments and local Git worktrees
 .venv/
+.worktrees/
+
+# Single-file distribution output
+dist-single/
 
 # Flet dev cache
 .flet/
