@@ -6,7 +6,9 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'distribution/**'
       - 'pyproject.toml'
+      - '.github/workflows/build-windows.yml'
 
 permissions:
   contents: write
@@ -42,18 +44,28 @@ jobs:
           pip install flet-cli
           flet build windows -o ./dist --yes
 
+      - name: Include gateway provisioner bundle
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse -Force ./distribution ./dist/distribution
+          Compress-Archive -Path ./dist/* -DestinationPath ./roztash-windows.zip
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: roztash-windows
-          path: ./dist/
+          path: |
+            ./dist/
+            ./roztash-windows.zip
           retention-days: 30
 
       - name: Create Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v1
         with:
-          files: ./dist/*.exe
+          files: |
+            ./dist/*.exe
+            ./roztash-windows.zip
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
