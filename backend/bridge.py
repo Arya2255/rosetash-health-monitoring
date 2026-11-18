@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import math
 import os
@@ -56,8 +57,10 @@ import applog
 from tools.discovery_udp import DISCOVERY_PORT, DiscoveryServer
 if __package__:
     from . import battery_alerts as battery_policy
+    from . import staff_alerts as staff_alert_policy
 else:  # Direct script execution and legacy ``import bridge`` callers.
     import battery_alerts as battery_policy
+    import staff_alerts as staff_alert_policy
 
 claim_battery = battery_policy.claim
 observe_battery = battery_policy.observe
@@ -66,7 +69,9 @@ record_battery_publish = battery_policy.record_publish
 record_battery_result = battery_policy.record_result
 visible_battery_alerts = battery_policy.visible_alerts
 from admin_roles import (can_manage_employee_scanning,
-                         can_manage_employee_schedules, get_role)
+                         can_manage_employee_schedules, can_delete_employees, get_role)
+from personnel import STAFF_GROUP_LABELS
+from alert_contacts import alert_recipients
 from employee_schedule import (DAY_KEYS, MAX_ACTIVE_MACS, TEHRAN, active_employee_macs,
                                eligible_employee, is_scheduled,
                                next_schedule_transition, normalize_schedule)
@@ -127,6 +132,7 @@ CREATE TABLE IF NOT EXISTS vitals(
 CREATE INDEX IF NOT EXISTS idx_vitals_ts ON vitals(ts);
 CREATE TABLE IF NOT EXISTS employees(
   mac TEXT PRIMARY KEY, name TEXT NOT NULL, dept TEXT, role TEXT, shift TEXT,
+  staff_group TEXT NOT NULL DEFAULT 'employee',
   note TEXT, conditions TEXT, medications TEXT, photo TEXT,
   company TEXT, line TEXT, age INTEGER, weekly_schedule TEXT NOT NULL DEFAULT '{}',
   scan_paused INTEGER NOT NULL DEFAULT 0, scan_pause_by TEXT, scan_pause_at REAL,
@@ -135,7 +141,8 @@ CREATE TABLE IF NOT EXISTS employees(
 CREATE TABLE IF NOT EXISTS monitoring_settings(
   key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_by TEXT, updated_at REAL);
 CREATE TABLE IF NOT EXISTS band_registry(
-  mac TEXT PRIMARY KEY, label TEXT, note TEXT, created_at REAL, updated_at REAL);
+  mac TEXT PRIMARY KEY, label TEXT, note TEXT, created_at REAL, updated_at REAL,
+  inactive_since REAL);
 CREATE TABLE IF NOT EXISTS catalogs(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL, name TEXT NOT NULL, parent_id INTEGER,
@@ -164,9 +171,11 @@ def db() -> sqlite3.Connection:
         _db.execute("PRAGMA journal_mode=WAL")
         _db.executescript(SCHEMA)
         battery_policy.ensure_schema(_db)
+        staff_alert_policy.ensure_schema(_db)
         # مهاجرت نرم — ستون‌های تازهٔ کارکنان روی دیتابیس‌های موجود
         cols = {r[1] for r in _db.execute("PRAGMA table_info(employees)")}
         for col, coltype in (("conditions", "TEXT"), ("medications", "TEXT"),
+                             ("staff_group", "TEXT NOT NULL DEFAULT 'employee'"),
                              ("photo", "TEXT"), ("company", "TEXT"),
                              ("line", "TEXT"), ("age", "INTEGER"),
                              ("weekly_schedule", "TEXT NOT NULL DEFAULT '{}'"),
@@ -178,6 +187,8 @@ def db() -> sqlite3.Connection:
             if col not in cols:
                 _db.execute(f"ALTER TABLE employees ADD COLUMN {col} {coltype}")
         gcols = {r[1] for r in _db.execute("PRAGMA table_info(gateway_registry)")}
+        if "inactive_since" not in {r[1] for r in _db.execute("PRAGMA table_info(band_registry)")}:
+            _db.execute("ALTER TABLE band_registry ADD COLUMN inactive_since REAL")
         if "address_type" not in {r[1] for r in _db.execute("PRAGMA table_info(bands)")}:
             _db.execute("ALTER TABLE bands ADD COLUMN address_type INTEGER")
         if "mac" not in gcols:
@@ -208,6 +219,8 @@ def _mac_scan_eligible(c: sqlite3.Connection, mac: str, now: float) -> bool:
     row = c.execute("SELECT * FROM employees WHERE mac=?",
                     (_norm_mac(mac),)).fetchone()
     if row is None:
+        return not _released_band(c, mac)
+    if row["staff_group"] == "hse":
         return True
     return _monitoring_state(row, now)["scan_allowed"]
 
@@ -269,18 +282,31 @@ def _monitoring_state(row, now: float) -> dict:
             "monitoring_reason": reason, "data_floor": floor}
 
 
+def _released_band(c: sqlite3.Connection, mac: str) -> bool:
+    return c.execute("SELECT 1 FROM band_registry WHERE mac=? AND inactive_since IS NOT NULL",
+                     (_norm_mac(mac),)).fetchone() is not None
+
+
 def _monitoring_state_for_mac(c: sqlite3.Connection, mac: str, now: float) -> dict:
     row = c.execute("SELECT * FROM employees WHERE mac=?", (_norm_mac(mac),)).fetchone()
     if row is None:
+        released = _released_band(c, mac)
         return {"weekly_schedule": {}, "scheduled_now": False, "scan_paused": False,
-                "scan_allowed": True, "monitoring_reason": "unconfigured",
+                "scan_allowed": not released,
+                "monitoring_reason": "inactive" if released else "unconfigured",
                 "data_floor": None}
     return _monitoring_state(row, now)
 
 
-def _mac_data_visible(c: sqlite3.Connection, mac: str, data_ts: float, now: float) -> bool:
+def _mac_data_visible(c: sqlite3.Connection, mac: str, data_ts: float, now: float,
+                      *, presence: bool = False) -> bool:
     state = _monitoring_state_for_mac(c, mac, now)
-    return bool(data_ts <= now and state["scan_allowed"] and
+    emergency = False
+    if presence:
+        row = c.execute("SELECT staff_group FROM employees WHERE mac=?",
+                        (_norm_mac(mac),)).fetchone()
+        emergency = row is not None and row["staff_group"] == "hse"
+    return bool(data_ts <= now and (state["scan_allowed"] or emergency) and
                 (state["data_floor"] is None or data_ts >= state["data_floor"]))
 
 
@@ -305,7 +331,7 @@ def _fresh_bands(c: sqlite3.Connection, now: float, *, installed_only=False) -> 
     for row in rows:
         if (installed_only and row["kind"] != "installed") or not _valid_rssi(row["rssi"]):
             continue
-        if _mac_data_visible(c, row["mac"], row["seen_at"], now):
+        if _mac_data_visible(c, row["mac"], row["seen_at"], now, presence=True):
             winners.setdefault(row["mac"], dict(row))
     return winners
 
@@ -359,7 +385,7 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
                 if type(age_ms) is not int or not 0 <= age_ms <= PRESENCE_TTL * 1000:
                     continue
                 observed_at = ts - age_ms / 1000.0
-                if not _mac_data_visible(c, mac, observed_at, ts):
+                if not _mac_data_visible(c, mac, observed_at, ts, presence=True):
                     continue
                 old = c.execute("SELECT seen_at FROM band_observations WHERE mac=? AND gw=?",
                                 (mac, gw)).fetchone()
@@ -433,10 +459,14 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
                       (ts, gw, "vitals", mac, payload))
         else:
             mac = _norm_mac(doc.get("mac"))
-            if mac and (not _valid_mac(mac) or not _mac_data_visible(c, mac, ts, ts)):
+            if mac and not _valid_mac(mac):
                 return
+            if mac and not _mac_data_visible(c, mac, ts, ts):
+                if leaf != "event" or not staff_alert_policy.accepts_result(c, gw, {**doc, "mac": mac}):
+                    return
             if leaf == "event":
                 record_battery_result(c, gw, {**doc, "mac": mac}, ts)
+                staff_alert_policy.record_result(c, gw, {**doc, "mac": mac}, ts)
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
                       (ts, gw, doc.get("type", leaf), mac or None, payload))
         # هرس سبک
@@ -444,7 +474,7 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
         c.execute("DELETE FROM health WHERE id <= (SELECT MAX(id) FROM health) - ?", (HEALTH_KEEP,))
         c.execute("DELETE FROM vitals WHERE id <= (SELECT MAX(id) FROM vitals) - ?", (VITALS_KEEP,))
         c.commit()
-    if leaf in ("status", "presence", "vitals", "event"):
+    if leaf in ("status", "presence", "health", "vitals", "event"):
         _scan_policy_wake.set()
 
 
@@ -484,6 +514,8 @@ def upsert_employee(doc: dict) -> tuple[bool, str]:
         return False, "invalid mac"
     if "name" in doc and not name:
         return False, "name required"
+    if "staff_group" in doc and doc["staff_group"] not in STAFF_GROUP_LABELS:
+        return False, "invalid staff group"
 
     # عکس پرسنلی: data URI → ذخیرهٔ فایل؛ "" → پاک‌کردن؛ غایب → دست‌نخورده
     photo_new = None  # None یعنی «دست نزن»
@@ -539,7 +571,7 @@ def upsert_employee(doc: dict) -> tuple[bool, str]:
         paused = int(row["scan_paused"] if row is not None else 0)
         pause_by = row["scan_pause_by"] if row is not None else None
         pause_at = row["scan_pause_at"] if row is not None else None
-        resume_at = row["scan_resume_at"] if row is not None else None
+        resume_at = row["scan_resume_at"] if row is not None else now
         schedule_by = row["schedule_updated_by"] if row is not None else None
         schedule_at = row["schedule_updated_at"] if row is not None else None
         c.execute(
@@ -557,6 +589,9 @@ def upsert_employee(doc: dict) -> tuple[bool, str]:
              pick("conditions"), pick("medications"), photo_val,
              pick("company"), pick("line"), age_val, schedule_val, paused,
              pause_by, pause_at, resume_at, schedule_by, schedule_at, now, now))
+        if "staff_group" in doc:
+            c.execute("UPDATE employees SET staff_group=? WHERE mac=?", (doc["staff_group"], mac))
+        c.execute("UPDATE band_registry SET inactive_since=NULL WHERE mac=?", (mac,))
         c.commit()
     log(f"employee saved mac={mac} name={name!r}")
     _scan_policy_wake.set()
@@ -607,26 +642,34 @@ def employee_scan_policy(now: float | None = None) -> dict:
             if transition:
                 transitions.append(transition.timestamp())
         error = None
+        emergency_macs = sorted({r["mac"] for r in c.execute(
+            "SELECT mac FROM employees WHERE staff_group='hse' AND mac IS NOT NULL")})
         try:
-            active = sorted(active_employee_macs(employees, now_dt, limit=MAX_ACTIVE_MACS))
+            health_active = sorted(active_employee_macs(employees, now_dt, limit=MAX_ACTIVE_MACS))
+            active = sorted(set(health_active)
+                            | set(emergency_macs))
+            if len(active) > MAX_ACTIVE_MACS:
+                raise ValueError("too many active employee wristbands")
         except ValueError as exc:
-            active, error = [], str(exc)
+            active, health_active, error = [], [], str(exc)
         transition = min(transitions) if transitions else None
         remaining = transition - now if transition is not None else 90
         lease = max(1, min(90, math.floor(remaining)))
         # Whole-second firmware leases cannot safely cross a fractional boundary.
         if remaining < 1:
-            active = []
+            active, health_active = [], []
         installed = [r["gw"] for r in c.execute(
             "SELECT gw FROM gateway_registry WHERE kind='installed' ORDER BY gw")]
         health_by_gateway = {gw: [] for gw in installed}
+        emergency_macs = sorted({r["mac"] for r in c.execute(
+            "SELECT mac FROM employees WHERE staff_group='hse' AND mac IS NOT NULL")})
         winners = _fresh_bands(c, now, installed_only=True)
         last_seen = {}
         for row in c.execute(
                 "SELECT b.mac,b.gw FROM band_observations b JOIN gateway_registry g ON g.gw=b.gw "
                 "WHERE g.kind='installed' AND b.seen_at<=? ORDER BY b.seen_at DESC,b.rssi DESC,b.gw", (now,)):
             last_seen.setdefault(row["mac"], row["gw"])
-        for mac in active:
+        for mac in health_active:
             gw = winners.get(mac, {}).get("gw") or last_seen.get(mac)
             if gw is None and installed:
                 gw = installed[0]
@@ -634,6 +677,7 @@ def employee_scan_policy(now: float | None = None) -> dict:
                 health_by_gateway[gw].append(mac)
         interval = _monitoring_settings(c)["health_interval_s"]
     return {"v": 1, "active_macs": active, "health_by_gateway": health_by_gateway,
+            "emergency_macs": emergency_macs,
             "health_interval_s": interval, "generated_at": now, "lease_s": lease,
             "next_transition_at": transition, "error": error, "allow_unassigned": False}
 
@@ -691,21 +735,46 @@ def set_employee_monitoring(doc: dict) -> tuple[bool, str]:
 
 
 def remove_employee(mac) -> tuple[bool, str]:
-    """حذف کارکن از دفتر — مچ‌بندش اگر در دید باشد به «ثبت‌نشده» برمی‌گردد."""
+    """Remove the employee and release its band atomically into inactive stock."""
     mac = _norm_mac(mac)
     if not _valid_mac(mac):
         return False, "invalid mac"
     with _lock:
         c = db()
-        cur = c.execute("DELETE FROM employees WHERE mac=?", (mac,))
-        c.execute("DELETE FROM battery_alert_state WHERE mac=?", (mac,))
-        c.commit()
-    if cur.rowcount == 0:
-        return False, "not found"
+        if c.execute("SELECT 1 FROM employees WHERE mac=?", (mac,)).fetchone() is None:
+            return False, "not found"
+        now = time.time()
+        with c:
+            c.execute("INSERT INTO band_registry(mac,label,note,created_at,updated_at,inactive_since) "
+                      "VALUES(?, '', '', ?, ?, ?) ON CONFLICT(mac) DO UPDATE SET "
+                      "inactive_since=excluded.inactive_since,updated_at=excluded.updated_at",
+                      (mac, now, now, now))
+            c.execute("DELETE FROM employees WHERE mac=?", (mac,))
+            # MAC is the current assignment key; do not relabel an old person's
+            # health/observation records as the next wearer of this band.
+            for table in ("battery_alert_state", "health", "vitals", "events",
+                          "bands", "band_observations"):
+                c.execute("DELETE FROM " + table + " WHERE mac=?", (mac,))
     _delete_photos(mac)
     log(f"employee removed mac={mac}")
     _scan_policy_wake.set()
     return True, ""
+
+
+_ble_discovery_lock = threading.Lock()
+
+
+def discover_bands_for_admin(actor: str) -> list[dict]:
+    """Run a short local-adapter scan, never for a secondary administrator."""
+    if not actor or get_role(actor) != "owner":
+        raise PermissionError("forbidden")
+    if not _ble_discovery_lock.acquire(blocking=False):
+        raise RuntimeError("جست‌وجوی بلوتوث دیگری در حال اجراست؛ چند لحظه صبر کنید")
+    try:
+        from ble_discovery import discover_nearby
+        return asyncio.run(discover_nearby())
+    finally:
+        _ble_discovery_lock.release()
 
 
 def employees_list() -> list[dict]:
@@ -1429,6 +1498,7 @@ def _employees_view(c: sqlite3.Connection, now: float) -> list[dict]:
             "dept": e["dept"] if e else None,
             "role": e["role"] if e else None,
             "shift": e["shift"] if e else None,
+            "staff_group": e["staff_group"] if e else None,
             "weekly_schedule": monitoring["weekly_schedule"],
             "scheduled_now": monitoring["scheduled_now"],
             "scan_allowed": active if e else False,
@@ -1491,6 +1561,8 @@ def _bands_known_view(c: sqlite3.Connection, now: float) -> list[dict]:
             "last_seen_age_s": (round(now - b["seen_at"], 1)
                                 if b is not None else None),
             "employee_name": emp.get(mac),
+            "assignment_status": "active" if mac in emp else "inactive",
+            "monitoring_active": bool(mac in emp and _mac_scan_eligible(c, mac, now)),
         })
     # ترتیب: تخصیص‌دار، در دید، ثبت‌شده، بی‌دید — سپس برچسب/مک
     rows.sort(key=lambda r: (r["employee_name"] is None, not r["in_view"],
@@ -1634,7 +1706,7 @@ def publish_scan_policies() -> dict[str, str]:
             # Re-evaluate after slow I/O and between gateways: never renew an old shift.
             policy = employee_scan_policy()
             payload = {key: policy[key] for key in
-                       ("v", "active_macs", "health_interval_s", "lease_s", "generated_at")}
+                       ("v", "active_macs", "emergency_macs", "health_interval_s", "lease_s", "generated_at")}
             payload["health_macs"] = policy["health_by_gateway"].get(gw, [])
             try:
                 ok, detail = publish(topic, json.dumps(payload, separators=(",", ":")), retained=False)
@@ -1713,7 +1785,10 @@ def dispatch_battery_alerts(now: float | None = None) -> dict:
                                  "AND active=1 AND confirmed_at IS NULL AND attempts>0 "
                                  "AND delivery_status IN ('dispatching','awaiting_ack') AND next_attempt_at>?",
                                  (mac, gw, moment)).fetchone()
-                if busy:
+                staff_busy = c.execute(
+                    "SELECT 1 FROM staff_alert_delivery WHERE gateway=? AND status='awaiting_ack' "
+                    "LIMIT 1", (gw,)).fetchone()
+                if busy or staff_busy:
                     continue
                 request = claim_battery(c, row, gw, moment)
                 c.commit()
@@ -1730,6 +1805,105 @@ def dispatch_battery_alerts(now: float | None = None) -> dict:
     return results
 
 
+_staff_alert_dispatch_lock = threading.Lock()
+
+
+def dispatch_alert_notifications(now: float | None = None) -> dict:
+    """Deliver current alert episodes through durable, correlated gateway commands."""
+    moment = time.time() if now is None else now
+    results = {}
+    with _staff_alert_dispatch_lock:
+        policy = employee_scan_policy(moment)
+        with _lock:
+            c = db()
+            employees = _employees_view(c, moment)
+            episodes = staff_alert_policy.sync_episodes(c, employees, moment)
+            by_mac = {str(row.get("mac") or "").lower(): row for row in employees}
+            for episode in episodes.values():
+                source = by_mac.get(episode["source_mac"])
+                if source:
+                    staff_alert_policy.add_recipients(
+                        c, episode, alert_recipients(source, employees), moment)
+
+            fresh = _fresh_bands(c, moment, installed_only=True)
+            rows = c.execute(
+                "SELECT d.*,e.opened_at FROM staff_alert_delivery d "
+                "JOIN staff_alert_episode e ON e.id=d.episode_id "
+                "WHERE e.closed_at IS NULL AND d.status IN ('pending','failed','unconfirmed','awaiting_ack') "
+                "AND d.next_attempt_at<=? ORDER BY e.opened_at,d.target_mac", (moment,)).fetchall()
+            used_gateways, claims = set(), []
+            for row in rows:
+                target, group = row["target_mac"], row["target_group"]
+                if group == "hse":
+                    allowed = target in policy["emergency_macs"]
+                else:
+                    allowed = target in policy["active_macs"]
+                if not allowed:
+                    continue
+                gw = row["gateway"] or (fresh.get(target) or {}).get("gw")
+                if not gw or gw in used_gateways:
+                    continue
+                status = c.execute("SELECT last_seen,payload FROM gateways WHERE gw=?", (gw,)).fetchone()
+                if status is None or not status["last_seen"] or not 0 <= moment-status["last_seen"] <= GATEWAY_ONLINE_TTL:
+                    continue
+                try:
+                    capabilities = json.loads(status["payload"] or "{}")
+                except (TypeError, ValueError):
+                    capabilities = {}
+                if (not isinstance(capabilities, dict)
+                        or capabilities.get("scan_policy_ready") is not True
+                        or capabilities.get("vibration_request_id") is not True
+                        or capabilities.get("vibration_repeats") not in (True, 3)):
+                    continue
+                observed = c.execute("SELECT seen_at FROM band_observations WHERE mac=? AND gw=?",
+                                     (target, gw)).fetchone()
+                if observed is None or not 0 <= moment-observed["seen_at"] <= PRESENCE_TTL:
+                    continue
+                waiting = c.execute(
+                    "SELECT 1 FROM staff_alert_delivery WHERE gateway=? AND request_id!=? "
+                    "AND status='awaiting_ack' AND next_attempt_at>? LIMIT 1",
+                    (gw,row["request_id"],moment)).fetchone()
+                if waiting:
+                    continue
+                battery_busy = c.execute(
+                    "SELECT 1 FROM battery_alert_state WHERE last_gateway=? AND active=1 "
+                    "AND confirmed_at IS NULL AND attempts>0 AND delivery_status IN ('dispatching','awaiting_ack') "
+                    "AND next_attempt_at>? LIMIT 1", (gw, moment)).fetchone()
+                if battery_busy:
+                    continue
+                expired = (row["attempts"] >= staff_alert_policy.MAX_ATTEMPTS or
+                    (row["first_attempt_at"] is not None and
+                     moment-row["first_attempt_at"] >= staff_alert_policy.RETRY_WINDOW_SECONDS))
+                if expired:
+                    c.execute("UPDATE staff_alert_delivery SET status='unconfirmed',last_error='ack_not_received' WHERE request_id=?",
+                              (row["request_id"],))
+                    continue
+                c.execute("UPDATE staff_alert_delivery SET attempts=attempts+1,gateway=?,status='awaiting_ack',"
+                          "next_attempt_at=?,first_attempt_at=COALESCE(first_attempt_at,?),sent_at=?,last_error=NULL "
+                          "WHERE request_id=?",
+                          (gw,moment+staff_alert_policy.RETRY_SECONDS,moment,moment,row["request_id"]))
+                claims.append((row,gw))
+                used_gateways.add(gw)
+            c.commit()
+        for row,gw in claims:
+            request={"action":"vibrate","mac":row["target_mac"],"request_id":row["request_id"],
+                     "reason":"staff_alert","ttl_s":60,"repeats":3,
+                     "completed_pulses":row["completed_pulses"]}
+            if row["target_group"]=="hse": request["emergency"]=True
+            try:
+                ok,detail=publish(f"roztash/{gw}/cmd",json.dumps(request,separators=(",",":")),retained=False)
+            except Exception as exc:
+                ok,detail=False,str(exc)
+            if not ok:
+                with _lock:
+                    c=db()
+                    c.execute("UPDATE staff_alert_delivery SET status='failed',last_error=? WHERE request_id=?",
+                              (str(detail)[:160],row["request_id"]))
+                    c.commit()
+            results[row["target_mac"]]="sent" if ok else "publish_failed"
+    return results
+
+
 def scan_policy_loop() -> None:
     while True:
         _scan_policy_wake.clear()
@@ -1740,6 +1914,7 @@ def scan_policy_loop() -> None:
                 if result != "sent":
                     log(f"scan policy not delivered to {gw}: {result}")
             dispatch_battery_alerts()
+            dispatch_alert_notifications()
             policy = employee_scan_policy()
             transition = policy["next_transition_at"]
             delay = max(0.05, _SCAN_POLICY_REFRESH_S - (time.monotonic() - started))
@@ -1815,6 +1990,7 @@ def command(doc: dict) -> tuple[bool, str, dict]:
     action = str((doc or {}).get("action") or "").strip()
     mac = str((doc or {}).get("mac") or "").strip().lower()
     gw = str((doc or {}).get("gw") or "").strip()
+    emergency = bool((doc or {}).get("emergency"))
     if action not in ACTIONS:
         return False, "unknown action", {}
     with _lock:
@@ -1831,16 +2007,24 @@ def command(doc: dict) -> tuple[bool, str, dict]:
                 gw = row["gw"]
     if not gw:
         return False, "no gateway known yet", {}
-    try:
-        policy = employee_scan_policy()
-    except ValueError:
-        return False, "gateway scan capacity exceeded", {}
+    if not emergency:
+        try:
+            policy = employee_scan_policy()
+        except ValueError:
+            return False, "gateway scan capacity exceeded", {}
+    else:
+        policy = {"active_macs": []}
     with _lock:
-        assigned = db().execute("SELECT mac FROM employees WHERE mac=?", (mac,)).fetchone()
-    if assigned is not None and mac not in policy["active_macs"]:
+        assigned = db().execute("SELECT mac,staff_group FROM employees WHERE mac=?", (mac,)).fetchone()
+    if emergency and (assigned is None or assigned["staff_group"] != "hse"):
+        return False, "emergency vibration is only for HSE", {}
+    if not emergency and assigned is not None and mac not in policy["active_macs"]:
         return False, "employee monitoring is paused or outside scheduled hours", {}
     topic = f"roztash/{gw}/cmd"
-    payload = json.dumps({"action": action, "mac": mac}, ensure_ascii=False)
+    command_doc = {"action": action, "mac": mac}
+    if emergency:
+        command_doc["emergency"] = True
+    payload = json.dumps(command_doc, ensure_ascii=False)
     ok, detail = publish(topic, payload)
     log(f"command {action} mac={mac or '-'} gw={gw}: {detail}")
     return ok, ("" if ok else detail), {"gw": gw, "topic": topic, "payload": payload}
@@ -1890,6 +2074,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, monitoring_settings())
         elif path == "/api/bands":
             self._send(200, {"ok": True, "bands": bands_list()})
+        elif path == "/api/bands/scan":
+            actor = verify_request("GET", self.path, b"", self.headers)
+            if not actor:
+                self._send(401, {"ok": False, "error": "unauthorized"})
+                return
+            try:
+                devices = discover_bands_for_admin(actor)
+            except PermissionError:
+                self._send(403, {"ok": False, "error": "forbidden"})
+                return
+            except RuntimeError as exc:
+                self._send(503, {"ok": False, "error": str(exc)})
+                return
+            self._send(200, {"ok": True, "devices": devices})
         elif path == "/api/catalogs":
             self._send(200, {"ok": True, "catalogs": catalogs_list()})
         elif path == "/api/gateways":
@@ -1989,6 +2187,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"ok": False, "error": "not found"})
             return
         if kind == "employees":
+            actor = verify_request("DELETE", self.path, b"", self.headers)
+            if not actor:
+                self._send(401, {"ok": False, "error": "unauthorized"})
+                return
+            if not can_delete_employees(get_role(actor)):
+                self._send(403, {"ok": False, "error": "forbidden"})
+                return
             ok, err = remove_employee(key)
             code = 200 if ok else (400 if err == "invalid mac" else 404)
         elif kind == "bands":

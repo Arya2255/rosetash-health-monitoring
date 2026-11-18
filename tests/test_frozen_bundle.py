@@ -40,7 +40,7 @@ class FrozenBundleTests(unittest.TestCase):
                     self.assertEqual(pv.bundle_dir(), expected)
                     ok, manifest = pv.load_manifest()
                     self.assertTrue(ok, manifest)
-                    self.assertEqual(manifest["fw_version"], "0.5.1-battery")
+                    self.assertEqual(manifest["fw_version"], "0.5.2-alerts")
                     tools = pv.find_tools(platform="windows-amd64", home=unrelated)
                     self.assertEqual(tools["sources"], {
                         "esptool": "bundled", "mklittlefs": "bundled"})
@@ -113,6 +113,12 @@ class FrozenBundleTests(unittest.TestCase):
 
 
 class PayloadValidationTests(unittest.TestCase):
+    def test_windows_scan_backend_is_explicitly_packaged(self):
+        workflow = (ROOT / '.github/workflows/build-windows-single.yml').read_text()
+        self.assertIn('--collect-submodules bleak', workflow)
+        hidden_line = next(line for line in workflow.splitlines() if '--hidden-import' in line)
+        self.assertIn('ble_discovery', hidden_line.split())
+
     @classmethod
     def setUpClass(cls):
         spec = importlib.util.spec_from_file_location(

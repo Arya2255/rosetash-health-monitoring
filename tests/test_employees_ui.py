@@ -15,10 +15,15 @@
 اجرا از ریشهٔ مخزن:
     uv run python tests/test_employees_ui.py
 """
+import atexit
+import base64
+from contextlib import ExitStack
+import io
 import os
 import sys
 import time
 from datetime import datetime
+from unittest.mock import patch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "..", "src"))
@@ -26,6 +31,13 @@ sys.path.insert(0, os.path.join(_HERE, "..", "src"))
 MAC1 = "f3:b6:d6:b7:47:d7"
 MAC2 = "aa:11:bb:22:cc:33"
 MAC3 = "aa:bb:cc:dd:ee:01"
+
+# Synthetic one-pixel PNG; both views and the edit preview must retain its bytes.
+PHOTO_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1Pe"
+    "AAAADElEQVR4nGN4X60OAAPuAZLs/w/xAAAAAElFTkSuQmCC")
+PHOTO_PATH = f"/api/photo/{MAC1}?v=1"
+FIXTURE_BRIDGE = "http://bridge.fixture.invalid:8726"
 
 now = time.time()
 
@@ -63,7 +75,7 @@ def live_doc():
         emp(MAC1, "حمید نوری", present=True, status="ok",
             conditions="فشار خون بالا", medications="آملودیپین",
             band_label="مچ‌بند سالن ۲",
-            photo=f"/api/photo/{MAC1}?v=1",
+            photo=PHOTO_PATH,
             health={"state": "done", "fail": "none", "wearing": True, "ended": True,
                     "bpm": [75, 76, 77, 78], "n": 4, "avg": 76.8,
                     "ts": iso(now - 25), "age_s": 25.0},
@@ -131,24 +143,42 @@ def norm(s):
     return s.replace("\u200c", "")
 
 
-def imgs(ctrl, out=None):
-    """جمع نشانی عکس‌های زیرشاخه — src و تصویر آواتار."""
+def image_controls(ctrl, out=None):
+    """Collect actual visible Flet images and avatars, including nested previews."""
     if out is None:
         out = []
     if getattr(ctrl, "visible", None) is False:
         return out
-    for attr in ("src", "foreground_image_src", "background_image_src"):
-        v = getattr(ctrl, attr, None)
-        if isinstance(v, str):
-            out.append(v)
+    if isinstance(ctrl, (ft.Image, ft.CircleAvatar)):
+        out.append(ctrl)
     controls = getattr(ctrl, "controls", None)
     if isinstance(controls, list):
         for c in controls:
-            imgs(c, out)
+            image_controls(c, out)
     content = getattr(ctrl, "content", None)
     if content is not None and not isinstance(content, str):
-        imgs(content, out)
+        image_controls(content, out)
     return out
+
+
+def imgs(ctrl):
+    return [value for image in image_controls(ctrl)
+            for attr in ("src", "foreground_image_src", "background_image_src")
+            if isinstance(value := getattr(image, attr, None), str)]
+
+
+def has_fixture_photo(ctrl):
+    """Verify a real control receives this fixture's portable MIME and bytes."""
+    for src in imgs(ctrl):
+        head, separator, encoded = src.partition(",")
+        if head != "data:image/png;base64" or not separator:
+            continue
+        try:
+            if base64.b64decode(encoded, validate=True) == PHOTO_BYTES:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def opts_text(ctrl, out=None):
@@ -195,7 +225,31 @@ def labels_order(ctrl, out=None):
 import views.employees as v_emp  # noqa: E402
 import views.employee_detail as v_ed  # noqa: E402
 import components.employee_form as c_form  # noqa: E402
+import flet as ft  # noqa: E402
+import live  # noqa: E402
 import theme as _th  # noqa: E402
+
+photo_fetches = []
+unexpected_fetches = []
+
+
+class FixturePhotoResponse(io.BytesIO):
+    headers = {"Content-Type": "image/png"}
+
+
+def fixture_urlopen(url, timeout):
+    """Fake only HTTP transport; run the real data.photo_src conversion."""
+    if url != FIXTURE_BRIDGE + PHOTO_PATH:
+        unexpected_fetches.append(str(url))
+        raise AssertionError(f"Unexpected HTTP request in UI fixture: {url}")
+    photo_fetches.append((url, timeout))
+    return FixturePhotoResponse(PHOTO_BYTES)
+
+
+_http_fixture = ExitStack()
+atexit.register(_http_fixture.close)
+_http_fixture.enter_context(patch.object(live, "BRIDGE", FIXTURE_BRIDGE))
+_http_fixture.enter_context(patch.object(live.urllib.request, "urlopen", side_effect=fixture_urlopen))
 
 fails = []
 
@@ -222,7 +276,7 @@ check("چیپ قطع اتصال (غایب)", norm("قطع اتصال") in vals)
 check("ستون شیفت", norm("شیفت صبح") in vals)
 check("میانگین ضربان", "۷۷" in vals)
 check("منطقهٔ گیت‌وی", "test" in vals)
-check("شمارندهٔ دفتر", norm("۲ کارکن ثبت‌شده") in vals)
+check("شمارندهٔ دفتر", norm("۲ از ۲ کارکن ثبت‌شده") in vals)
 check("شمارندهٔ ثبت‌نشده", norm("۱ مچبند ثبت‌نشده") in vals)
 check("مچ‌بند ثبت‌نشده", norm("مچبند ثبت‌نشده") in vals)
 check("مک مچ‌بند ثبت‌نشده", MAC3 in vals)
@@ -230,8 +284,10 @@ check("دکمهٔ ثبت روی مچ‌بند", norm("ثبت کارکن") in val
 check("چیپ دریافت زنده", norm("دریافت زنده از پل محلی") in vals)
 check("دکمهٔ افزودن کارکن", norm("افزودن کارکن") in vals)
 check("شرکت در فهرست", "موتوسل" in vals)
-check("عکس پرسنلی در فهرست",
-      any("127.0.0.1:8726/api/photo" in s for s in imgs(view)))
+check("عکس پرسنلی در فهرست", has_fixture_photo(view))
+check("عکس فهرست: دریافت از مسیر واقعی پل",
+      photo_fetches == [(FIXTURE_BRIDGE + PHOTO_PATH, 3)])
+check("عکس فهرست: بدون نشانی محلی در کنترل", all("127.0.0.1" not in s for s in imgs(view)))
 check("بنر نمایشی مخفی است", norm("این فهرست دادهٔ نمایشی است") not in vals)
 
 # ── ۲) برچسب مشکل در فهرست ──
@@ -245,7 +301,9 @@ check("وضعیت هشدار", "هشدار" in vals2)
 
 # ── ۳) حالت نمایشی (پل قطع) ──
 v_emp.live_employees = lambda force=False: None
-vals3 = norm(" || ".join(texts_visible(v_emp.employees_view(FakeApp()))))
+demo_app = FakeApp()
+demo_app.state["emp_shift"] = "all"  # This case checks the complete demo roster.
+vals3 = norm(" || ".join(texts_visible(v_emp.employees_view(demo_app))))
 check("بنر دادهٔ نمایشی", norm("این فهرست دادهٔ نمایشی است") in vals3)
 check("فهرست نمونه", "یاسر کاظمی" in vals3)
 check("شمارندهٔ نمایشی", norm("۲۴ کارکن") in vals3)
@@ -255,6 +313,7 @@ check("بدون دکمهٔ افزودن", norm("افزودن کارکن") not in
 v_ed.live_employees = lambda force=False: live_doc()
 app4 = FakeApp()
 app4.state.update({"view": "employee", "emp": MAC1})
+fetches_before_profile = len(photo_fetches)
 p4 = v_ed.employee_detail_view(app4)
 pvals = norm(" || ".join(texts_visible(p4)))
 
@@ -275,8 +334,9 @@ check("پروفایل: برچسب مچ‌بند", norm("مچ‌بند «مچ‌�
 check("پروفایل: کارت پروندهٔ پزشکی", norm("پروندهٔ پزشکی") in pvals)
 check("پروفایل: بیماری زمینه‌ای", "فشار خون بالا" in pvals)
 check("پروفایل: داروی خاص", "آملودیپین" in pvals)
-check("پروفایل: عکس پرسنلی",
-      any("127.0.0.1:8726/api/photo" in s for s in imgs(p4)))
+check("پروفایل: عکس پرسنلی", has_fixture_photo(p4))
+check("پروفایل: دریافت عکس همان کارکن", len(photo_fetches) > fetches_before_profile)
+check("پروفایل: عکس یکسان با فهرست", imgs(p4) == imgs(view))
 
 # ── ۴ب) پروفایل مچ‌بند ثبت‌نشده: دکمهٔ ثبت، بدون دکمهٔ حذف ──
 app4b = FakeApp()
@@ -366,6 +426,12 @@ check("فرم: شرکت از فهرست (زیرشرکت)",
 check("فرم: گزینهٔ فعلی مچ‌بند", any(MAC3 in o for o in opts9))
 
 d9c = norm(" || ".join(texts_visible(app9.page.dialogs[2])))
+edit_images = [image for image in image_controls(app9.page.dialogs[2])
+               if isinstance(image, ft.Image)]
+check("فرم ویرایش: عکس در کنترل Image", len(edit_images) == 1)
+check("فرم ویرایش: بایت‌های عکس یکسان با فهرست و پروفایل",
+      bool(edit_images) and has_fixture_photo(edit_images[0])
+      and edit_images[0].src in imgs(view) and edit_images[0].src in imgs(p4))
 check("فرم ویرایش: مچ‌بند قفل", norm(f"مچ‌بند {MAC1}") in d9c)
 check("فرم ویرایش: سال تولد از سن فعلی", str(_jy - 34) in d9c)
 
@@ -379,6 +445,9 @@ check("فرم بی‌پل: ورود دستی مک", "مک مچ‌بند" in labs
 check("فرم بی‌پل: شرکت متنی", "شرکت" in labs9b)
 c_form.live_bands = lambda force=False: STUB_BANDS
 c_form.live_catalogs = lambda force=False: STUB_CATS
+
+check("عکس: بدون درخواست HTTP واقعی یا مسیر پیش‌بینی‌نشده", not unexpected_fetches)
+_http_fixture.close()
 
 print()
 print("نتیجه:", "همهٔ بررسی‌ها پاس شد" if not fails else f"{len(fails)} خطا: {fails}")

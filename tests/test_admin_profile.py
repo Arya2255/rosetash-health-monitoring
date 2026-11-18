@@ -138,7 +138,8 @@ class AdminProfileTests(unittest.TestCase):
     def make_app(self, **state):
         return SimpleNamespace(
             state={"view": "settings", "logged_in": True,
-                   "admin_email": "viewer@example.test", "admin_name": "نام قبلی", **state},
+                   "role": "owner", "admin_email": "owner@example.test",
+                   "admin_name": "نام قبلی", **state},
             page=SimpleNamespace(width=1340, overlay=[], update=Mock()),
             render=Mock(), snack=Mock(), go=Mock(),
         )
@@ -157,8 +158,8 @@ class AdminProfileTests(unittest.TestCase):
 
     def test_settings_save_callback_persists_name_and_refreshes_state_before_render(self):
         self.seed({"roles": {"viewer@example.test": "viewer"},
-                   "names": {"viewer@example.test": "نام قبلی"}})
-        app = self.make_app(admin_email=" Viewer@Example.Test ")
+                   "names": {"owner@example.test": "نام قبلی"}})
+        app = self.make_app(admin_email=" Owner@Example.Test ")
         field, save = self.profile_controls(app)
         self.assertEqual(field.value, "نام قبلی")
         field.value = "  نام تازه آزمایشی  "
@@ -167,7 +168,7 @@ class AdminProfileTests(unittest.TestCase):
 
         save.on_click(SimpleNamespace(control=save))
 
-        self.assertEqual(admin_roles.get_admin_name("viewer@example.test"), "نام تازه آزمایشی")
+        self.assertEqual(admin_roles.get_admin_name("owner@example.test"), "نام تازه آزمایشی")
         self.assertEqual(app.state["admin_name"], "نام تازه آزمایشی")
         self.assertEqual(seen_names, ["نام تازه آزمایشی"])
         app.render.assert_called_once_with()
@@ -183,21 +184,21 @@ class AdminProfileTests(unittest.TestCase):
 
     def test_settings_empty_name_does_not_clear_profile_or_refresh(self):
         self.seed({"roles": {"viewer@example.test": "viewer"},
-                   "names": {"viewer@example.test": "نام قبلی"}})
+                   "names": {"owner@example.test": "نام قبلی"}})
         app = self.make_app()
         field, save = self.profile_controls(app)
         field.value = "   "
 
         save.on_click(SimpleNamespace(control=save))
 
-        self.assertEqual(admin_roles.get_admin_name("viewer@example.test"), "نام قبلی")
+        self.assertEqual(admin_roles.get_admin_name("owner@example.test"), "نام قبلی")
         self.assertEqual(app.state["admin_name"], "نام قبلی")
         app.render.assert_not_called()
         app.snack.assert_called_once()
 
     def test_settings_write_failure_keeps_existing_name_and_state(self):
         self.seed({"roles": {"viewer@example.test": "viewer"},
-                   "names": {"viewer@example.test": "نام قبلی"}})
+                   "names": {"owner@example.test": "نام قبلی"}})
         app = self.make_app()
         field, save = self.profile_controls(app)
         field.value = "نام تازه"
@@ -214,10 +215,11 @@ class AdminProfileTests(unittest.TestCase):
 
     def test_stale_profile_callback_cannot_save_after_logout_or_account_change(self):
         self.seed({"roles": {"viewer@example.test": "viewer"},
-                   "names": {"viewer@example.test": "نام قبلی"}})
+                   "names": {"owner@example.test": "نام قبلی"}})
         before = self.roles_file.read_bytes()
         for next_state in ({"logged_in": False, "admin_email": None, "admin_name": ""},
-                           {"admin_email": "other@example.test", "admin_name": "نام دیگر"}):
+                           {"admin_email": "other@example.test", "admin_name": "نام دیگر"},
+                           {"role": "viewer"}):
             with self.subTest(next_state=next_state):
                 app = self.make_app()
                 field, save = self.profile_controls(app)
@@ -231,17 +233,21 @@ class AdminProfileTests(unittest.TestCase):
                 self.assertEqual(app.state, expected_state)
                 app.render.assert_not_called()
 
-    def test_profile_available_for_both_roles_without_changing_owner_sections(self):
-        for email in ("viewer@example.test", "owner@example.test"):
+    def test_settings_profile_and_private_sections_are_available_only_to_owner(self):
+        for email, role in (("viewer@example.test", "viewer"), ("owner@example.test", "owner")):
             for width in (1340, 390):
                 with self.subTest(email=email, width=width):
-                    app = self.make_app(admin_email=email)
+                    app = self.make_app(admin_email=email, role=role)
                     app.page.width = width
-                    self.profile_controls(app)
-                    texts = [c.value for c in walk(settings.settings_view(app)) if isinstance(c, ft.Text)]
-                    self.assertIn("حساب کاربری", texts)
-                    self.assertEqual("مدیریت ادمین‌ها" in texts, email == "owner@example.test")
-                    self.assertEqual("دسترسی از اینترنت" in texts, email == "owner@example.test")
+                    if role == "owner":
+                        self.profile_controls(app)
+                    controls = list(walk(settings.settings_view(app)))
+                    texts = [c.value for c in controls if isinstance(c, ft.Text)]
+                    for label in ("حساب کاربری", "مدیریت ادمین‌ها", "دسترسی از اینترنت"):
+                        self.assertEqual(label in texts, role == "owner")
+                    if role != "owner":
+                        self.assertFalse(any(getattr(c, "data", None) in
+                                             ("admin-profile-name", "admin-profile-save") for c in controls))
 
 
 if __name__ == "__main__":

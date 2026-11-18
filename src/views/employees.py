@@ -17,13 +17,14 @@ from theme import (
     BORDER, DANGER, FONT, FONT_B, FONT_MED, INK, OFFLINE, OK, R_BTN, R_CARD,
     TEXT_MAIN, TEXT_MUTED, WARN, WHITE, fa_num, txt,
 )
-from data import EMPLOYEES, live_employees, photo_src, save_employee_monitoring
+from data import (EMPLOYEES, live_employees, photo_src, save_employee_monitoring,
+                  can_delete_employees, STAFF_GROUPS, SHIFTS, staff_group_label)
 from layout import is_phone, list_card, page_scroll
 from components.common import (
     ISSUE_LABELS, SHADOW, avatar_circle, person_avatar, rel_age, status_chip,
 )
 from components.employee_card import STATUS_ORDER
-from components.employee_form import open_employee_form
+from components.employee_form import open_employee_form, open_delete_confirm
 from components.monitoring import monitoring_admin, monitoring_reason_text
 
 STATUS_RANK = {"danger": 0, "warn": 1, "ok": 2, "off": 3}
@@ -32,12 +33,14 @@ STATUS_RANK = {"danger": 0, "warn": 1, "ok": 2, "off": 3}
 def employees_view(app):
     state = app.state
     state.setdefault("emp_search", "")
+    state.setdefault("emp_shift", "صبح")
+    state.setdefault("emp_group", "all")
     phone = is_phone(app)
     gen = state.get("emp_gen", 0) + 1
     state["emp_gen"] = gen
 
     last = {"doc": None}
-    list_holder = ft.ListView(expand=True, spacing=0)
+    list_holder = ft.ListView(expand=True, spacing=0, data="employees:list")
     count_text = txt("", size=12, font=FONT, color=TEXT_MUTED)
 
     # ── چیپ حالت داده — زنده یا نمایشی ──
@@ -126,6 +129,7 @@ def employees_view(app):
         hr_txt = fa_num(round(hr)) if hr else "—"
         parts = [p for p in (e.get("company"), e.get("dept"), e.get("line"),
                              e.get("role")) if p]
+        parts.append(staff_group_label(e.get("staff_group")))
         sub = " • ".join(parts) if parts else "بدون مشخصات — برای ویرایش کلیک کن"
         loc = e.get("zone") or e.get("gw") or "—"
         if not e.get("present"):
@@ -174,6 +178,12 @@ def employees_view(app):
                         rel_age(e.get("last_seen_age_s")), size=11, font=FONT,
                         color=TEXT_MUTED)),
                 ]),
+                *([ft.IconButton(ft.Icons.PERSON_REMOVE, tooltip="حذف کارکن", icon_color=DANGER,
+                                data="employee:delete:" + e["mac"],
+                                on_click=lambda event, employee=dict(e): open_delete_confirm(
+                                    app, employee, on_done=_refresh_now))]
+                  if state.get("logged_in") and state.get("admin_email")
+                  and can_delete_employees(state.get("role", "")) else []),
                 ft.Icon(ft.Icons.CHEVRON_LEFT, size=18, color="#B9BEC3"),
             ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=14, vertical=10),
@@ -203,7 +213,8 @@ def employees_view(app):
 
     # ── ردیف حالت نمایشی (فاز ۱) ──
     def _mock_rows(q):
-        emps = [e for e in EMPLOYEES if (not q or q in e["name"])]
+        emps = [e for e in EMPLOYEES if _matches_filters(e)
+                and (not q or q.lower() in e["name"].lower())]
         emps = sorted(emps, key=lambda e: STATUS_ORDER[e["status"]])
         rows = []
         for i, emp in enumerate(emps):
@@ -238,20 +249,28 @@ def employees_view(app):
             ))
         return rows
 
+    def _matches_filters(e):
+        shift = state["emp_shift"]
+        return ((shift == "all" or
+                 (not e.get("shift") if shift == "unassigned" else e.get("shift") == shift))
+                and (state["emp_group"] == "all" or
+                     (e.get("staff_group") or "employee") == state["emp_group"]))
+
     # ── رندر فهرست از آخرین داده ──
     def _render():
         doc = last["doc"]
         q = state.get("emp_search", "").strip()
         if doc is None:
             list_holder.controls = _mock_rows(q)
-            count_text.value = f'{fa_num(len(EMPLOYEES))} کارکن — نمایشی'
+            count_text.value = f'{fa_num(len(list_holder.controls))} کارکن — نمایشی'
+            unassigned_card.visible = False
             return
         reg = [e for e in doc if e.get("registered")]
         uns = [e for e in doc if not e.get("registered")]
-        shown = reg
+        shown = [e for e in reg if _matches_filters(e)]
         if q:
             ql = q.lower()
-            shown = [e for e in reg
+            shown = [e for e in shown
                      if ql in (e.get("name") or "").lower()
                      or ql in (e.get("dept") or "").lower()
                      or ql in (e.get("mac") or "").lower()]
@@ -261,13 +280,13 @@ def employees_view(app):
         if shown:
             list_holder.controls = [_live_row(e) for e in shown]
         else:
-            msg = ("چیزی با این جستجو پیدا نشد" if q else
+            msg = ("در شیفت و گروه انتخاب‌شده کارکنی پیدا نشد" if reg else
                    "هنوز کارکنی ثبت نشده — با «افزودن کارکن» یا دکمهٔ ثبت "
                    "روی مچ‌بندهای در دید شروع کن")
             list_holder.controls = [ft.Container(
                 height=80, alignment=ft.alignment.Alignment(0, 0),
                 content=txt(msg, size=13, font=FONT, color=TEXT_MUTED))]
-        count_text.value = (f'{fa_num(len(reg))} کارکن ثبت‌شده'
+        count_text.value = (f'{fa_num(len(shown))} از {fa_num(len(reg))} کارکن ثبت‌شده'
                             + (f' — {fa_num(len(uns))} مچ‌بند ثبت‌نشده'
                                if uns else ""))
         if uns:
@@ -296,11 +315,29 @@ def employees_view(app):
         _render()
 
     search = ft.TextField(
+        data="employees:search",
         hint_text="جستجوی نام یا مک…", prefix_icon=ft.Icons.SEARCH,
         width=None if phone else 250, height=44, text_size=13, value=state.get("emp_search", ""),
         on_change=lambda e: (state.update({"emp_search": e.control.value}),
                              _render(), app.page.update()),
     )
+
+    def _change_filter(event, key):
+        state[key] = event.control.value
+        _render()
+        app.page.update()
+
+    shift_filter = ft.Dropdown(label="شیفت", width=180, text_size=13,
+        data="employees:shift", value=state["emp_shift"],
+        options=[ft.DropdownOption(key="all", text="همهٔ شیفت‌ها"),
+                 *[ft.DropdownOption(key=s, text=s) for s in SHIFTS],
+                 ft.DropdownOption(key="unassigned", text="بدون شیفت")],
+        on_select=lambda e: _change_filter(e, "emp_shift"))
+    group_filter = ft.Dropdown(label="گروه کارکن", width=190, text_size=13,
+        data="employees:group", value=state["emp_group"],
+        options=[ft.DropdownOption(key="all", text="همهٔ گروه‌ها"),
+                 *[ft.DropdownOption(key=k,text=v) for k,v in STAFF_GROUPS]],
+        on_select=lambda e: _change_filter(e, "emp_group"))
 
     _apply(live_employees())
 
@@ -345,4 +382,5 @@ def employees_view(app):
     if hasattr(app.page, "run_task"):
         app.page.run_task(_loop)
 
-    return page_scroll(app, [header, demo_banner, unassigned_card, table_card])
+    return page_scroll(app, [header, ft.Row([shift_filter, group_filter], wrap=True),
+                             demo_banner, unassigned_card, table_card])

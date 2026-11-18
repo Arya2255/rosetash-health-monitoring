@@ -73,9 +73,12 @@ void BleCentral::setScanPolicy(const roztash::ScanPolicy& policy, uint32_t recei
   if (control_ready_.load()) policy_.apply(policy, received_ms);
   else policy_.revoke();
   for (auto& s : sightings_)
-    if (s.used && !policy_.allows(s.mac, millis())) s = Sighting{};
-  if (job_mac_[0] && !(vibrate_mode_ ? policy_.allows(job_mac_, millis()) :
-                                     policy_.allowsHealth(job_mac_, millis()))) cancelled_ = true;
+    if (s.used && !policy_.allows(s.mac, millis()) &&
+        !policy_.allowsEmergency(s.mac, millis())) s = Sighting{};
+  if (job_mac_[0] && !(vibrate_mode_
+      ? (vibrate_emergency_ ? policy_.allowsEmergency(job_mac_, millis())
+                            : policy_.allows(job_mac_, millis()))
+      : policy_.allowsHealth(job_mac_, millis()))) cancelled_ = true;
   portEXIT_CRITICAL(&mux_);
 }
 
@@ -89,7 +92,8 @@ void BleCentral::stopScanPolicy() {
 
 bool BleCentral::scanPolicyAllows(const char* mac) const {
   portENTER_CRITICAL(&mux_);
-  const bool allowed = policy_.allows(mac, millis());
+  const bool allowed = policy_.allows(mac, millis()) ||
+                       policy_.allowsEmergency(mac, millis());
   portEXIT_CRITICAL(&mux_);
   return allowed;
 }
@@ -105,10 +109,10 @@ bool BleCentral::policyReady() const {
   portEXIT_CRITICAL(&mux_);
   return ready;
 }
-bool BleCentral::hasFreshSighting(const char* mac, uint32_t now) {
+bool BleCentral::hasFreshSighting(const char* mac, uint32_t now, bool emergency) {
   bool fresh = false;
   portENTER_CRITICAL(&mux_);
-  if (policy_.allows(mac, now))
+  if (emergency ? policy_.allowsEmergency(mac, now) : policy_.allows(mac, now))
     for (const auto& s : sightings_)
       if (s.used && strcmp(s.mac, mac) == 0 && uint32_t(now - s.seen_ms) <= roztash::kSightingFreshMs) {
         fresh = true;
@@ -120,7 +124,9 @@ bool BleCentral::hasFreshSighting(const char* mac, uint32_t now) {
 bool BleCentral::jobAllowed() const {
   portENTER_CRITICAL(&mux_);
   const bool allowed = !cancelled_.load() &&
-      (vibrate_mode_ ? policy_.allows(job_mac_, millis()) : policy_.allowsHealth(job_mac_, millis()));
+      (vibrate_mode_ ? (vibrate_emergency_ ? policy_.allowsEmergency(job_mac_, millis())
+                                          : policy_.allows(job_mac_, millis()))
+                     : policy_.allowsHealth(job_mac_, millis()));
   portEXIT_CRITICAL(&mux_);
   return allowed;
 }
@@ -132,7 +138,9 @@ void BleCentral::cancelRevokedJob() {
   portENTER_CRITICAL(&mux_);
   NimBLEClient* client = job_client_;
   const bool allowed = !cancelled_.load() &&
-      (vibrate_mode_ ? policy_.allows(job_mac_, millis()) : policy_.allowsHealth(job_mac_, millis()));
+      (vibrate_mode_ ? (vibrate_emergency_ ? policy_.allowsEmergency(job_mac_, millis())
+                                          : policy_.allows(job_mac_, millis()))
+                     : policy_.allowsHealth(job_mac_, millis()));
   const bool busy = worker_active_.load();
   if (job_mac_[0] && !allowed) cancelled_ = true;
   portEXIT_CRITICAL(&mux_);
@@ -172,19 +180,33 @@ void BleCentral::poll() {
 bool BleCentral::startHealth(const char* mac, bool vitals) {
   return launchJob(mac, vitals, false);
 }
-bool BleCentral::startVibrate(const char* mac) {
-  return launchJob(mac, false, true);
+bool BleCentral::startVibrate(const char* mac, bool emergency, uint8_t repeats,
+                              uint8_t completed_pulses) {
+  if (repeats < 1 || repeats > 3 || completed_pulses >= repeats) return false;
+  vibrate_repeats_ = repeats;
+  vibrate_acks_ = completed_pulses;
+  vibrate_write_pending_ = false;
+  vibrated_ = false;
+  const bool started = launchJob(mac, false, true, emergency);
+  if (!started) {
+    vibrate_repeats_ = 1;
+    vibrate_acks_ = 0;
+  }
+  return started;
 }
-bool BleCentral::launchJob(const char* mac, bool vitals, bool vibrate) {
+bool BleCentral::launchJob(const char* mac, bool vitals, bool vibrate, bool emergency) {
   if (!worker_ || worker_active_.load() || state_ != JobState::Idle ||
-      !hasFreshSighting(mac, millis())) return false;
+      !hasFreshSighting(mac, millis(), emergency)) return false;
   portENTER_CRITICAL(&mux_);
-  if (!(vibrate ? policy_.allows(mac, millis()) : policy_.allowsHealth(mac, millis()))) {
+  if (!(vibrate ? (emergency ? policy_.allowsEmergency(mac, millis())
+                             : policy_.allows(mac, millis()))
+                : policy_.allowsHealth(mac, millis()))) {
     portEXIT_CRITICAL(&mux_);
     return false;
   }
   strlcpy(job_mac_, mac, sizeof job_mac_);
   vibrate_mode_ = vibrate;
+  vibrate_emergency_ = emergency;
   vitals_enabled_ = vitals;
   cancelled_ = false;
   ++job_generation_;
@@ -233,7 +255,9 @@ void BleCentral::enqueueNotify(uint32_t generation, const uint8_t* data, size_t 
   portENTER_CRITICAL(&mux_);
   // Old subscriptions can deliver a late packet after cancellation/reconnection.
   if (worker_active_.load() && generation == job_generation_ && !cancelled_.load() &&
-      (vibrate_mode_ ? policy_.allows(job_mac_, millis()) : policy_.allowsHealth(job_mac_, millis()))) {
+      (vibrate_mode_ ? (vibrate_emergency_ ? policy_.allowsEmergency(job_mac_, millis())
+                                          : policy_.allows(job_mac_, millis()))
+                     : policy_.allowsHealth(job_mac_, millis()))) {
     Notification n{};
     n.generation = generation; n.len = len;
     memcpy(n.data, data, len);
@@ -250,7 +274,11 @@ void BleCentral::onResult(const NimBLEAdvertisedDevice* dev) {
   portENTER_CRITICAL(&mux_);
   // Gate BEFORE reading RSSI, counting, storing, or logging advertisements.
   // Physical reception still occurs; excluded devices leave no application data.
-  if (!policy_.allows(mac.c_str(), now)) { portEXIT_CRITICAL(&mux_); return; }
+  if (!policy_.allows(mac.c_str(), now) &&
+      !policy_.allowsEmergency(mac.c_str(), now)) {
+    portEXIT_CRITICAL(&mux_);
+    return;
+  }
   adv_count_++;
   const int rssi = dev->getRSSI();
   int slot = -1, free_slot = -1;
@@ -274,7 +302,8 @@ int BleCentral::sightingCount() {
   int n = 0;
   portENTER_CRITICAL(&mux_);
   for (int i = 0; i < kMaxBands; ++i)
-    if (sightings_[i].used && policy_.allows(sightings_[i].mac, millis())) n++;
+    if (sightings_[i].used && (policy_.allows(sightings_[i].mac, millis()) ||
+                               policy_.allowsEmergency(sightings_[i].mac, millis()))) n++;
   portEXIT_CRITICAL(&mux_);
   return n;
 }
@@ -283,7 +312,8 @@ bool BleCentral::getSlot(int slot, Sighting& out) {
   if (slot < 0 || slot >= kMaxBands) return false;
   portENTER_CRITICAL(&mux_);
   out = sightings_[slot];
-  if (out.used && !policy_.allows(out.mac, millis())) out = Sighting{};
+  if (out.used && !policy_.allows(out.mac, millis()) &&
+      !policy_.allowsEmergency(out.mac, millis())) out = Sighting{};
   portEXIT_CRITICAL(&mux_);
   return true;
 }
@@ -440,18 +470,12 @@ bool BleCentral::runHealth(const char* mac, bool vitals) {
 bool BleCentral::runVibrate(const char* mac) {
   vitals_ = Vitals{};
   vibrated_ = false;
+  vibrate_write_pending_ = false;
+  vibrate_write_at_ = millis();
 
   if (!beginJob(mac)) return false;
-
-  if (!jobAllowed()) { finishJob(JobState::Failed, Fail::Policy); return false; }
-  uint8_t frame[16];
-  const size_t n = fundo::buildFrame(counter_++, fundo::CMD_FIND_DEVICE,
-                                     fundo::SUB_FIND_DEVICE, nullptr, 0, frame);
-  if (!n || !write_char_ || !write_char_->writeValue(frame, n, false)) {
-    finishJob(JobState::Failed, Fail::Write);
-    return false;
-  }
-  Serial.printf("[ble] vibrate job started: %s\n", mac);
+  Serial.printf("[ble] vibrate job started: %s repeat=%u resume=%u\n",
+                mac, (unsigned)vibrate_repeats_, (unsigned)vibrate_acks_);
   job_started_ms_ = millis();
   stage_started_ms_ = job_started_ms_;
   state_ = JobState::Measuring;
@@ -559,10 +583,34 @@ void BleCentral::pollMeasurement() {
   // Vibrate jobs end as soon as the band answers (05,50) — or after a short
   // grace window if the ack never arrives.
   if (vibrate_mode_) {
-    if (vibrated_ || (now - stage_started_ms_) > (kStageSettleMs * 2)) {
-      finishJob(vibrated_ ? JobState::Done : JobState::Failed,
-                vibrated_ ? Fail::None : Fail::Timeout);
-      Serial.printf("[ble] vibrate %s: ack=%d\n", job_mac_, (int)vibrated_);
+    if (vibrate_write_pending_ && vibrated_) {
+      vibrate_write_pending_ = false;
+      ++vibrate_acks_;
+      if (vibrate_acks_ >= vibrate_repeats_) {
+        finishJob(JobState::Done, Fail::None);
+        Serial.printf("[ble] vibrate %s: pulses=%u\n", job_mac_, (unsigned)vibrate_acks_);
+        return;
+      }
+      vibrated_ = false;
+      vibrate_write_at_ = now + 250;
+    }
+    if (!vibrate_write_pending_ && vibrate_acks_ < vibrate_repeats_ &&
+        static_cast<int32_t>(now - vibrate_write_at_) >= 0) {
+      if (!jobAllowed()) { finishJob(JobState::Failed, Fail::Policy); return; }
+      uint8_t frame[16];
+      const size_t n = fundo::buildFrame(counter_++, fundo::CMD_FIND_DEVICE,
+                                         fundo::SUB_FIND_DEVICE, nullptr, 0, frame);
+      if (!n || !write_char_ || !write_char_->writeValue(frame, n, false)) {
+        finishJob(JobState::Failed, Fail::Write);
+        return;
+      }
+      vibrate_write_pending_ = true;
+      vibrate_write_at_ = now;
+    }
+    if (vibrate_write_pending_ && now - vibrate_write_at_ > kStageSettleMs * 2) {
+      finishJob(JobState::Failed, Fail::Timeout);
+      Serial.printf("[ble] vibrate %s: ACK timeout after %u pulses\n",
+                    job_mac_, (unsigned)vibrate_acks_);
     }
     return;
   }
@@ -609,7 +657,12 @@ void BleCentral::clearJob() {
   stage_settle_ms_ = 0;
   vitals_enabled_ = false;
   vibrate_mode_ = false;
+  vibrate_emergency_ = false;
   vibrated_ = false;
+  vibrate_acks_ = 0;
+  vibrate_repeats_ = 1;
+  vibrate_write_pending_ = false;
+  vibrate_write_at_ = 0;
   vitals_ = Vitals{};
   portEXIT_CRITICAL(&mux_);
 }
@@ -626,6 +679,7 @@ void BleCentral::onNotifyData(const uint8_t* data, size_t len) {
 
   // --- find-device (vibrate) ack (05,50) -------------------------------------
   if (p.cmd1 == fundo::CMD_FIND_DEVICE && p.cmd2 == fundo::SUB_FIND_DEVICE) {
+    if (!vibrate_mode_ || !vibrate_write_pending_ || vibrated_) return;
     vibrated_ = true;
     Serial.println("[ble] vibrate ack");
     return;

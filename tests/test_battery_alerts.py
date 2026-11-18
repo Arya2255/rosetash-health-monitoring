@@ -19,7 +19,7 @@ class BatteryAlertTests(IsolatedBridge):
     def ready(self, at, gw='gw-a', rssi=-40, capable=True):
         bridge.ingest('roztash/'+gw+'/status', json.dumps({
             'online':True,'scan_policy_ready':True,'vibration_request_id':capable,
-            'fw':'0.5.1-battery'}),at)
+            'fw':'0.5.2-alerts'}),at)
         self.presence(gw,rssi,at)
 
     def vitals(self, level, at=NOW, **extra):

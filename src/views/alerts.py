@@ -9,10 +9,11 @@ from theme import (
     BORDER, DANGER, DANGER_BG, FONT, FONT_B, FONT_MED, INK, R_BTN, R_CARD,
     TEXT_MUTED, WARN, WHITE, fa_num, txt,
 )
-from data import ALERTS_HISTORY, live_status
+from data import ALERTS_HISTORY, live_employees, live_status, send_vibrate
 from layout import flow, is_phone
 from components.common import card, status_chip
 from components.battery_alerts import battery_alert_panel
+from alert_contacts import resolve_alert_contact
 
 
 def _action_btn(label, icon, bg, on_click):
@@ -24,6 +25,23 @@ def _action_btn(label, icon, bg, on_click):
     )
 
 
+
+def _contact_responsible(app, alert):
+    """ویبرهٔ مچ‌بند مسئول اولویت‌دار همان واحد."""
+    try:
+        contact = resolve_alert_contact(alert, live_employees(force=True))
+    except Exception:
+        contact = None
+    if contact is None:
+        app.snack("برای این واحد مچ‌بند سرشیفت، سرپرست یا HSE پیدا نشد")
+        return
+    ok, message = send_vibrate(contact["mac"])
+    if ok:
+        app.snack(f"ویبره برای {contact['contact_label']} واحد ارسال شد")
+    else:
+        app.snack(f"ارسال ویبره به {contact['contact_label']} ناموفق بود: {message}")
+
+
 def alerts_view(app):
     generation = app.state.get("alerts_gen", 0) + 1
     app.state["alerts_gen"] = generation
@@ -31,8 +49,11 @@ def alerts_view(app):
 
     def refresh_battery():
         doc = live_status()
-        battery_holder.content = battery_alert_panel((doc or {}).get("battery_alerts") or [])
+        rows = (doc or {}).get("battery_alerts") or []
+        battery_holder.content = battery_alert_panel(rows)
+        return rows
 
+    # The bridge owns automatic alert delivery; the view only renders state.
     refresh_battery()
 
     async def battery_loop():
@@ -115,9 +136,10 @@ def alerts_view(app):
                     ),
                     ft.OutlinedButton(
                         "تماس با سرشیفت", icon=ft.Icons.PHONE, height=36,
+                        data="alerts:contact-responsible",
                         style=ft.ButtonStyle(color=INK,
                                              shape=ft.RoundedRectangleBorder(radius=R_BTN)),
-                        on_click=lambda e: app.snack("تماس بی‌سیم با سرشیفت برقرار شد"),
+                        on_click=lambda e, aa=a: _contact_responsible(app, aa),
                     ),
                     ft.TextButton(
                         "بستن رویداد", height=36,

@@ -107,7 +107,7 @@ class MonitoringUiTests(unittest.TestCase):
         import views.employees as employees_view
         import views.live as live_view
         import views.employee_detail as detail_view
-        employee = {**EMP, "status": "warn", "issues": ["measure_unavailable"],
+        employee = {**EMP, "shift": "صبح", "status": "warn", "issues": ["measure_unavailable"],
                     "scan_allowed": True, "scheduled_now": True,
                     "monitoring_reason": "active", "present": False}
         app = FakeApp()

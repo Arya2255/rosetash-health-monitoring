@@ -31,7 +31,7 @@ def payload_files(root=ROOT):
     """Return the allowlisted project payload and check every manifest digest."""
     bundle = root / BUNDLE_PREFIX
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
-    require(manifest["fw_version"] == "0.5.1-battery", "Wrong firmware version")
+    require(manifest["fw_version"] == "0.5.2-alerts", "Wrong firmware version")
     require(manifest["flash"]["chip"] == "esp32s3", "Wrong gateway chip")
     require(manifest["flash"]["size"] == "16MB", "Wrong flash size")
     require(WINDOWS_TOOLS <= manifest["tools"]["windows-amd64"].keys(),
@@ -127,6 +127,7 @@ def validate_exe(executable, root=ROOT):
                    "uvicorn", "uvicorn.protocols.websockets.websockets_impl",
                    "provisioner", "views.login", "remote", "portable_runtime",
                    "private_profile", "state_paths", "backend.bridge", "backend.battery_alerts",
+                   "ble_discovery", "bleak", "bleak.backends.winrt.scanner",
                    "tools.discovery_udp",
                    "http.server", "smtplib", "urllib.request", "tzdata"):
         require(module in modules, f"Missing Python module: {module}")

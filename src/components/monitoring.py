@@ -89,6 +89,8 @@ def monitoring_interval_card(app):
     interval = ft.TextField(label="فاصلهٔ پایش سلامت — دقیقه", value=minutes,
                             hint_text="۱۰", width=250, text_size=13,
                             disabled=not allowed or current is None,
+                            keyboard_type=ft.KeyboardType.NUMBER,
+                            input_filter=ft.NumbersOnlyInputFilter(),
                             data="monitoring:interval")
     message = txt("" if current is not None else
                   "برای تغییر زمان پایش، پل به‌روز و حساب مدیر لازم است.",

@@ -55,9 +55,12 @@ inline bool parseScanPolicy(const char* data, size_t size, ScanPolicy& out,
   if (!doc["active_macs"].is<JsonArray>() || !doc["health_macs"].is<JsonArray>()) return false;
   JsonArrayConst active = doc["active_macs"].as<JsonArrayConst>();
   JsonArrayConst health = doc["health_macs"].as<JsonArrayConst>();
+  JsonArrayConst emergency = doc["emergency_macs"].is<JsonArray>()
+      ? doc["emergency_macs"].as<JsonArrayConst>() : JsonArrayConst();
   error = "capacity";
-  if (active.size() > kMaxPolicyMacs || health.size() > kMaxPolicyMacs) return false;
-  out.active_count = out.health_count = 0;
+  if (active.size() > kMaxPolicyMacs || health.size() > kMaxPolicyMacs ||
+      emergency.size() > kMaxPolicyMacs) return false;
+  out.active_count = out.health_count = out.emergency_count = 0;
   auto load = [&](JsonArrayConst src, PolicyMac* dst, size_t& count) {
     for (JsonVariantConst item : src) {
       error = "mac_format";
@@ -72,7 +75,8 @@ inline bool parseScanPolicy(const char* data, size_t size, ScanPolicy& out,
     return true;
   };
   if (!load(active, out.active.data(), out.active_count) ||
-      !load(health, out.health.data(), out.health_count)) return false;
+      !load(health, out.health.data(), out.health_count) ||
+      !load(emergency, out.emergency.data(), out.emergency_count)) return false;
   error = "health_not_active";
   for (size_t i = 0; i < out.health_count; ++i)
     if (!containsMac(out.active.data(), out.active_count, out.health[i].data())) return false;

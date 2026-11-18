@@ -42,7 +42,7 @@ LITTLEFS_OFFSET = "0x3D0000"
 DEFAULT_BAUD = 460800
 TARGET_CHIP = "esp32s3"
 TARGET_FLASH_SIZE = "16MB"
-TARGET_FW_VERSION = "0.5.1-battery"
+TARGET_FW_VERSION = "0.5.2-alerts"
 
 _GW_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,31}$")  # همان قاعدهٔ پل
 _LIMITS = {"gw_id": 23, "zone": 39, "mqtt_host": 47}
@@ -293,8 +293,8 @@ def _serial_error_hint(output: str) -> str:
         return "پورت باز نشد — کابل دیتادار را چک کن و یک‌بار درآور و وصل کن"
     if "failed to connect" in low or "no serial data received" in low \
             or "invalid head of packet" in low:
-        return ("برد جواب نداد — دکمهٔ BOOT را نگه دار، یک‌بار EN را بزن، "
-                "بعد دوباره «خواندن مشخصات برد» را بزن")
+        return ("برد در این پورت پاسخ نداد (کابل یا پورت را چک کن) — دکمهٔ BOOT را نگه دار، "
+                "یک‌بار EN را بزن، بعد دوباره «خواندن مشخصات برد» را بزن")
     if "the chip stopped responding" in low or "serial exception" in low:
         return "ارتباط سریال وسط کار قطع شد — کابل USB و پورت را عوض کن"
     return ""

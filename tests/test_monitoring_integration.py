@@ -97,7 +97,7 @@ class LoopbackIntegration(unittest.TestCase):
                         self.assertEqual(employee['weekly_schedule'],schedule)
                         # Synthetic wearable boundary, real MQTT transport both directions.
                         bridge.ingest('roztash/gw-a/status',json.dumps({'online':True,
-                            'scan_policy_ready':True,'vibration_request_id':True,'fw':'0.5.1-battery'}))
+                            'scan_policy_ready':True,'vibration_request_id':True,'fw':'0.5.2-alerts'}))
                         bridge.ingest('roztash/gw-a/presence',json.dumps({'bands':[
                             {'mac':MAC,'rssi':-42,'age_ms':0}]}))
                         bridge.ingest('roztash/gw-a/vitals',json.dumps({'mac':MAC,'battery':12}))

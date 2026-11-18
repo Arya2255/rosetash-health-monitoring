@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import io
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -92,13 +93,23 @@ class LoginCountdownTests(unittest.IsolatedAsyncioTestCase):
 class OtpConsoleDebugTests(unittest.TestCase):
     def test_otp_is_printed_for_local_testing_only(self):
         output = io.StringIO()
-        with patch.object(email_otp, "config", return_value={"smtp": {}}):
+        with patch.object(email_otp, "config", return_value={"smtp": {}}), \
+                patch.dict(os.environ, {"ROZTASH_OTP_CONSOLE_DEBUG": "1"}):
             with contextlib.redirect_stdout(output):
                 ok, error = email_otp.send_otp_email("local-test@example.com", "739104")
 
         self.assertFalse(ok)
-        self.assertEqual(error, "SMTP تنظیم نشده")
+        self.assertIn("تنظیمات ایمیل ناقص است", error)
         self.assertIn("739104", output.getvalue())
+
+    def test_otp_is_not_printed_without_explicit_local_test_flag(self):
+        output = io.StringIO()
+        with patch.object(email_otp, "config", return_value={"smtp": {}}), \
+                patch.dict(os.environ, {}, clear=True):
+            with contextlib.redirect_stdout(output):
+                ok, _error = email_otp.send_otp_email("local-test@example.com", "739104")
+        self.assertFalse(ok)
+        self.assertNotIn("739104", output.getvalue())
 
 
 if __name__ == "__main__":

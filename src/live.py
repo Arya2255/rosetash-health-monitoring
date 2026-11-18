@@ -127,7 +127,8 @@ def live_summary():
     }
 
 
-def send_vibrate(mac: str | None = None, timeout: float = 2.5) -> tuple[bool, str]:
+def send_vibrate(mac: str | None = None, timeout: float = 2.5,
+                 *, emergency: bool = False) -> tuple[bool, str]:
     """فرمان لرزاندن مچ‌بند را از راه پل به گیت‌وی می‌دهد.
 
     mac خالی باشد، پل خودش مچ‌بند شناخته‌شده را پیدا می‌کند. برمی‌گرداند
@@ -136,7 +137,8 @@ def send_vibrate(mac: str | None = None, timeout: float = 2.5) -> tuple[bool, st
     if MODE == "0":
         return False, "حالت زنده خاموش است"
     body = json.dumps({"action": "vibrate",
-                       "mac": (mac or "").strip().lower()}).encode("utf-8")
+                       "mac": (mac or "").strip().lower(),
+                       "emergency": bool(emergency)}).encode("utf-8")
     req = urllib.request.Request(
         BRIDGE + "/api/command", data=body,
         headers={"Content-Type": "application/json"}, method="POST")
@@ -172,6 +174,7 @@ _ERROR_FA = {
     "invalid kind": "نوع تعریف نامعتبر است",
     "invalid parent": "شرکت والد نامعتبر است",
     "invalid age": "سن معتبر نیست — عددی بین ۱ تا ۱۲۰ وارد کن",
+    "invalid staff group": "گروه کارکن معتبر نیست",
     "invalid id": "شناسهٔ تعریف نامعتبر است",
     "has children": "این شرکت زیرشرکت دارد — اول زیرشرکت‌ها را حذف کن",
     "assigned": "این مچ‌بند به یک کارکن تخصیص دارد — اول تخصیص کارکن را بردار",
@@ -257,16 +260,23 @@ def save_monitoring_settings(doc: dict) -> tuple[bool, str]:
     return _post_json("/api/monitoring/settings", doc, actor=str(doc.get("actor") or ""))
 
 
-def _delete_json(path: str, key: str, value, fallback: str) -> tuple[bool, str]:
+def _delete_json(path: str, key: str, value, fallback: str, *, actor=None) -> tuple[bool, str]:
     """DELETE به پل — هرگز استثنا بیرون نمی‌دهد؛ خطای پل را فارسی برمی‌گرداند."""
     if MODE == "0":
         return False, "حالت زنده خاموش است"
     url = (BRIDGE + path + "?" + key + "="
            + urllib.parse.quote(str(value or "").strip().lower()))
-    req = urllib.request.Request(url, method="DELETE")
     try:
+        target = urllib.parse.urlsplit(url)
+        headers = sign_request("DELETE", target.path + "?" + target.query, b"", actor) if actor is not None else {}
+        req = urllib.request.Request(url, method="DELETE", headers=headers)
         with urllib.request.urlopen(req, timeout=4.0) as resp:
             doc = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            doc = json.loads(exc.read().decode("utf-8"))
+        except (ValueError, OSError):
+            return False, "پل درخواست حذف را رد کرد"
     except Exception as exc:
         applog.error("حذف از پل ناموفق — %s — %s: %s", path,
                      type(exc).__name__, exc)
@@ -280,9 +290,9 @@ def _delete_json(path: str, key: str, value, fallback: str) -> tuple[bool, str]:
     return False, _ERROR_FA.get(err, err or fallback)
 
 
-def delete_employee(mac: str) -> tuple[bool, str]:
-    """حذف کارکن از دفتر پل — مچ‌بندش اگر در دید باشد «ثبت‌نشده» می‌شود."""
-    return _delete_json("/api/employees", "mac", mac, "حذف نشد")
+def delete_employee(mac: str, *, actor="") -> tuple[bool, str]:
+    """Remove an employee as the authenticated admin and release its band."""
+    return _delete_json("/api/employees", "mac", mac, "حذف نشد", actor=actor)
 
 
 # ─────────────── دفتر مچ‌بندها و تعاریف پایه — روی پل ───────────────
@@ -306,6 +316,31 @@ def live_catalogs(force: bool = False):
     if not doc or not doc.get("ok"):
         return None
     return doc.get("catalogs") or {}
+
+
+def scan_local_ble(*, actor: str) -> tuple[bool, list[dict] | str]:
+    """Ask the authenticated bridge to use the HSE host's own BLE radio."""
+    if MODE == "0":
+        return False, "حالت زنده خاموش است"
+    path = "/api/bands/scan"
+    try:
+        headers = sign_request("GET", path, b"", actor)
+        request = urllib.request.Request(BRIDGE + path, headers=headers)
+        with urllib.request.urlopen(request, timeout=20) as response:
+            doc = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            doc = json.loads(exc.read().decode("utf-8"))
+        except (ValueError, OSError):
+            return False, "پل درخواست جست‌وجو را رد کرد"
+    except Exception:
+        return False, "پل محلی پاسخ نداد؛ اتصال برنامه و دانگل را بررسی کنید"
+    if doc.get("ok"):
+        return True, doc.get("devices") or []
+    error = str(doc.get("error") or "جست‌وجوی بلوتوث کامل نشد")
+    if error == "forbidden":
+        return False, "جست‌وجوی بلوتوث فقط برای ادمین اصلی مجاز است"
+    return False, _ERROR_FA.get(error, error)
 
 
 def photo_src(emp) -> str | None:

@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend"))
 import bridge  # noqa: E402
@@ -19,8 +20,11 @@ GW = "gw-test-1"
 MAC = "f3:b6:d6:b7:47:d7"
 
 
-def main() -> None:
-    bridge.DB_PATH = os.path.join(tempfile.mkdtemp(prefix="bridge-test-"), "live.db")
+@patch.object(bridge.time, "time", return_value=NOW - 100)
+def main(_clock) -> None:
+    fixture_dir = tempfile.mkdtemp(prefix="bridge-test-")
+    bridge.DB_PATH = os.path.join(fixture_dir, "live.db")
+    bridge.PHOTOS_DIR = os.path.join(fixture_dir, "photos")
 
     bridge.ingest(f"roztash/{GW}/status", json.dumps({
         "gw": GW, "zone": "test", "fw": "0.1.3-skeleton", "online": True,
@@ -117,7 +121,21 @@ def main() -> None:
     ok, err, info = bridge.command({"action": "vibrate", "mac": "aa:bb:cc:dd:ee:ff"})
     assert ok and info["gw"] == GW, "مچ‌بند ناشناس باید سراغ تازه‌ترین گیت‌وی برود"
 
-    # ── دفتر کارکنان — ثبت، ادغام زنده، وضعیت و حذف ──
+    # مسیر هشدار اضطراری فقط برای HSE است و از برنامهٔ پایش مستقل می‌ماند.
+    ok, err = bridge.upsert_employee({"mac": "aa:bb:cc:dd:ee:02",
+                                      "name": "HSE", "staff_group": "hse"})
+    assert ok, err
+    ok, err, info = bridge.command({"action": "vibrate",
+                                    "mac": "aa:bb:cc:dd:ee:02",
+                                    "emergency": True})
+    assert ok and json.loads(info["payload"]) == {
+        "action": "vibrate", "mac": "aa:bb:cc:dd:ee:02", "emergency": True}
+    ok, err, _ = bridge.command({"action": "vibrate", "mac": MAC,
+                                 "emergency": True})
+    assert not ok and err == "emergency vibration is only for HSE"
+    assert bridge.remove_employee("aa:bb:cc:dd:ee:02") == (True, "")
+
+    # ── دفتر کارکنان — ثبت، ادغام زنده و حذف ──
     ok, err = bridge.upsert_employee({"mac": MAC.upper(), "name": "رضا محمدی",
                                       "company": "موتوسل", "dept": "تولید روغن",
                                       "line": "خط روغن ۲", "role": "اپراتور",
@@ -212,14 +230,12 @@ def main() -> None:
     assert len(cats["line"]) == 1 and len(cats["role"]) == 1
 
     assert bridge.upsert_gateway({"gw":GW,"kind":"installed","zone":"test","x":0.3,"y":0.4})[0]
-    # Isolated legacy telemetry fixture: explicitly put this employee on duty.
-    # No real admin settings or live database are used by this test.
-    from employee_schedule import DAY_KEYS
-    schedule = {day: [{"start": "00:00", "end": "23:59"}] for day in DAY_KEYS}
+    # NOW is Wednesday 01:43 in Tehran; all fixture writes precede the samples.
+    # Use an explicit shift without granting monitoring to unscheduled employees.
+    schedule = {"wed": [{"start": "01:00", "end": "03:00"}]}
     with bridge._lock:
-        bridge.db().execute("UPDATE employees SET weekly_schedule=?, schedule_updated_at=?, "
-                            "created_at=? WHERE mac=?",
-                            (json.dumps(schedule), NOW - 100, NOW - 100, MAC))
+        bridge.db().execute("UPDATE employees SET weekly_schedule=?, schedule_updated_at=? "
+                            "WHERE mac=?", (json.dumps(schedule), NOW - 100, MAC))
         bridge.db().commit()
     # حضور تازه: مک اصلی با RSSI تازه + مچ‌بند دومِ ثبت‌نشده
     bridge.ingest(f"roztash/{GW}/presence", json.dumps({
@@ -233,6 +249,7 @@ def main() -> None:
         f"ترکیب کارکنان غلط: {sorted(emps)}"
     e = emps[MAC]
     assert e["registered"] is True and e["name"] == "رضا محمدی"
+    assert e["scan_allowed"] is True and e["monitoring_reason"] == "active"
     assert e["present"] is True and e["status"] == "ok", (e["status"], e["issues"])
     assert e["rssi"] == -70 and e["gw"] == GW and e["zone"] == "test"
     assert e["health"]["avg"] == 76.8 and e["health"]["n"] == 5
@@ -243,6 +260,8 @@ def main() -> None:
     assert u["registered"] is False and u["name"] is None and u["present"] is True
     n = emps["aa:11:bb:22:cc:33"]
     assert n["registered"] is True and n["present"] is False and n["status"] == "off"
+    assert n["scan_allowed"] is False and n["monitoring_reason"] == "unconfigured"
+    assert bridge.employee_scan_policy(now=NOW)["active_macs"] == [MAC]
 
     # فهرست ادغام‌شدهٔ مچ‌بندها — دفتر + در دید + تخصیص کارکنان
     bk = {b["mac"]: b for b in snap_e["bands_known"]}
@@ -274,14 +293,65 @@ def main() -> None:
     assert "battery_low" in e["issues"]
     assert e["vitals"]["spo2"] == 85, e["vitals"]["spo2"]
 
-    # حذف: مک در دید می‌ماند ولی «ثبت‌نشده» می‌شود
+    # A fresh off-hours packet must not restore presence, health or alerts.
+    outside_shift = NOW + 7200
+    bridge.ingest(f"roztash/{GW}/presence", json.dumps({
+        "bands": [{"mac": MAC, "rssi": -35}]}), recv_ts=outside_shift)
+    bridge.ingest(f"roztash/{GW}/health", json.dumps({
+        "mac": MAC, "state": "done", "fail": "none", "wearing": True,
+        "ended": True, "bpm": [150], "n": 1, "avg": 150}), recv_ts=outside_shift)
+    bridge.ingest(f"roztash/{GW}/vitals", json.dumps({
+        "mac": MAC, "battery": 5}), recv_ts=outside_shift)
+    bridge.ingest(f"roztash/{GW}/event", json.dumps({
+        "mac": MAC, "type": "measure_unavailable"}), recv_ts=outside_shift)
+    off = bridge.snapshot(now=outside_shift)
+    e = next(x for x in off["employees"] if x["mac"] == MAC)
+    assert e["scan_allowed"] is False and e["monitoring_reason"] == "outside_shift"
+    assert e["present"] is False and e["status"] == "off" and e["issues"] == []
+    assert e["health"] is None and e["vitals"] is None and e["location"] is None
+    assert all(not any(x["mac"] == MAC for x in off[key])
+               for key in ("bands", "health", "vitals", "battery_alerts"))
+    assert bridge.employee_scan_policy(now=outside_shift)["active_macs"] == []
+    with bridge._lock:
+        for table in ("health", "vitals", "events"):
+            assert bridge.db().execute(
+                f"SELECT COUNT(*) FROM {table} WHERE mac=? AND ts=?",
+                (MAC, outside_shift)).fetchone()[0] == 0, table
+        assert bridge.db().execute(
+            "SELECT seen_at FROM band_observations WHERE mac=?", (MAC,)).fetchone()[0] == NOW - 4
+
+    # حذف: کارکن و پایش پاک می‌شوند؛ مچ‌بند با برچسب قبلی غیرفعال می‌ماند.
     ok, err = bridge.remove_employee(MAC)
     assert ok, err
     ok, err = bridge.remove_employee(MAC)
     assert not ok and err == "not found", "حذف دوم باید not found بدهد"
-    e = {x["mac"]: x for x in bridge.snapshot(now=NOW)["employees"]}[MAC]
-    assert e["registered"] is False and e["name"] is None and e["present"] is True
+    deleted = bridge.snapshot(now=NOW)
+    assert not any(x["mac"] == MAC for x in deleted["employees"])
+    assert not any(x["mac"] == MAC for x in bridge.employees_list())
+    b = next(x for x in deleted["bands_known"] if x["mac"] == MAC)
+    assert b["registered"] is True and b["employee_name"] is None
+    assert b["label"] == "مچ‌بند رضا" and b["note"] == "کنار خط"
+    assert b["assignment_status"] == "inactive" and b["monitoring_active"] is False
+    assert b["in_view"] is False
+    assert MAC not in bridge.employee_scan_policy(now=NOW)["active_macs"]
+    with bridge._lock:
+        for table in ("battery_alert_state", "health", "vitals", "events",
+                      "bands", "band_observations"):
+            assert bridge.db().execute(
+                f"SELECT COUNT(*) FROM {table} WHERE mac=?", (MAC,)).fetchone()[0] == 0, table
     assert bridge.get_photo(MAC) is None, "حذف کارکن باید عکسش را هم پاک کند"
+    # Packets received after unlinking must not restart monitoring.
+    bridge.ingest(f"roztash/{GW}/presence", json.dumps({
+        "bands": [{"mac": MAC, "rssi": -30}]}), recv_ts=NOW + 1)
+    bridge.ingest(f"roztash/{GW}/health", json.dumps({
+        "mac": MAC, "state": "done", "bpm": [90], "n": 1, "avg": 90}), recv_ts=NOW + 1)
+    bridge.ingest(f"roztash/{GW}/vitals", json.dumps({
+        "mac": MAC, "battery": 90}), recv_ts=NOW + 1)
+    released = bridge.snapshot(now=NOW + 2)
+    assert all(not any(x["mac"] == MAC for x in released[key])
+               for key in ("employees", "bands", "health", "vitals", "battery_alerts"))
+    b = next(x for x in released["bands_known"] if x["mac"] == MAC)
+    assert b["assignment_status"] == "inactive" and b["monitoring_active"] is False
     ok, err = bridge.remove_band(MAC)
     assert ok, err
     ok, err = bridge.remove_band(MAC)

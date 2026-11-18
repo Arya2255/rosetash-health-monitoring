@@ -45,8 +45,25 @@ def _prov_state(app) -> dict:
             "flashing": False, "percent": None, "log": [], "done": None,
             "reg": None, "_tick": False,
         })
-        st["gw_rows"] = live_gateways() or []
+    if not st.get("flashing"):
+        rows = live_gateways()
+        st["registry_available"] = rows is not None
+        st["gw_rows"] = _registered_gateways(rows)
     return st
+
+
+def _registered_gateways(rows):
+    unique = {}
+    for row in rows or []:
+        if (isinstance(row, dict) and row.get("registered") is True
+                and isinstance(row.get("gw"), str) and pv.validate_gw_id(row["gw"])[0]):
+            unique.setdefault(row["gw"], dict(row))
+    return list(unique.values())
+
+
+def _selected_gateway(st):
+    return next((r for r in _registered_gateways(st.get("gw_rows"))
+                 if r["gw"] == st.get("gw_id")), None)
 
 
 def _identity_compatible(ident) -> bool:
@@ -106,9 +123,11 @@ def _read_ident(app, st):
         if ok:
             st["ident"] = doc
             st["ident_err"] = ""
+            app.snack("مشخصات برد تأیید شد")
         else:
             st["ident"] = None
             st["ident_err"] = doc.get("error") or "برد پاسخ نداد"
+            app.snack(st["ident_err"])
 
     threading.Thread(target=worker, daemon=True).start()
     app.render()
@@ -125,6 +144,14 @@ def _start_flash(app, st):
     if not _identity_compatible(ident):
         app.snack("ابتدا ESP32-S3 شانزده‌مگابایتی را شناسایی و تأیید کن")
         return
+    rows = live_gateways(force=True)
+    st["gw_rows"] = _registered_gateways(rows)
+    if rows is None:
+        app.snack("دفتر گیت‌وی‌ها در دسترس نیست؛ اتصال پل را بررسی کنید")
+        return
+    if _selected_gateway(st) is None:
+        app.snack("ابتدا یک گیت‌وی تعریف‌شده را از فهرست انتخاب کن")
+        return
     gw_ok, gw_msg = pv.validate_gw_id(st.get("gw_id") or "")
     if not gw_ok:
         app.snack(gw_msg)
@@ -132,9 +159,21 @@ def _start_flash(app, st):
     if not (st.get("host") or "").strip():
         app.snack("آدرس بروکر خالی است")
         return
-    cfg = pv.build_config(
-        st.get("gw_id") or "", st.get("zone") or "",
-        st.get("host") or "", st.get("port") or 1884, 600)
+    if len(st["gw_id"]) > 23:
+        app.snack("شناسهٔ ثبت‌شده باید حداکثر ۲۳ نویسه باشد؛ آن را در دفتر گیت‌وی‌ها اصلاح کنید")
+        return
+    try:
+        mqtt_port = int(st.get("port") or 1884)
+        if not 1 <= mqtt_port <= 65535:
+            raise ValueError
+    except (TypeError, ValueError):
+        app.snack("پورت بروکر باید عددی بین ۱ تا ۶۵۵۳۵ باشد")
+        return
+    cfg = pv.build_config(st["gw_id"], st.get("zone") or "",
+                          st.get("host") or "", mqtt_port, 600)
+    ident = dict(ident)
+    registration = {"gw": st["gw_id"], "label": st.get("label") or st["gw_id"],
+                    "zone": st.get("zone") or "", "kind": "installed", "mac": ident["mac"]}
     st["flashing"] = True
     st["percent"] = None
     st["log"] = []
@@ -151,7 +190,6 @@ def _start_flash(app, st):
             del st["log"][0]
 
     def worker():
-        ident = st.get("ident") or {}
         ok, info = pv.flash_gateway(
             port, cfg=cfg, expected_chip=ident["chip_id"],
             expected_flash_bytes=ident["flash_bytes"],
@@ -160,17 +198,7 @@ def _start_flash(app, st):
         st["done"] = {"ok": ok, "error": info.get("error") or "",
                       "verified": info.get("verified")}
         if ok:
-            gid = (st.get("gw_id") or "").strip().lower()
-            if cfg is None:
-                st["reg"] = (False, "بدون تنظیمات فلش شد — ثبت در دفتر "
-                                    "وقتی برد از گوشی ست شد انجام می‌شود")
-            else:
-                ident = st.get("ident") or {}
-                st["reg"] = save_gateway({
-                    "gw": gid, "label": st.get("label") or gid,
-                    "zone": st.get("zone") or "", "kind": "installed",
-                    "mac": ident.get("mac") or "",
-                })
+            st["reg"] = save_gateway(registration)
         st["flashing"] = False
         _time_.sleep(0.2)
 
@@ -340,15 +368,31 @@ def _field(label, key, st, **kw):
 
 def _step2_card(app, st) -> ft.Control:
     """گام ۲ — هویت گیتوی و نشانی جایگزین بروکر."""
-    rows = [r for r in (st.get("gw_rows") or [])
-            if r.get("registered") is not False]
+    rows = _registered_gateways(st.get("gw_rows"))
 
-    def pick(gw_id, r):
+    def pick(event):
+        if st.get("flashing"):
+            return
+        gw_id = str(event.control.value or "").strip()
+        row = next((r for r in rows if str(r.get("gw") or "") == gw_id), None)
+        if row is None:
+            return
         st["gw_id"] = gw_id
-        st["label"] = r.get("label") or gw_id
-        st["zone"] = r.get("zone") or ""
+        st["label"] = row.get("label") or gw_id
+        st["zone"] = row.get("zone") or ""
         app.render()
 
+    selected = str(st.get("gw_id") or "")
+    selected_row = next((r for r in rows if str(r.get("gw") or "") == selected), None)
+    if selected_row is None and rows:
+        selected_row = rows[0]
+        selected = str(selected_row["gw"])
+        st["gw_id"] = selected
+        st["label"] = selected_row.get("label") or selected
+        st["zone"] = selected_row.get("zone") or ""
+    elif not rows:
+        selected = ""
+        st.update(gw_id="", label="", zone="")
     blocks = [
         txt("۲) شناسه و مشخصات گیت‌وی", size=14, font=FONT_B, color=INK),
         txt("شناسه همان است که در برد نوشته می‌شود و در دفتر پل ثبت "
@@ -357,23 +401,35 @@ def _step2_card(app, st) -> ft.Control:
             size=11.5, font=FONT, color=TEXT_MUTED),
     ]
     if rows:
-        chips = []
-        for r in rows:
-            r_gw = str(r.get("gw") or "")
-            chips.append(ft.Container(
-                content=txt(r.get("label") or r_gw, size=11, font=FONT_MED,
-                            color=WHITE if st.get("gw_id") == r_gw else INK),
-                bgcolor=INK if st.get("gw_id") == r_gw else _BG_GRAY,
-                border_radius=999,
-                padding=ft.Padding.symmetric(horizontal=10, vertical=4),
-                on_click=lambda e, g=r_gw, rr=r: pick(g, rr), ink=True))
-        blocks.append(ft.Row(chips, spacing=6, wrap=True))
+        gateway_selector = ft.Dropdown(
+            label="شناسهٔ گیت‌وی از دفتر",
+            data="provisioning:gateway",
+            value=selected,
+            disabled=bool(st.get("flashing")),
+            options=[ft.DropdownOption(
+                key=str(row["gw"]),
+                text=f"{row['gw']} — {row.get('label') or row['gw']} — {row.get('zone') or 'منطقه ثبت نشده'}",
+            ) for row in rows],
+            on_select=pick,
+        )
+        blocks.append(gateway_selector)
+    else:
+        blocks.append(ft.Container(
+            data="provisioning:no-gateways",
+            content=txt("گیت‌وی ثبت‌شده‌ای در دفتر نیست. ابتدا در بخش «گیت‌وی‌ها» "
+                        "شناسهٔ گیت‌وی را تعریف کنید؛ ورود دستی شناسه در این صفحه مجاز نیست.",
+                        size=12, font=FONT_MED, color=WARN),
+            bgcolor=_BG_WARN, border_radius=R_CARD,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+        ))
+    blocks.append(ft.TextButton("تازه‌سازی فهرست گیت‌وی‌ها", icon=ft.Icons.REFRESH,
+                               disabled=bool(st.get("flashing")),
+                               on_click=lambda e: app.render(), data="provisioning:refresh-gateways"))
     # نکته: Row(wrap=True) فرزند expand=True را نمیپذیرد (خطای WrapParentData
     # سمت Flutter)؛ ردیفهای فیلد با کمک flow ساخته میشوند — دسکتاپ Row،
     # موبایل ستون تمامعرض (مثل صفحهٔ «لاگ برنامه»).
     blocks += [
         flow(app, [
-            _field("شناسهٔ گیت‌وی (gw-…)", "gw_id", st, expand=1),
             _field("نام نمایشی", "label", st, expand=1),
             _field("منطقه / محل نصب", "zone", st, expand=1),
         ], spacing=8),
@@ -419,7 +475,8 @@ def _step3_card(app, st) -> ft.Control:
         ident_ok = _identity_compatible(st.get("ident"))
         blocks.append(ft.Button(
             "شروع فلش کامل", icon=ft.Icons.DOWNLOAD,
-            disabled=st.get("flashing") or not st.get("sel_port") or not ident_ok,
+            disabled=bool(st.get("flashing") or not st.get("sel_port") or not ident_ok
+                          or _selected_gateway(st) is None),
             tooltip=(None if ident_ok else "ابتدا مشخصات ESP32-S3 و فلش ۱۶MB را تأیید کن"),
             style=ft.ButtonStyle(
                 bgcolor=INK, color=WHITE,

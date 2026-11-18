@@ -43,7 +43,7 @@ class BleCentral {
   bool scanPolicyAllows(const char* mac) const;
   bool scanEnabled() const;
   bool policyReady() const;
-  bool hasFreshSighting(const char* mac, uint32_t now);
+  bool hasFreshSighting(const char* mac, uint32_t now, bool emergency = false);
   bool jobRevoked() const { return cancelled_.load(); }
 
   // ---- presence -------------------------------------------------------------
@@ -60,9 +60,12 @@ class BleCentral {
   // for connection/discovery. The worker owns all measurement state until done.
   bool startHealth(const char* mac, bool vitals = false);
   // Connects, sends (05,50) and disconnects: makes the band vibrate (find-device).
-  bool startVibrate(const char* mac);
+  bool startVibrate(const char* mac, bool emergency = false, uint8_t repeats = 1,
+                    uint8_t completed_pulses = 0);
   bool wasVibrate() const { return vibrate_mode_; }
+  bool wasVibrateEmergency() const { return vibrate_emergency_; }
   bool vibrated() const { return vibrated_; }
+  uint8_t vibrateAcks() const { return vibrate_acks_; }
   void poll();  // policy monitor only: lease, cancel and scan watchdog
 
   // finished-job accessors — valid until clearJob()
@@ -112,7 +115,7 @@ class BleCentral {
   void onResult(const NimBLEAdvertisedDevice* dev);
   void onNotifyData(const uint8_t* data, size_t len);
   void enqueueNotify(uint32_t generation, const uint8_t* data, size_t len);
-  bool launchJob(const char* mac, bool vitals, bool vibrate);
+  bool launchJob(const char* mac, bool vitals, bool vibrate, bool emergency = false);
   bool runHealth(const char* mac, bool vitals);
   bool runVibrate(const char* mac);
   bool jobAllowed() const;
@@ -168,7 +171,12 @@ class BleCentral {
 
   // vibrate job (find-device): reuses the connect/subscribe path
   bool vibrate_mode_ = false;
+  bool vibrate_emergency_ = false;
   bool vibrated_ = false;
+  uint8_t vibrate_acks_ = 0;
+  uint8_t vibrate_repeats_ = 1;
+  bool vibrate_write_pending_ = false;
+  uint32_t vibrate_write_at_ = 0;
 
   bool sendMeasureStart(uint8_t type);
   bool beginJob(const char* mac);   // shared connect+subscribe preamble

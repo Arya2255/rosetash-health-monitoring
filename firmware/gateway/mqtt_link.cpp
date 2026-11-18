@@ -104,13 +104,18 @@ void MqttLink::begin(const GatewayConfig& cfg, BleCentral& ble, roztash::HealthS
       publishCommandEvent("cmd_reject", command, "retained_command_rejected");
       return;
     }
-    if (!policy_.allows(command.mac, millis())) {
+    if (command.emergency ? !policy_.allowsEmergency(command.mac, millis())
+                          : !policy_.allows(command.mac, millis())) {
       publishCommandEvent("cmd_reject", command, "policy_revoked");
       return;
     }
     switch (vibration_commands_.offer(command, millis())) {
-      case roztash::CommandOffer::Completed:
-        publishCommandEvent("vibrated", command, "already_completed"); break;
+      case roztash::CommandOffer::Completed: {
+        auto completed = command;
+        completed.completed_pulses = vibration_commands_.completedPulses(command, millis());
+        publishCommandEvent("vibrated", completed, "already_completed");
+        break;
+      }
       case roztash::CommandOffer::Conflict:
         publishCommandEvent("cmd_reject", command, "request_id_conflict"); break;
       case roztash::CommandOffer::Busy:
@@ -204,22 +209,27 @@ void MqttLink::receivePolicy(const uint8_t* payload, size_t len) {
   const auto& old = policy_.policy();
   const bool changed = !policy_.ready(received) || old.active_count != incoming_policy_.active_count ||
       old.health_count != incoming_policy_.health_count ||
+      old.emergency_count != incoming_policy_.emergency_count ||
       old.health_interval_s != incoming_policy_.health_interval_s ||
       memcmp(old.active.data(), incoming_policy_.active.data(), incoming_policy_.active_count * sizeof(roztash::PolicyMac)) ||
-      memcmp(old.health.data(), incoming_policy_.health.data(), incoming_policy_.health_count * sizeof(roztash::PolicyMac));
+      memcmp(old.health.data(), incoming_policy_.health.data(), incoming_policy_.health_count * sizeof(roztash::PolicyMac)) ||
+      memcmp(old.emergency.data(), incoming_policy_.emergency.data(), incoming_policy_.emergency_count * sizeof(roztash::PolicyMac));
   policy_.apply(incoming_policy_, received);
   policy_installed_ = true;
   ble_->setScanPolicy(incoming_policy_, received);
   schedule_->sync(policy_, received);  // removes revoked entries without resetting progress
   const auto* pending = vibration_commands_.pending();
-  if (pending && !policy_.allows(pending->mac, received)) cancelPendingCommand("policy_revoked");
+  if (pending && (pending->emergency ? !policy_.allowsEmergency(pending->mac, received)
+                                     : !policy_.allows(pending->mac, received)))
+    cancelPendingCommand("policy_revoked");
   if (changed) status_pending_ = true;
   flushQueue();
 }
 
 // Consume-once read of the last received command (callback-set).
 bool MqttLink::takeCommand(char* action, size_t action_cap, char* mac,
-                           size_t mac_cap) {
+                           size_t mac_cap, bool* emergency, uint8_t* repeats,
+                           uint8_t* completed_pulses) {
   roztash::VibrationCommand command;
   const auto result = vibration_commands_.take(millis(), command);
   if (result == roztash::CommandTake::None) return false;
@@ -227,12 +237,16 @@ bool MqttLink::takeCommand(char* action, size_t action_cap, char* mac,
     publishCommandEvent("cmd_reject", command, "command_expired");
     return false;
   }
-  if (!policy_.allows(command.mac, millis())) {
+  if (command.emergency ? !policy_.allowsEmergency(command.mac, millis())
+                        : !policy_.allows(command.mac, millis())) {
     rejectVibration("policy_revoked");
     return false;
   }
   strlcpy(action, "vibrate", action_cap);
   strlcpy(mac, command.mac, mac_cap);
+  if (emergency) *emergency = command.emergency;
+  if (repeats) *repeats = command.repeats;
+  if (completed_pulses) *completed_pulses = command.completed_pulses;
   return true;
 }
 
@@ -245,6 +259,8 @@ void MqttLink::publishCommandEvent(const char* type, const roztash::VibrationCom
   if (command.tracked()) {
     doc["request_id"] = command.request_id;
     doc["reason"] = command.reason;
+    doc["repeats"] = command.repeats;
+    doc["completed_pulses"] = command.completed_pulses;
   }
   if (detail && detail[0]) doc["detail"] = detail;
   String output;
@@ -259,18 +275,21 @@ void MqttLink::cancelPendingCommand(const char* detail) {
   if (vibration_commands_.cancelPending(command)) publishCommandEvent("cmd_reject", command, detail);
 }
 
-void MqttLink::finishVibration(bool success, const char* detail) {
+void MqttLink::finishVibration(bool success, uint8_t completed_pulses, const char* detail) {
   const auto* command = vibration_commands_.active();
   if (!command) return;
-  publishCommandEvent(success ? "vibrated" : "vibrate_fail", *command, detail);
-  vibration_commands_.finish(success, millis());
+  roztash::VibrationCommand result = *command;
+  result.completed_pulses = completed_pulses;
+  publishCommandEvent(success ? "vibrated" : "vibrate_fail", result, detail);
+  vibration_commands_.finish(success, millis(), completed_pulses);
 }
 
 void MqttLink::rejectVibration(const char* detail) {
   const auto* command = vibration_commands_.active();
   if (!command) return;
-  publishCommandEvent("cmd_reject", *command, detail);
-  vibration_commands_.finish(false, millis());
+  roztash::VibrationCommand result = *command;
+  publishCommandEvent("cmd_reject", result, detail);
+  vibration_commands_.finish(false, millis(), result.completed_pulses);
 }
 
 // --- publishing -------------------------------------------------------------
@@ -298,6 +317,7 @@ void MqttLink::publishStatus(const char* fw, const char* ip,
   doc["health_interval_s"] = policy_.policy().health_interval_s;
   doc["health_job_active"] = ble_->healthBusy();
   doc["vibration_request_id"] = true;
+  doc["vibration_repeats"] = 3;
   String out;
   serializeJson(doc, out);
   char topic[48];
@@ -317,7 +337,8 @@ void MqttLink::publishPresence(BleCentral& ble) {
   }
   for (int i = 0; i < BleCentral::kMaxBands; ++i) {
     BleCentral::Sighting s;
-    if (!ble.getSlot(i, s) || !s.used || !policy_.allows(s.mac, millis())) continue;
+    if (!ble.getSlot(i, s) || !s.used ||
+        (!policy_.allows(s.mac, millis()) && !policy_.allowsEmergency(s.mac, millis()))) continue;
     const uint32_t age = uint32_t(millis() - s.seen_ms);
     if (age > roztash::kSightingFreshMs) continue;
     ++count;

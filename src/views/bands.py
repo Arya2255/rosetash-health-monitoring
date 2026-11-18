@@ -17,7 +17,8 @@ from theme import (
     BORDER, DANGER, FONT, FONT_B, FONT_MED, INK, OFFLINE, OK, R_BTN, R_CARD,
     TEXT_MAIN, TEXT_MUTED, WHITE, fa_num, txt,
 )
-from data import delete_band, live_bands, save_band
+from data import delete_band, live_bands, save_band, scan_local_ble
+from admin_roles import can_manage_admins
 from layout import dialog_w, is_phone, list_card, page_scroll
 from components.common import SHADOW, rel_age
 from components.employee_form import open_employee_form
@@ -47,17 +48,18 @@ def _pop(app):
 
 
 def _dialog(app, title, controls, error_txt, on_confirm,
-            confirm_label="ثبت", confirm_color=INK):
+            confirm_label="ثبت", confirm_color=INK, on_cancel=None):
     """بدنهٔ مشترک دیالوگ‌های این صفحه."""
     dlg = ft.AlertDialog(
         modal=True,
         title=txt(title, size=16, font=FONT_B, color=INK),
         content=ft.Container(
             width=dialog_w(app),
-            content=ft.Column([*controls, error_txt], spacing=10, tight=True),
+            content=ft.Column([*controls, ft.Container(content=error_txt, padding=ft.Padding(0, 5, 0, 0))],
+                              spacing=10, tight=False),
         ),
         actions=[
-            ft.TextButton("انصراف", on_click=lambda e: _pop(app)),
+            ft.TextButton("انصراف", on_click=lambda e: (on_cancel() if on_cancel else None, _pop(app))),
             ft.Button(
                 confirm_label,
                 style=ft.ButtonStyle(bgcolor=confirm_color, color=WHITE,
@@ -104,6 +106,22 @@ def open_band_form(app, band: dict | None = None, mac: str = "", on_saved=None):
 
     controls = []
     mac_f = None
+    scan_status = txt("برای جستجو، دانگل بلوتوث کامپیوتر میزبان باید متصل باشد.",
+                      size=11, font=FONT, color=TEXT_MUTED)
+    scan_button = None
+    results_column = None
+    scan_lifetime = {"open": True, "busy": False}
+    origin_view = app.state.get("view")
+    origin_actor = app.state.get("admin_email")
+
+    def _close_scan():
+        scan_lifetime["open"] = False
+
+    def _scan_current():
+        return (scan_lifetime["open"] and app.state.get("view") == origin_view
+                and app.state.get("admin_email") == origin_actor
+                and app.state.get("logged_in")
+                and can_manage_admins(app.state.get("role", "")))
     if fixed:
         controls.append(ft.Row([
             ft.Icon(ft.Icons.WATCH, size=16, color=TEXT_MUTED),
@@ -111,8 +129,82 @@ def open_band_form(app, band: dict | None = None, mac: str = "", on_saved=None):
         ], spacing=6))
     else:
         mac_f = ft.TextField(label="مک مچ‌بند", hint_text="f3:b6:d6:b7:47:d7",
-                             text_size=13, autofocus=True)
+                             text_size=13, autofocus=not can_manage_admins(app.state.get("role", "")))
         controls.append(mac_f)
+        if can_manage_admins(app.state.get("role", "")) and app.state.get("logged_in"):
+            scan_button = ft.Button(
+                "جستجوی مچ‌بندهای اطراف", icon=ft.Icons.BLUETOOTH_SEARCHING,
+                data="ble:scan", height=40,
+                style=ft.ButtonStyle(bgcolor=INK, color=WHITE,
+                                     shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+            )
+
+            def _search_ble(event):
+                if not scan_lifetime["open"] or scan_lifetime["busy"]:
+                    return
+                if not (app.state.get("logged_in") and can_manage_admins(app.state.get("role", ""))):
+                    app.snack("جستجوی بلوتوث فقط برای ادمین اصلی مجاز است")
+                    return
+                scan_lifetime["busy"] = True
+                scan_button.disabled = True
+                scan_button.content = "در حال جستجوی اطراف…"
+                scan_status.value = "جست‌وجوی دستگاه‌های اطراف انجام می‌شود؛ اتصال یا جفت‌سازی انجام نمی‌شود."
+                results_column.controls = []
+                app.page.update()
+
+                async def run_scan():
+                    try:
+                        if not _scan_current():
+                            return
+                        ok, result = await asyncio.to_thread(scan_local_ble, actor=origin_actor)
+                        if not _scan_current():
+                            return
+                        if not ok or not isinstance(result, list):
+                            scan_status.value = str(result)
+                            return
+                        devices = result
+                        scan_status.value = (f"{len(devices)} دستگاه پیدا شد؛ مچ‌بند درست را با مک انتخاب کنید."
+                                             if devices else "دستگاهی پیدا نشد؛ مچ‌بند را بیدار کنید یا دانگل را بررسی کنید.")
+                        results_column.controls = [
+                            ft.Container(
+                                data="ble:result:" + device["mac"],
+                                content=ft.Row([
+                                    ft.Icon(ft.Icons.WATCH, size=17, color=INK),
+                                    ft.Column([
+                                        txt(device["name"], size=12, font=FONT_MED, color=INK),
+                                        txt(device["mac"] + " — RSSI " + str(device["rssi"]) + " dBm",
+                                            size=11, font=FONT, color=TEXT_MUTED, rtl=False),
+                                    ], spacing=1, expand=True),
+                                    ft.TextButton("انتخاب",
+                                        data="ble:select:" + device["mac"],
+                                        on_click=lambda ev, addr=device["mac"]: _select_mac(addr)),
+                                ], spacing=8),
+                                padding=ft.Padding.symmetric(horizontal=8, vertical=5),
+                                border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
+                            ) for device in devices
+                        ]
+                    except Exception:
+                        if _scan_current():
+                            scan_status.value = "جستجوی بلوتوث کامل نشد؛ دانگل سازگار و دسترسی سیستم را بررسی کنید."
+                    finally:
+                        scan_lifetime["busy"] = False
+                        if _scan_current():
+                            scan_button.disabled = False
+                            scan_button.content = "جستجوی دوباره"
+                            app.page.update()
+
+                app.page.run_task(run_scan)
+
+            def _select_mac(address):
+                if not _scan_current():
+                    return
+                mac_f.value = address
+                _err("")
+                app.page.update()
+
+            scan_button.on_click = _search_ble
+            results_column = ft.Column([], spacing=0)
+            controls.extend([scan_button, scan_status, results_column])
     label_f = ft.TextField(label="نام مچ‌بند (اختیاری)",
                            value=band.get("label") or "", text_size=13,
                            hint_text="مثلاً مچ‌بند سالن فیلتر")
@@ -131,13 +223,14 @@ def open_band_form(app, band: dict | None = None, mac: str = "", on_saved=None):
         if not ok:
             _err(msg)
             return
+        _close_scan()
         _pop(app)
         app.snack("مچ‌بند به‌روز شد" if editing else "مچ‌بند ثبت شد")
         if on_saved:
             on_saved()
 
     return _dialog(app, "ویرایش مچ‌بند" if editing else "ثبت مچ‌بند",
-                   controls, err, _save)
+                   controls, err, _save, on_cancel=_close_scan)
 
 
 def open_band_delete(app, band: dict, on_done=None):
@@ -171,12 +264,13 @@ def open_band_delete(app, band: dict, on_done=None):
 
 def bands_view(app):
     state = app.state
+    state.setdefault("bands_assignment", "all")
     phone = is_phone(app)
     gen = state.get("bands_gen", 0) + 1
     state["bands_gen"] = gen
 
     last = {"doc": None}
-    list_holder = ft.ListView(expand=True, spacing=0)
+    list_holder = ft.ListView(expand=True, spacing=0, data="bands:list")
     count_text = txt("", size=12, font=FONT, color=TEXT_MUTED)
 
     # ── چیپ حالت داده ──
@@ -290,21 +384,24 @@ def bands_view(app):
 
     def _render():
         doc = last["doc"]
+        shown = [b for b in (DEMO_BANDS if doc is None else doc)
+                 if state["bands_assignment"] == "all"
+                 or bool(b.get("employee_name")) == (state["bands_assignment"] == "active")]
         if doc is None:
-            rows = [_band_row(b) for b in DEMO_BANDS]
+            rows = [_band_row(b) for b in shown]
             list_holder.controls = rows
-            count_text.value = f'{fa_num(len(DEMO_BANDS))} مچ‌بند — نمایشی'
+            count_text.value = f'{fa_num(len(shown))} مچ‌بند — نمایشی'
             return
-        list_holder.controls = [_band_row(b) for b in doc] or [
+        list_holder.controls = [_band_row(b) for b in shown] or [
             ft.Container(
                 height=80, alignment=ft.alignment.Alignment(0, 0),
                 content=txt("هنوز مچ‌بندی شناخته نشده — با «ثبت مچ‌بند» یا "
                             "با روشن‌شدن گیت‌وی‌ها پر می‌شود",
                             size=13, font=FONT, color=TEXT_MUTED))]
-        n_view = sum(1 for b in doc if b.get("in_view"))
-        n_reg = sum(1 for b in doc if b.get("registered"))
-        n_free = sum(1 for b in doc if not b.get("employee_name"))
-        count_text.value = (f'{fa_num(len(doc))} مچ‌بند — '
+        n_view = sum(1 for b in shown if b.get("in_view"))
+        n_reg = sum(1 for b in shown if b.get("registered"))
+        n_free = sum(1 for b in shown if not b.get("employee_name"))
+        count_text.value = (f'{fa_num(len(shown))} مچ‌بند — '
                             f'{fa_num(n_view)} در دید — {fa_num(n_reg)} ثبت‌شده '
                             f'— {fa_num(n_free)} بی‌صاحب')
 
@@ -326,6 +423,19 @@ def bands_view(app):
             add_btn.visible = True
         _render()
 
+    def _change_assignment(event):
+        state["bands_assignment"] = event.control.value
+        _render()
+        app.page.update()
+
+    assignment_filter = ft.Dropdown(
+        label="وضعیت تخصیص", width=230, text_size=13,
+        data="bands:assignment-filter", value=state["bands_assignment"],
+        options=[ft.DropdownOption(key="all", text="همهٔ مچ‌بندها"),
+                 ft.DropdownOption(key="active", text="فعال — تخصیص به کارکن"),
+                 ft.DropdownOption(key="inactive", text="غیرفعال — بدون کارکن")],
+        on_select=_change_assignment,
+    )
     _apply(live_bands())
 
     if phone:
@@ -366,4 +476,4 @@ def bands_view(app):
     if hasattr(app.page, "run_task"):
         app.page.run_task(_loop)
 
-    return page_scroll(app, [header, demo_banner, table_card])
+    return page_scroll(app, [header, assignment_filter, demo_banner, table_card])

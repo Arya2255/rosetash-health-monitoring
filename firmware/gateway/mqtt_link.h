@@ -53,8 +53,10 @@ class MqttLink {
   void publishEvent(const char* type, const char* mac, const char* detail);
 
   // Remote commands from roztash/<gw>/cmd — consume-once.
-  bool takeCommand(char* action, size_t action_cap, char* mac, size_t mac_cap);
-  void finishVibration(bool success, const char* detail = "");
+  bool takeCommand(char* action, size_t action_cap, char* mac, size_t mac_cap,
+                   bool* emergency = nullptr, uint8_t* repeats = nullptr,
+                   uint8_t* completed_pulses = nullptr);
+  void finishVibration(bool success, uint8_t completed_pulses, const char* detail = "");
   void rejectVibration(const char* detail);
 
  private:

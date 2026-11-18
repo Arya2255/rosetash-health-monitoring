@@ -25,11 +25,11 @@ from theme import (
 from data import (
     delete_employee, live_bands, live_catalogs, photo_src, save_employee,
     save_employee_monitoring,
+    STAFF_GROUPS, SHIFTS, can_delete_employees,
 )
 from layout import dialog_w
 from components.monitoring import WeeklyScheduleEditor, monitoring_admin
 
-SHIFTS = ("صبح", "عصر", "شب")
 _BIRTH_YOUNGEST, _BIRTH_OLDEST = 15, 80  # بازهٔ سنی فهرست «سال تولد»
 _MAX_UP = 1_200_000  # سقف پس از کوچک‌سازی — پل تا ۱.۶ مگابایت می‌پذیرد
 
@@ -50,7 +50,8 @@ def _jalali_year_now() -> int:
 def _dialog(app, title, controls, error_txt, on_confirm,
             confirm_label="ثبت", confirm_color=INK, tall=False):
     """بدنهٔ مشترک دیالوگ‌ها — ساخت AlertDialog و نمایش."""
-    col = ft.Column([*controls, error_txt], spacing=10, tight=True)
+    col = ft.Column([*controls, ft.Container(content=error_txt, padding=ft.Padding(0, 5, 0, 0))],
+                      spacing=10, tight=False)
     body = ft.Container(width=dialog_w(app), content=col)
     if tall:
         ph = int(getattr(app.page, "height", None) or 700)
@@ -230,6 +231,11 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
         label="شیفت", value=emp.get("shift") or "صبح", text_size=13,
         options=[ft.DropdownOption(key=s, text=s) for s in SHIFTS],
     )
+    group_f = ft.Dropdown(
+        label="گروه کارکن", value=emp.get("staff_group") or "employee", text_size=13,
+        data="employee:staff-group",
+        options=[ft.DropdownOption(key=key, text=label) for key, label in STAFF_GROUPS],
+    )
     note_f = ft.TextField(label="یادداشت", value=emp.get("note") or "", text_size=13)
     can_monitor = monitoring_admin(app)
     schedule_editor = WeeklyScheduleEditor(app, emp.get("weekly_schedule") or {},
@@ -353,7 +359,7 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
 
     controls = [photo_block, name_f, company_f, birth_dd]
     controls += band_controls
-    controls += [dept_f, line_f, role_f, shift_f, note_f, *monitor_controls,
+    controls += [group_f, dept_f, line_f, role_f, shift_f, note_f, *monitor_controls,
                  ft.Divider(height=1, color=BORDER), sec_med, cond_f, med_f]
 
     def _save(e):
@@ -400,6 +406,7 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
             "line": (line_f.value or "").strip(),
             "role": (role_f.value or "").strip(),
             "shift": shift_f.value or "صبح",
+            "staff_group": group_f.value or "employee",
             "note": (note_f.value or "").strip(),
             "conditions": (cond_f.value or "").strip(),
             "medications": (med_f.value or "").strip(),
@@ -428,13 +435,17 @@ def open_employee_form(app, mac: str = "", emp: dict | None = None, on_saved=Non
 
 
 def open_delete_confirm(app, emp: dict, on_done=None):
-    """تأیید حذف کارکن از دفتر — مچ‌بندش اگر در دید باشد «ثبت‌نشده» می‌شود."""
+    """All signed-in admins may delete an employee and release its band."""
     emp = emp or {}
     name = (emp.get("name") or "").strip() or (emp.get("mac") or "")
     err = txt("", size=12, font=FONT, color=DANGER, visible=False)
 
     def _del(e):
-        ok, msg = delete_employee(emp.get("mac") or "")
+        if not (app.state.get("logged_in") and app.state.get("admin_email")
+                and can_delete_employees(app.state.get("role", ""))):
+            app.snack("اجازهٔ حذف کارکن را ندارید")
+            return
+        ok, msg = delete_employee(emp.get("mac") or "", actor=app.state["admin_email"])
         if not ok:
             err.value = msg
             err.visible = True
@@ -444,12 +455,14 @@ def open_delete_confirm(app, emp: dict, on_done=None):
                 pass
             return
         _pop(app)
-        app.snack("کارکن از دفتر حذف شد")
+        app.snack("کارکن حذف شد؛ مچ‌بند آزاد و غیرفعال شد")
         if on_done:
             on_done()
 
-    body = txt(f"«{name}» از دفتر کارکنان حذف شود؟ مچ‌بندش اگر در دید گیت‌وی "
-               "باشد، دوباره «ثبت‌نشده» نمایش داده می‌شود.",
+    body = txt(f"«{name}» حذف شود؟ ارتباط با مچ‌بند و داده‌های پایش او پاک می‌شود. "
+               "مچ‌بند با حفظ برچسبش به فهرست غیرفعال‌ها می‌رود و قابل تخصیص دوباره است.",
                size=13, font=FONT, color=TEXT_MUTED)
-    return _dialog(app, "حذف کارکن", [body], err, _del,
-                   confirm_label="حذف", confirm_color=DANGER)
+    dialog = _dialog(app, "حذف کارکن", [body], err, _del,
+                     confirm_label="حذف", confirm_color=DANGER)
+    dialog.actions[-1].data = "employee:confirm-delete"
+    return dialog

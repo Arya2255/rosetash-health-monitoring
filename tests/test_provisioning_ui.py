@@ -17,12 +17,15 @@
 import os
 import sys
 import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ["ROZTASH_LIVE"] = "0"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "..", "src"))
 
 import views.provisioning as v_prov  # noqa: E402
+import flet as ft  # noqa: E402
 
 
 def norm(s):
@@ -83,6 +86,69 @@ def texts_of(ctrl):
     return norm("\n".join(out))
 
 
+def controls_of(control):
+    yield control
+    content = getattr(control, "content", None)
+    if isinstance(content, ft.Control):
+        yield from controls_of(content)
+    for child in getattr(control, "controls", None) or []:
+        yield from controls_of(child)
+
+
+def test_gateway_identity_comes_only_from_registered_rows():
+    app = FakeApp()
+    app.state["prov"] = {"inited": True, "gw_rows": [
+        {"gw": "gw-line-1", "label": "خط یک", "zone": "تولید", "registered": True},
+        {"gw": "gw-old", "label": "حذف‌شده", "registered": False},
+    ], "gw_id": "", "label": "", "zone": "", "host": "192.168.50.1", "port": "1884"}
+    view = v_prov._step2_card(app, app.state["prov"])
+    controls = list(controls_of(view))
+    selector = next(c for c in controls if getattr(c, "data", None) == "provisioning:gateway")
+    assert isinstance(selector, ft.Dropdown)
+    assert {option.key for option in selector.options} == {"gw-line-1"}
+    assert not any(isinstance(c, ft.TextField) and "شناسهٔ گیت‌وی" in (c.label or "")
+                   for c in controls)
+    assert app.state["prov"]["gw_id"] == "gw-line-1"
+    assert app.state["prov"]["label"] == "خط یک"
+    selector.value = "gw-old"
+    selector.on_select(SimpleNamespace(control=selector))
+    assert app.state["prov"]["gw_id"] == "gw-line-1"
+
+
+def test_registry_refresh_loads_new_entries_and_preserves_valid_selection():
+    app = FakeApp()
+    rows = [{"gw": "gw-one", "label": "یک", "zone": "واحد یک", "registered": True}]
+    with patch.object(v_prov, "live_gateways", return_value=rows):
+        st = v_prov._prov_state(app)
+        v_prov._step2_card(app, st)
+        assert st["gw_id"] == "gw-one"
+        rows.append({"gw": "gw-two", "label": "دو", "zone": "واحد دو", "registered": True})
+        st = v_prov._prov_state(app)
+        selector = next(c for c in controls_of(v_prov._step2_card(app, st))
+                        if getattr(c, "data", None) == "provisioning:gateway")
+        assert {o.key for o in selector.options} == {"gw-one", "gw-two"}
+        selector.value = "gw-two"
+        selector.on_select(SimpleNamespace(control=selector))
+        assert (st["gw_id"], st["label"], st["zone"]) == ("gw-two", "دو", "واحد دو")
+        v_prov._prov_state(app)
+        assert st["gw_id"] == "gw-two"
+
+
+def test_deleted_or_unknown_gateway_cannot_be_flashed():
+    app = FakeApp()
+    st = {"sel_port": "COM7", "ident": {"mac": "aa:bb:cc:dd:ee:01",
+          "chip_id": v_prov.pv.TARGET_CHIP, "flash_bytes": 16777216},
+          "gw_rows": [], "gw_id": "gw-deleted", "host": "192.0.2.1", "port": "1884"}
+    with patch.object(v_prov, "live_gateways", return_value=[]), \
+            patch.object(v_prov.threading, "Thread") as thread:
+        v_prov._start_flash(app, st)
+    thread.assert_not_called()
+    assert app.snacks and not st.get("flashing")
+    v_prov._step2_card(app, st)
+    assert not st.get("gw_id")
+
+
+
 def wait_flash_done(st, timeout=8.0):
     t0 = time.time()
     while st.get("flashing") and time.time() - t0 < timeout:
@@ -91,13 +157,16 @@ def wait_flash_done(st, timeout=8.0):
 
 
 def main():
+    test_gateway_identity_comes_only_from_registered_rows()
+    test_deleted_or_unknown_gateway_cannot_be_flashed()
+    test_registry_refresh_loads_new_entries_and_preserves_valid_selection()
     # ── ۱) رندر پایه بدون پل ──
     app = FakeApp()
     page = v_prov.provisioning_view(app)
     t = texts_of(page)
     for needle in ("آماده‌سازی گیتوی", "اسکن پورت‌های سریال",
                    "شروع فلش کامل", "dialout",
-                   "CP210x", "فریمور 0.5.1", "192.168.50.1", "DHCP", "W5500"):
+                   "CP210x", "فریمور 0.5.2", "192.168.50.1", "DHCP", "W5500"):
         assert norm(needle) in t, f"متن پیدا نشد: {needle}\n---\n{t[:1000]}"
     for obsolete in ("SSID", "رمز وای‌فای", "RoztashGw",
                      "بدون تنظیمات", "خودش AP باز می‌کند"):
@@ -159,6 +228,9 @@ def main():
     assert st["flashing"] is False
 
     # ── ۵) مسیر شکست فلش ──
+    registry_patch = patch.object(v_prov, "live_gateways", return_value=[
+        {"gw": "gw-test-1", "label": "", "zone": "سالن تست", "registered": True}])
+    registry_patch.start()
     orig_flash = v_prov.pv.flash_gateway
     v_prov.pv.flash_gateway = lambda port, cfg=None, expected_chip="esp32s3", expected_flash_bytes=16777216, expected_mac="", progress=None: (
         False, {"log": ["A fatal error occurred: Failed to connect to ESP32",
@@ -244,8 +316,11 @@ def main():
     st.update({"gw_rows": [{"gw": "gw-anbar-1", "label": "انبار محصولات",
                             "zone": "انبار", "registered": True}],
                "done": None, "reg": None})
-    t = texts_of(v_prov.provisioning_view(app))
-    assert norm("انبار محصولات") in t, t[:800]
+    with patch.object(v_prov, "live_gateways", return_value=st["gw_rows"]):
+        view = v_prov.provisioning_view(app)
+        dropdown = next(c for c in controls_of(view)
+                        if getattr(c, "data", None) == "provisioning:gateway")
+        assert "انبار محصولات" in dropdown.options[0].text
 
     # ── ۱۰) فهرست پورت خالی → راهنمای کابل فقط-شارژ ──
     st.update({"ports": [], "sel_port": None})
@@ -253,6 +328,7 @@ def main():
     assert norm("پورتی پیدا نشد") in t
     assert norm("کابل دیتادار") in t or norm("فقط-شارژ") in t
 
+    registry_patch.stop()
     print("OK — همهٔ بررسی‌های صفحهٔ آماده‌سازی گیتوی پاس شد")
 
 

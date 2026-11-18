@@ -9,9 +9,13 @@ static constexpr const char* A = "aa:bb:cc:dd:ee:01";
 static constexpr const char* B = "aa:bb:cc:dd:ee:02";
 static std::string wire(const std::string& id = "battery-0123456789abcdef0123456789abcdef",
                         const std::string& mac = A, const std::string& reason = "battery_low",
-                        const std::string& ttl = "60") {
+                        const std::string& ttl = "60", bool emergency = false,
+                        const std::string& repeats = "", const std::string& completed = "") {
   return "{\"action\":\"vibrate\",\"mac\":\"" + mac + "\",\"request_id\":\"" + id +
-      "\",\"reason\":\"" + reason + "\",\"ttl_s\":" + ttl + "}";
+      "\",\"reason\":\"" + reason + "\",\"ttl_s\":" + ttl +
+      (emergency ? ",\"emergency\":true" : "") +
+      (repeats.empty() ? "" : ",\"repeats\":" + repeats) +
+      (completed.empty() ? "}" : ",\"completed_pulses\":" + completed + "}");
 }
 static bool parse(const std::string& text, roztash::VibrationCommand& cmd, const char*& error) {
   return roztash::parseVibrationCommand(text.data(), text.size(), cmd, error);
@@ -22,6 +26,12 @@ static void parser_boundaries() {
   assert(parse(wire(), cmd, error) && !error);
   assert(std::strcmp(cmd.mac, A) == 0 && std::strcmp(cmd.reason, "battery_low") == 0);
   assert(cmd.tracked() && cmd.ttl_ms == 60000);
+  assert(parse(wire("emergency-id", A, "emergency", "60", true), cmd, error));
+  assert(cmd.emergency);
+  assert(parse(wire("pulse-id", A, "staff_alert", "60", false, "3"), cmd, error));
+  assert(cmd.repeats == 3);
+  assert(parse(wire("resume-id", A, "staff_alert", "60", false, "3", "2"), cmd, error));
+  assert(cmd.completed_pulses == 2);
   assert(parse(wire(std::string(64, 'A')), cmd, error));
   assert(parse(wire("abc.A-Z_019-"), cmd, error));
   for (const auto& id : {std::string(), std::string(65, 'a'), std::string("a b"),
@@ -31,6 +41,10 @@ static void parser_boundaries() {
     assert(!parse(wire("id", A, "battery_low", ttl), cmd, error));
   assert(parse(wire("id", A, "battery_low", "1"), cmd, error) && cmd.ttl_ms == 1000);
   assert(parse(wire("id", A, "battery_low", "120"), cmd, error) && cmd.ttl_ms == 120000);
+  for (const char* repeats : {"0", "4", "-1", "1.5", "true", "\"3\""})
+    assert(!parse(wire("id", A, "staff_alert", "60", false, repeats), cmd, error));
+  for (const char* completed : {"4", "-1", "1.5", "true", "\"2\""})
+    assert(!parse(wire("id", A, "staff_alert", "60", false, "3", completed), cmd, error));
   for (const char* mac : {"AA:bb:cc:dd:ee:01", "aa-bb-cc-dd-ee-01", "aa:bb:cc:dd:ee:01x",
                           "aa:bb:cc:dd:ee:01\\u0000x"}) assert(!parse(wire("id", mac), cmd, error));
   for (const char* bad : {"null", "[]", "true", "{", "{}",
@@ -81,8 +95,31 @@ static void command_lifetime() {
   assert(commands.take(59000, taken) == roztash::CommandTake::Expired);
 }
 
+static void partial_retry_respects_an_unrelated_pending_command() {
+  roztash::VibrationCommands commands;
+  roztash::VibrationCommand partial, unrelated, taken;
+  const char* error = nullptr;
+  assert(parse(wire("partial", A, "staff_alert", "60", true, "3"), partial, error));
+  assert(parse(wire("unrelated", B), unrelated, error));
+  assert(commands.offer(partial, 100) == roztash::CommandOffer::Accepted);
+  assert(commands.take(101, taken) == roztash::CommandTake::Ready);
+  commands.finish(false, 102, 2);
+  assert(commands.offer(unrelated, 103) == roztash::CommandOffer::Accepted);
+  assert(commands.offer(partial, 104) == roztash::CommandOffer::Busy);
+  assert(commands.pending() && std::strcmp(commands.pending()->request_id, "unrelated") == 0);
+  assert(commands.take(105, taken) == roztash::CommandTake::Ready);
+  commands.finish(true, 106, 1);
+  assert(commands.offer(partial, 107) == roztash::CommandOffer::Accepted);
+  assert(commands.take(108, taken) == roztash::CommandTake::Ready);
+  assert(taken.completed_pulses == 2);
+  commands.finish(true, 109, 3);
+  assert(commands.offer(partial, 110) == roztash::CommandOffer::Completed);
+  assert(commands.completedPulses(partial, 110) == 3);
+}
+
 int main() {
   parser_boundaries();
   command_lifetime();
+  partial_retry_respects_an_unrelated_pending_command();
   std::puts("vibration_command_host_test: parser, TTL, dedupe, identity binding, retry and revoke PASS");
 }

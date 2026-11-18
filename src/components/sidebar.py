@@ -6,6 +6,7 @@
 """
 
 import flet as ft
+from data import can_view_settings
 
 from theme import (
     BRAND_RED, FONT, FONT_B, FONT_MED, SIDE_ACTIVE, SIDE_BG, SIDE_MUTED,
@@ -20,19 +21,35 @@ NAV_ITEMS = [
     ("live", "پایش زنده", ft.Icons.SENSORS),
     ("bands", "مچ‌بندها", ft.Icons.WATCH),
     ("employees", "کارکنان", ft.Icons.GROUPS),
-    ("attendance", "حضور و غیاب", ft.Icons.FACT_CHECK),
+
     ("definitions", "تعاریف پایه", ft.Icons.CATEGORY),
     ("alerts", "هشدارها", ft.Icons.NOTIFICATIONS_ACTIVE),
-    ("reports", "گزارش‌ها", ft.Icons.BAR_CHART),
-    ("management", "مدیریت", ft.Icons.ADMIN_PANEL_SETTINGS),
     ("settings", "تنظیمات", ft.Icons.SETTINGS),
 ]
 
+NAV_KEYS = frozenset(key for key, _label, _icon in NAV_ITEMS)
 
-def _nav_column(active, on_nav, alert_count=0):
+
+def active_navigation_view(view, back_to=None):
+    """Resolve the highlighted section while an employee profile is open."""
+    if view == "employee":
+        return back_to if back_to in NAV_KEYS else "employees"
+    return view
+
+
+def ensure_profile_origin(state):
+    """Keep profiles attached to a section; legacy state defaults to staff."""
+    if state.get("view") == "employee" and state.get("back_to") not in NAV_KEYS:
+        state["back_to"] = "employees"
+    return state.get("back_to", "employees")
+
+
+def _nav_column(active, on_nav, alert_count=0, *, role=""):
     """ستون آیتم‌های ناوبری — مشترک بین نوار کناری و منوی کشویی موبایل."""
     items = []
     for key, label, icon in NAV_ITEMS:
+        if key == "settings" and not can_view_settings(role):
+            continue
         is_active = key == active
         kids = [
             ft.Container(
@@ -87,17 +104,17 @@ def _nav_column(active, on_nav, alert_count=0):
     )
 
 
-def build_sidebar(active, on_nav, alert_count=0):
+def build_sidebar(active, on_nav, alert_count=0, *, role=""):
     """نوار کناری دسکتاپ — عرض ثابت تیره."""
     return ft.Container(
         width=236,
         bgcolor=SIDE_BG,
         padding=ft.Padding.symmetric(vertical=18, horizontal=12),
-        content=_nav_column(active, on_nav, alert_count),
+        content=_nav_column(active, on_nav, alert_count, role=role),
     )
 
 
-def build_drawer(active, on_nav, alert_count=0):
+def build_drawer(active, on_nav, alert_count=0, *, role=""):
     """منوی کشویی موبایل — همان آیتم‌های نوار کناری روی پنل تیره.
 
     انتخاب هر آیتم، هم منو را می‌بندد و هم صفحه را عوض می‌کند
@@ -108,7 +125,7 @@ def build_drawer(active, on_nav, alert_count=0):
         width=272,
         controls=[
             ft.Container(
-                content=_nav_column(active, on_nav, alert_count),
+                content=_nav_column(active, on_nav, alert_count, role=role),
                 padding=ft.Padding.symmetric(vertical=18, horizontal=12),
             ),
         ],

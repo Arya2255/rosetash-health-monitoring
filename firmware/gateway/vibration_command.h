@@ -10,6 +10,9 @@ struct VibrationCommand {
   char reason[65]{};
   uint32_t received_ms = 0;
   uint32_t ttl_ms = 120000;  // legacy manual commands are bounded too
+  bool emergency = false;
+  uint8_t repeats = 1;
+  uint8_t completed_pulses = 0;
   bool tracked() const { return request_id[0] != 0; }
   bool expired(uint32_t now) const { return uint32_t(now - received_ms) >= ttl_ms; }
 };
@@ -79,12 +82,31 @@ inline bool parseVibrationCommand(const char* data, size_t size,
   if (!obj["action"].is<const char*>()) return false;
   const JsonString action = obj["action"].as<JsonString>();
   if (action.size() != 7 || std::memcmp(action.c_str(), "vibrate", 7)) return false;
+  error = "invalid_emergency";
+  if (!obj["emergency"].isUnbound()) {
+    if (!obj["emergency"].is<bool>()) return false;
+    out.emergency = obj["emergency"].as<bool>();
+  }
   error = "invalid_ttl";
   if (tracked || !obj["ttl_s"].isUnbound()) {
     if (!obj["ttl_s"].is<uint32_t>()) return false;
     const uint32_t ttl = obj["ttl_s"].as<uint32_t>();
     if (ttl < 1 || ttl > 120) return false;
     out.ttl_ms = ttl * 1000UL;
+  }
+  error = "invalid_repeats";
+  if (!obj["repeats"].isUnbound()) {
+    if (!tracked || !obj["repeats"].is<uint8_t>()) return false;
+    const uint8_t repeats = obj["repeats"].as<uint8_t>();
+    if (repeats < 1 || repeats > 3) return false;
+    out.repeats = repeats;
+  }
+  error = "invalid_completed_pulses";
+  if (!obj["completed_pulses"].isUnbound()) {
+    if (!tracked || !obj["completed_pulses"].is<uint8_t>()) return false;
+    const uint8_t completed = obj["completed_pulses"].as<uint8_t>();
+    if (completed > out.repeats) return false;
+    out.completed_pulses = completed;
   }
   error = nullptr;
   return true;
@@ -103,8 +125,19 @@ class VibrationCommands {
         return sameTarget(running_, command) ? CommandOffer::Duplicate : CommandOffer::Conflict;
       for (auto& result : completed_) {
         if (result.used && uint32_t(now - result.at) >= kRememberMs) result.used = false;
-        if (result.used && sameId(result.command, command))
-          return sameTarget(result.command, command) ? CommandOffer::Completed : CommandOffer::Conflict;
+        if (result.used && sameId(result.command, command)) {
+          if (!sameTarget(result.command, command)) return CommandOffer::Conflict;
+          if (result.command.completed_pulses >= command.repeats) return CommandOffer::Completed;
+          // A retry must never replace a different command that is already
+          // waiting for the single GATT slot.
+          if (pending_) return CommandOffer::Busy;
+          queued_ = command;
+          queued_.completed_pulses = result.command.completed_pulses > command.completed_pulses
+              ? result.command.completed_pulses : command.completed_pulses;
+          queued_.received_ms = now;
+          pending_ = true;
+          return CommandOffer::Accepted;
+        }
       }
     }
     if (pending_) return CommandOffer::Busy;
@@ -130,11 +163,27 @@ class VibrationCommands {
   }
   const VibrationCommand* active() const { return active_ ? &running_ : nullptr; }
   const VibrationCommand* pending() const { return pending_ ? &queued_ : nullptr; }
-  void finish(bool success, uint32_t now) {
+  uint8_t completedPulses(const VibrationCommand& command, uint32_t now) {
+    for (auto& result : completed_) {
+      if (result.used && uint32_t(now - result.at) >= kRememberMs) result.used = false;
+      if (result.used && sameId(result.command, command) && sameTarget(result.command, command))
+        return result.command.completed_pulses;
+    }
+    return 0;
+  }
+  void finish(bool success, uint32_t now, uint8_t completed_pulses = 0) {
+    (void)success;
     if (!active_) return;
-    if (success && running_.tracked()) {
-      completed_[next_] = Completed{running_, now, true};
-      next_ = (next_ + 1) % completed_.size();
+    if (running_.tracked()) {
+      if (success && completed_pulses == 0) completed_pulses = running_.repeats;
+      running_.completed_pulses = completed_pulses;
+      Completed* slot = nullptr;
+      for (auto& result : completed_) {
+        if (result.used && sameId(result.command, running_)) { slot = &result; break; }
+        if (!result.used && !slot) slot = &result;
+      }
+      if (!slot) { slot = &completed_[next_]; next_ = (next_ + 1) % completed_.size(); }
+      *slot = Completed{running_, now, true};
     }
     active_ = false;
     running_ = VibrationCommand{};
@@ -146,7 +195,8 @@ class VibrationCommands {
     return std::strcmp(a.request_id, b.request_id) == 0;
   }
   static bool sameTarget(const VibrationCommand& a, const VibrationCommand& b) {
-    return std::strcmp(a.mac, b.mac) == 0 && std::strcmp(a.reason, b.reason) == 0;
+    return std::strcmp(a.mac, b.mac) == 0 && std::strcmp(a.reason, b.reason) == 0 &&
+           a.emergency == b.emergency && a.repeats == b.repeats;
   }
   std::array<Completed, 32> completed_{};
   size_t next_ = 0;

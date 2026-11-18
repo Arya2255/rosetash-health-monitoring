@@ -79,8 +79,8 @@ jobs:
             --add-data "assets;assets" `
             --add-data "../distribution/gateway-provisioner;distribution/gateway-provisioner" `
             --add-data "../build/windows-runtime;runtime/windows" `
-            --hidden-import flet_desktop flet_web http.server http.client smtplib urllib.request urllib.error email.mime.text email.mime.multipart tzdata backend.bridge backend.battery_alerts tools.discovery_udp `
-            -- --clean --noupx --paths .. --runtime-hook ../scripts/pyi_windowed_stdio.py --collect-data tzdata --collect-data flet_web --collect-submodules flet_web --collect-submodules uvicorn
+            --hidden-import flet_desktop flet_web http.server http.client smtplib urllib.request urllib.error email.mime.text email.mime.multipart tzdata backend.bridge backend.battery_alerts tools.discovery_udp ble_discovery bleak.backends.winrt.scanner `
+            -- --clean --noupx --paths .. --runtime-hook ../scripts/pyi_windowed_stdio.py --collect-data tzdata --collect-data flet_web --collect-submodules flet_web --collect-submodules uvicorn --collect-submodules bleak
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Inspect the actual EXE archive and payload hashes

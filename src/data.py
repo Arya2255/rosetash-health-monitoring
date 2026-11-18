@@ -52,6 +52,7 @@ from live import (  # noqa: E402,F401
     netinfo,
     photo_src,
     save_band,
+    scan_local_ble,
     save_catalog,
     save_employee,
     save_employee_monitoring,
@@ -85,6 +86,7 @@ from remote import (  # noqa: E402,F401
 
 # ═══════════ مدیریت نقش ادمین‌ها ═══════════
 from admin_roles import (  # noqa: E402,F401
+    can_delete_employees,
     can_backup,
     can_edit_map,
     can_manage_admins,
@@ -93,6 +95,7 @@ from admin_roles import (  # noqa: E402,F401
     can_manage_gateways,
     can_manage_remote,
     can_view_logs,
+    can_view_settings,
     ensure_has_role,
     get_admin_name,
     get_role,
@@ -104,3 +107,5 @@ from admin_roles import (  # noqa: E402,F401
 
 # ═══════════ دسترسی از اینترنت — صادرات اضافی ═══════════
 from remote import set_allowed_emails  # noqa: E402,F401
+
+from personnel import STAFF_GROUPS, SHIFTS, staff_group_label  # noqa: E402,F401

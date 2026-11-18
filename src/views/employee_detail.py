@@ -24,6 +24,7 @@ from components.common import (
 )
 from components.employee_form import open_delete_confirm, open_employee_form
 from components.monitoring import monitoring_reason_text
+from components.sidebar import ensure_profile_origin
 
 BAR_BLUE = "#8FB4DE"
 BAR_EMPTY = "#E3E5E8"
@@ -484,6 +485,7 @@ def _live_detail(app, mac):
 
 
 def employee_detail_view(app):
+    ensure_profile_origin(app.state)
     emp_id = app.state.get("emp")
     if isinstance(emp_id, str):
         return _live_detail(app, emp_id)

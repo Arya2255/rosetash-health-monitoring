@@ -276,6 +276,16 @@ def can_manage_employee_schedules(role: str) -> bool:
     return role in ("owner", "viewer")
 
 
+def can_delete_employees(role: str) -> bool:
+    """Both main and secondary administrators may remove employees."""
+    return role in ("owner", "viewer")
+
+
 def can_manage_admins(role: str) -> bool:
     """آیا می‌تواند ادمین‌های دیگر را مدیریت کند؟"""
+    return role == "owner"
+
+
+def can_view_settings(role: str) -> bool:
+    """صفحهٔ تنظیمات فقط برای ادمین اصلی قابل مشاهده است."""
     return role == "owner"

@@ -15,7 +15,7 @@ from data import ALERTS_ACTIVE  # noqa: E402
 
 import components.sidebar as c_sidebar  # noqa: E402
 import views.alerts as v_alerts  # noqa: E402
-import views.attendance as v_attendance  # noqa: E402
+
 import views.dashboard as v_dashboard  # noqa: E402
 import views.employee_detail as v_detail  # noqa: E402
 import views.employees as v_employees  # noqa: E402
@@ -25,8 +25,6 @@ import views.bands as v_bands  # noqa: E402
 import views.definitions as v_defs  # noqa: E402
 import views.gateways as v_gateways  # noqa: E402
 import views.provisioning as v_prov  # noqa: E402
-import views.management as v_management  # noqa: E402
-import views.reports as v_reports  # noqa: E402
 import views.settings as v_settings  # noqa: E402
 import views.logs as v_logs  # noqa: E402
 import views.login as v_login  # noqa: E402
@@ -54,8 +52,9 @@ class FakeApp:
         self.page = FakePage()
         self.state = {"view": "dashboard", "emp": None, "filter": "all",
                       "search": "", "emp_search": "", "att_filter": "all",
-                      "att_search": "", "report_tab": "هفتگی",
-                      "back_to": "dashboard"}
+                      "att_search": "",
+                      "back_to": "dashboard", "logged_in": True,
+                      "role": "owner", "admin_email": "owner@example.test"}
         self.alerts_active = [dict(a) for a in ALERTS_ACTIVE]
         self.siren_on = True
 
@@ -87,7 +86,7 @@ def run_checks(app, checks, label):
 def main():
     app = FakeApp()
     checks = [
-        ("پوسته / نوار کناری", lambda: c_sidebar.build_sidebar("dashboard", app.go, 3)),
+        ("پوسته / نوار کناری", lambda: c_sidebar.build_sidebar("dashboard", app.go, 3, role="owner")),
         ("ورود", lambda: v_login.login_view(app)),
         ("داشبورد", lambda: v_dashboard.dashboard_view(app)),
         ("پایش زنده", lambda: v_live.live_view(app)),
@@ -97,10 +96,8 @@ def main():
         ("کارکنان", lambda: v_employees.employees_view(app)),
         ("مچ‌بندها", lambda: v_bands.bands_view(app)),
         ("تعاریف پایه", lambda: v_defs.definitions_view(app)),
-        ("حضور و غیاب", lambda: v_attendance.attendance_view(app)),
+
         ("هشدارها", lambda: v_alerts.alerts_view(app)),
-        ("گزارش‌ها", lambda: v_reports.reports_view(app)),
-        ("مدیریت", lambda: v_management.management_view(app)),
         ("تنظیمات", lambda: v_settings.settings_view(app)),
         ("لاگ برنامه", lambda: v_logs.logs_view(app)),
     ]
@@ -121,7 +118,9 @@ def main():
         import main as app_main  # noqa: F401,E402
 
         assert app_main.BUILDERS
-        assert "attendance" in app_main.BUILDERS
+        assert "attendance" not in app_main.BUILDERS
+        assert "reports" not in app_main.BUILDERS
+        assert "management" not in app_main.BUILDERS
         assert "map" in app_main.BUILDERS
         assert "gateways" in app_main.BUILDERS
         assert "provisioning" in app_main.BUILDERS
@@ -131,20 +130,6 @@ def main():
         fails += 1
         print(f"FAIL — فایل اصلی: {type(e).__name__}: {e}")
 
-    # دادهٔ حضور و غیاب باید برای همهٔ کارکنان کامل باشد
-    try:
-        from data import EMPLOYEES
-
-        assert len(EMPLOYEES) == 24, f"تعداد کارکنان: {len(EMPLOYEES)}"
-        for e in EMPLOYEES:
-            a = e["attendance"]
-            if a["status"] in ("present", "left"):
-                assert a["entered"], f'{e["name"]}: ساعت ورود خالی'
-                assert a["work_min"] >= 0, f'{e["name"]}: ساعات کار منفی'
-        print("OK   — دادهٔ حضور و غیاب (۲۴ کارکن)")
-    except Exception as e:  # noqa: BLE001
-        fails += 1
-        print(f"FAIL — دادهٔ حضور و غیاب: {type(e).__name__}: {e}")
 
     # دادهٔ نقشه — مختصات نسبی معتبر و تصویر پایه در assets
     try:

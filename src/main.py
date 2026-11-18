@@ -29,10 +29,14 @@ from theme import (  # noqa: E402
 from data import (  # noqa: E402
     ALERTS_ACTIVE, internet_available, live_employees,
     live_status, remote_autostart, send_vibrate, ensure_has_role, get_admin_name,
+    can_view_settings,
 )
 import applog  # noqa: E402
 from layout import is_phone  # noqa: E402
-from components.sidebar import build_drawer, build_sidebar  # noqa: E402
+from components.sidebar import (  # noqa: E402
+    NAV_KEYS, active_navigation_view, build_drawer, build_sidebar,
+    ensure_profile_origin,
+)
 from views.dashboard import dashboard_view  # noqa: E402
 from views.live import live_view  # noqa: E402
 from views.map import map_view  # noqa: E402
@@ -40,11 +44,9 @@ from views.employees import employees_view  # noqa: E402
 from views.bands import bands_view  # noqa: E402
 from views.definitions import definitions_view  # noqa: E402
 from views.gateways import gateways_view  # noqa: E402
-from views.attendance import attendance_view  # noqa: E402
+
 from views.employee_detail import employee_detail_view  # noqa: E402
 from views.alerts import alerts_view  # noqa: E402
-from views.reports import reports_view  # noqa: E402
-from views.management import management_view  # noqa: E402
 from views.settings import settings_view  # noqa: E402
 from views.logs import logs_view  # noqa: E402
 from views.provisioning import provisioning_view  # noqa: E402
@@ -60,11 +62,9 @@ BUILDERS = {
     "employees": employees_view,
     "bands": bands_view,
     "definitions": definitions_view,
-    "attendance": attendance_view,
+
     "employee": employee_detail_view,
     "alerts": alerts_view,
-    "reports": reports_view,
-    "management": management_view,
     "settings": settings_view,
     "logs": logs_view,
 }
@@ -176,7 +176,9 @@ class App:
 
         try:
             self.page.drawer = build_drawer(
-                self.state["view"], _nav, len(self.alerts_active))
+                active_navigation_view(
+                    self.state["view"], ensure_profile_origin(self.state)),
+                _nav, len(self.alerts_active), role=self._navigation_role())
             self.page.update()
         except Exception:
             pass
@@ -222,9 +224,52 @@ class App:
         self.snack("رویداد بسته شد و در تاریخچهٔ امروز ثبت گردید")
         self.render()
 
+    def refresh_live_alerts(self):
+        """Build live health alerts and notify HSE wristbands once per event."""
+        if not self.state.get("logged_in"):
+            return
+        try:
+            rows = live_employees(force=True) or []
+        except Exception:
+            return
+        live_alerts = []
+        for row in rows:
+            if not row.get("registered") or row.get("status") not in ("warn", "danger"):
+                continue
+            for issue in row.get("issues") or [row.get("status")]:
+                live_alerts.append({
+                    "id": f"health:{row.get('mac')}:{issue}",
+                    "source": "live",
+                    "type": issue,
+                    "severity": "danger" if row.get("status") == "danger" else "warn",
+                    "emp": row.get("name") or row.get("mac"),
+                    "dept": row.get("dept") or "",
+                    "location": row.get("location") or row.get("zone") or "—",
+                    "time": row.get("last_seen") or "—",
+                })
+        try:
+            live_status(force=True)
+        except Exception:
+            pass
+        self.alerts_active = ([a for a in self.alerts_active if a.get("source") != "live"]
+                              + live_alerts)
+
     # ── مسیریابی ──
+    def _navigation_role(self):
+        if not (self.state.get("logged_in")
+                and (self.state.get("admin_email") or "").strip()):
+            return ""
+        return self.state.get("role", "")
+
     def go(self, view, emp=None):
+        if view == "settings" and not can_view_settings(self._navigation_role()):
+            view = "map" if self.state.get("logged_in") else "login"
         if view == "employee":
+            current = self.state.get("view")
+            if current != "employee":
+                self.state["back_to"] = current if current in NAV_KEYS else "employees"
+            else:
+                ensure_profile_origin(self.state)
             self.state["emp"] = emp
         if view != self.state.get("view"):
             applog.info("صفحه → %s", view)
@@ -262,6 +307,8 @@ class App:
         if current_view != "login" and not self.state.get("logged_in", False):
             self.state["view"] = "login"
             current_view = "login"
+        if current_view == "settings" and not can_view_settings(self._navigation_role()):
+            self.state["view"] = "map"
         # اگر عرض صفحه از آخرین رندر عوض شده باشد، پوسته را هماهنگ کن
         mode = self.detect_mode()
         self.mode = mode
@@ -270,7 +317,9 @@ class App:
             holder = self.ui.get("sidebar")
             if holder is not None:
                 holder.content = build_sidebar(
-                    self.state["view"], self.go, len(self.alerts_active))
+                    active_navigation_view(
+                        self.state["view"], ensure_profile_origin(self.state)),
+                    self.go, len(self.alerts_active), role=self._navigation_role())
         builder = BUILDERS.get(self.state["view"], dashboard_view)
         try:
             self.content_holder.content = builder(self)
@@ -545,8 +594,8 @@ def main(page: ft.Page):
         async def shot_tour():
             await asyncio.sleep(3)
             for v in ("map", "gateways", "provisioning", "dashboard", "live",
-                      "bands", "employees", "definitions", "attendance",
-                      "employee", "alerts", "reports", "management",
+                      "bands", "employees", "definitions",
+                      "employee", "alerts",
                       "settings", "logs"):
                 if v == "employee":
                     app.go("employee", 1)
@@ -570,6 +619,7 @@ def main(page: ft.Page):
     # ── ساعت زنده ──
     async def clock_loop():
         last_check = 0.0
+        last_alert_check = 0.0
         while True:
             try:
                 time_txt.value = fa_clock()
@@ -579,6 +629,9 @@ def main(page: ft.Page):
                 # نشان اینترنت هر چند ثانیه تازه می‌شود — بررسی در ترد جدا
                 # تا پنجره هنگام نبود اینترنت قفل نشود
                 now = time.time()
+                if now - last_alert_check >= 5:
+                    last_alert_check = now
+                    await asyncio.to_thread(app.refresh_live_alerts)
                 if now - last_check >= 5:
                     last_check = now
                     # تورِ اطمینانِ چیدمان — اگر عرض صفحه بی‌رویداد عوض شده

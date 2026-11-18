@@ -14,8 +14,8 @@ from data import (
     remote_add_email, remote_down, remote_remove_email,
     remote_set_autostart, remote_setup, remote_status,
     can_backup, can_edit_map, can_manage_admins, can_manage_gateways,
-    can_manage_remote, can_view_logs, get_role, list_admins,
-    remove_admin, set_role, ensure_has_role, set_allowed_emails,
+    can_manage_remote, can_view_logs, can_view_settings, get_role, list_admins,
+    remove_admin, set_role, set_allowed_emails,
     get_admin_name, set_admin_name,
 )
 from admin_roles import DEFAULT_OWNER
@@ -50,9 +50,10 @@ def _user_row(email, role):
 
 
 def settings_view(app):
-    # نقش کاربر لاگین‌شده
-    admin_email = app.state.get("admin_email", "")
-    my_role = ensure_has_role(admin_email)
+    admin_email = (app.state.get("admin_email") or "").strip().lower()
+    my_role = app.state.get("role", "")
+    if not (app.state.get("logged_in") and admin_email and can_view_settings(my_role)):
+        return ft.Container()
     is_owner = can_manage_admins(my_role)
 
     sections = []
@@ -68,7 +69,8 @@ def settings_view(app):
 
         def _save_profile(e):
             current_email = (app.state.get("admin_email") or "").strip().lower()
-            if not app.state.get("logged_in") or current_email != profile_email:
+            if (not app.state.get("logged_in") or current_email != profile_email
+                    or not can_view_settings(app.state.get("role", ""))):
                 return
             ok, msg = set_admin_name(profile_email, name_field.value or "")
             if ok:

@@ -194,6 +194,8 @@ class MonitoringHTTPTests(IsolatedBridge):
 class PolicyPublishingTests(IsolatedBridge):
     def test_active_lists_without_address_types_and_unique_health_routing(self):
         self.employee()
+        bridge.db().execute("UPDATE employees SET staff_group='hse' WHERE mac=?", (MAC,))
+        bridge.db().commit()
         second, absent = "aa:bb:cc:dd:ee:02", "aa:bb:cc:dd:ee:03"
         self.employee(second)
         self.employee(absent)
@@ -215,6 +217,7 @@ class PolicyPublishingTests(IsolatedBridge):
         self.assertEqual(policies["gw-a"]["health_macs"], [MAC, absent])
         self.assertEqual(policies["gw-b"]["health_macs"], [second])
         self.assertEqual(policies["gw-a"]["health_interval_s"], 600)
+        self.assertIn(MAC, policies["gw-a"]["emergency_macs"])
         self.assertTrue(all(not retained for _, payload, retained in sent if payload))
         self.assertEqual(len([1 for _, payload, retained in sent if not payload and retained]), 2)
 

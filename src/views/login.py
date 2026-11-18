@@ -156,6 +156,8 @@ def login_view(app):
         root.update()
 
     def _show_error(msg: str):
+        if "EOF occurred" in msg:
+            msg = "خطای اتصال امن؛ دوباره تلاش کنید."
         error_msg.value = msg
         error_msg.update()
 

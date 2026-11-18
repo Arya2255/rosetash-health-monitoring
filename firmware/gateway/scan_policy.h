@@ -16,8 +16,10 @@ using PolicyMac = std::array<char, 18>;
 struct ScanPolicy {
   std::array<PolicyMac, kMaxPolicyMacs> active{};
   std::array<PolicyMac, kMaxPolicyMacs> health{};
+  std::array<PolicyMac, kMaxPolicyMacs> emergency{};
   size_t active_count = 0;
   size_t health_count = 0;
+  size_t emergency_count = 0;
   uint32_t health_interval_s = kDefaultHealthIntervalS;
   uint32_t lease_s = 0;
 };
@@ -49,18 +51,24 @@ class PolicyState {
     ready_ = false;
     for (auto& mac : policy_.active) mac.fill(0);
     for (auto& mac : policy_.health) mac.fill(0);
-    policy_.active_count = policy_.health_count = 0;
+    for (auto& mac : policy_.emergency) mac.fill(0);
+    policy_.active_count = policy_.health_count = policy_.emergency_count = 0;
     policy_.lease_s = 0;
   }
   bool ready(uint32_t now) const {
     return ready_ && uint32_t(now - received_ms_) < policy_.lease_s * 1000UL;
   }
-  bool scanEnabled(uint32_t now) const { return ready(now) && policy_.active_count; }
+  bool scanEnabled(uint32_t now) const {
+    return ready(now) && (policy_.active_count || policy_.emergency_count);
+  }
   bool allows(const char* mac, uint32_t now) const {
     return ready(now) && containsMac(policy_.active.data(), policy_.active_count, mac);
   }
   bool allowsHealth(const char* mac, uint32_t now) const {
     return allows(mac, now) && containsMac(policy_.health.data(), policy_.health_count, mac);
+  }
+  bool allowsEmergency(const char* mac, uint32_t now) const {
+    return ready(now) && containsMac(policy_.emergency.data(), policy_.emergency_count, mac);
   }
   bool expire(uint32_t now) {
     if (!ready_ || ready(now)) return false;
