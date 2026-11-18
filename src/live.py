@@ -158,6 +158,57 @@ def send_vibrate(mac: str | None = None, timeout: float = 2.5,
     return False, err
 
 
+def request_manual_measurement(mac: str, *, actor: str, timeout: float = 8.0):
+    """Request a real measurement from the currently observing installed gateway."""
+    if MODE == "0":
+        return False, "حالت زنده خاموش است", None
+    path = "/api/measurements"
+    payload = {"mac": str(mac or "").strip().lower(), "actor": str(actor or "").strip().lower(),
+               "vitals": False}
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    try:
+        headers.update(sign_request("POST", path, body, payload["actor"]))
+        req = urllib.request.Request(BRIDGE + path, data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            doc = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            doc = json.loads(exc.read().decode("utf-8"))
+        except (ValueError, OSError):
+            return False, "پل درخواست اندازه‌گیری را رد کرد", None
+    except Exception as exc:
+        applog.error("manual measurement request failed — %s: %s", type(exc).__name__, exc)
+        return False, "پل پاسخ نداد", None
+    if not doc.get("ok"):
+        error = str(doc.get("error") or "measurement request failed")
+        translated = {
+            "forbidden": "این حساب اجازهٔ اندازه‌گیری ندارد",
+            "invalid mac": _ERROR_FA["invalid mac"],
+            "not found": "کارکن در دفتر ثبت نشده است",
+            "employee monitoring is paused or outside scheduled hours": "پایش این کارکن متوقف است یا اکنون خارج از شیفت است",
+            "band unavailable": "مچ‌بند در بازهٔ اخیر در دید هیچ گیت‌وی نصب‌شده‌ای نبوده است",
+            "gateway unavailable": "گیت‌وی‌ای که مچ‌بند را دیده اکنون آنلاین نیست",
+            "gateway update required": "برای این قابلیت باید فریم‌ور جدید گیت‌وی نصب شود",
+            "gateway policy unavailable": "مجوز پایش هنوز به گیت‌وی نرسیده است؛ چند ثانیه بعد دوباره تلاش کنید",
+            "assigned gateway unavailable": "گیت‌وی مجازِ متصل به این مچ‌بند اکنون در دسترس نیست",
+            "measurement already pending": "برای این مچ‌بند درخواست اندازه‌گیری در حال اجراست",
+            "publish failed": "پل نتوانست فرمان را به بروکر بفرستد",
+        }
+        return False, translated.get(error, error), doc.get("info")
+    info = doc.get("info") if isinstance(doc.get("info"), dict) else {}
+    _cache["t"] = 0.0
+    applog.info("manual measurement queued for band %s via %s",
+                applog.mask_mac(payload["mac"]), info.get("gw", "unknown"))
+    return True, "درخواست به گیت‌وی ارسال شد؛ نتیجه پس از اندازه‌گیری واقعی نمایش داده می‌شود", info
+
+
+def send_measure(mac: str, *, actor: str):
+    """Data-layer facade: return the request outcome without implying a sensor result."""
+    ok, message, _info = request_manual_measurement(mac, actor=actor)
+    return ok, message
+
+
 # ─────────────────────── دفتر کارکنان — روی پل ───────────────────────
 
 # ترجمهٔ خطاهای پل به پیام فارسی برای نمایش
@@ -184,6 +235,9 @@ _ERROR_FA = {
     "body too large": "حجم درخواست بیش از حد مجاز است",
     "invalid gw": "شناسهٔ گیت‌وی معتبر نیست — حروف کوچک انگلیسی، عدد، نقطه و خط تیره؛ نمونه: gw-filter-2",
     "invalid position": "موقعیت باید بین ۰ و ۱ باشد",
+    "invalid_alert_id": "شناسهٔ هشدار معتبر نیست",
+    "alert_not_found": "این هشدار در پل پیدا نشد",
+    "alert_closed": "این هشدار دیگر فعال نیست",
 }
 
 
@@ -237,6 +291,12 @@ def save_employee(doc: dict) -> tuple[bool, str]:
     doc = dict(doc or {})
     doc["mac"] = str(doc.get("mac") or "").strip().lower()
     return _post_json("/api/employees", doc, timeout=10.0)
+
+
+def acknowledge_alert(alert_id: str, *, actor: str) -> tuple[bool, str]:
+    """Record acknowledgement on the bridge without closing the alert."""
+    actor = str(actor or "").strip().lower()
+    return _post_json("/api/alerts/ack", {"id": alert_id, "actor": actor}, actor=actor)
 
 
 def save_employee_monitoring(doc: dict) -> tuple[bool, str]:
@@ -398,6 +458,40 @@ def live_gateways(force: bool = False):
     if not doc or not doc.get("ok"):
         return None
     return doc.get("map_gateways") or []
+
+
+def discover_gateways(*, actor: str) -> tuple[bool, list[dict] | str]:
+    """Ask the bridge host to send the gateway discovery query on its LAN."""
+    if MODE == "0":
+        return False, "حالت زنده خاموش است"
+    path = "/api/gateways/discover"
+    actor = str(actor or "").strip().lower()
+    body = json.dumps({"actor": actor}).encode("utf-8")
+    try:
+        headers = {"Content-Type": "application/json", **sign_request("POST", path, body, actor)}
+        req = urllib.request.Request(BRIDGE + path, data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=12.0) as response:
+            doc = json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            with exc:
+                doc = json.load(exc)
+        except (ValueError, OSError):
+            return False, "پل درخواست جستجوی شبکه را رد کرد"
+    except (OSError, ValueError) as exc:
+        applog.error("Gateway discovery request failed: %s", type(exc).__name__)
+        return False, "پل به درخواست جستجوی شبکه پاسخ نداد"
+    if not isinstance(doc, dict):
+        return False, "پاسخ پل برای جستجوی شبکه معتبر نیست"
+    if doc.get("ok") is True and isinstance(doc.get("gateways"), list):
+        _cache["t"] = 0.0
+        return True, doc["gateways"]
+    error = doc.get("error")
+    if error == "forbidden":
+        return False, "جستجوی شبکه فقط برای ادمین اصلی مجاز است"
+    if error == "unauthorized":
+        return False, _ERROR_FA["unauthorized"]
+    return False, "جستجوی شبکه ناموفق بود؛ اتصال شبکهٔ محلی را بررسی کنید"
 
 
 def save_gateway(doc: dict) -> tuple[bool, str]:

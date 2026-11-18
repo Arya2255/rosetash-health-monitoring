@@ -38,10 +38,12 @@ from mock_data import (  # noqa: F401
 # views هرگز مستقیم به live نباید وصل شوند؛ اگر به دادهٔ زندهٔ بیشتری
 # نیاز باشد، تابع تازه‌ای همین‌جا ساخته می‌شود.
 from live import (  # noqa: E402,F401
+    acknowledge_alert,
     delete_band,
     delete_catalog,
     delete_employee,
     delete_gateway,
+    discover_gateways,
     live_available,
     live_bands,
     live_catalogs,
@@ -60,6 +62,7 @@ from live import (  # noqa: E402,F401
     save_monitoring_settings,
     save_gateway,
     send_vibrate,
+    send_measure,
 )
 
 # ── دسترسی به اینترنت — نشان «زنده» نوار بالا از همین‌جا پر می‌شود ──

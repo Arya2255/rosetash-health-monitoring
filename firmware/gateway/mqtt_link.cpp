@@ -93,6 +93,44 @@ void MqttLink::begin(const GatewayConfig& cfg, BleCentral& ble, roztash::HealthS
     }
     snprintf(expected, sizeof expected, "%s/cmd", base_);
     if (strcmp(topic, expected) != 0) return;
+
+    if (roztash::isManualMeasureAction(reinterpret_cast<const char*>(payload), len)) {
+      const bool retained = net_.guard.retained();
+      roztash::ManualMeasureCommand command;
+      const char* error = nullptr;
+      if (!roztash::parseManualMeasureCommand(reinterpret_cast<const char*>(payload), len,
+                                              command, error)) {
+        publishManualEvent("measure_reject", command, error);
+        return;
+      }
+      if (retained) {
+        publishManualEvent("measure_reject", command, "retained_command_rejected");
+        return;
+      }
+      const uint32_t now = millis();
+      if (!policy_.allowsHealth(command.mac, now) ||
+          !ble_->hasFreshSighting(command.mac, now)) {
+        publishManualEvent("measure_reject", command, "off_duty_unseen_or_policy");
+        return;
+      }
+      switch (manual_measurements_.offer(command, now)) {
+        case roztash::ManualMeasureOffer::Accepted:
+          status_pending_ = true;
+          publishManualEvent("measure_queued", command, "");
+          break;
+        case roztash::ManualMeasureOffer::Duplicate:
+          publishManualEvent("measure_queued", command, "duplicate_request");
+          break;
+        case roztash::ManualMeasureOffer::Conflict:
+          publishManualEvent("measure_reject", command, "request_id_conflict");
+          break;
+        case roztash::ManualMeasureOffer::Busy:
+          publishManualEvent("measure_reject", command, "manual_measure_queue_busy");
+          break;
+      }
+      return;
+    }
+
     roztash::VibrationCommand command;
     const char* error = nullptr;
     if (!roztash::parseVibrationCommand(reinterpret_cast<const char*>(payload), len,
@@ -129,6 +167,7 @@ void MqttLink::begin(const GatewayConfig& cfg, BleCentral& ble, roztash::HealthS
 
 void MqttLink::setBroker(const char* host, uint16_t port) {
   if (!host || !host[0]) return;
+  if (std::strcmp(cfg_.mqtt_host, host) == 0 && cfg_.mqtt_port == port) return;
   revokePolicy();
   if (mqtt_.connected()) mqtt_.disconnect();
   strlcpy(cfg_.mqtt_host, host, sizeof cfg_.mqtt_host);
@@ -189,6 +228,7 @@ void MqttLink::poll() {
 
 void MqttLink::revokePolicy() {
   cancelPendingCommand("policy_revoked");
+  rejectPendingManualMeasure("policy_revoked");
   if (!policy_installed_) return;
   policy_installed_ = false;
   policy_.revoke();
@@ -222,6 +262,9 @@ void MqttLink::receivePolicy(const uint8_t* payload, size_t len) {
   if (pending && (pending->emergency ? !policy_.allowsEmergency(pending->mac, received)
                                      : !policy_.allows(pending->mac, received)))
     cancelPendingCommand("policy_revoked");
+  const auto* manual = manual_measurements_.pendingCommand();
+  if (manual && !policy_.allowsHealth(manual->mac, received))
+    rejectPendingManualMeasure("policy_revoked");
   if (changed) status_pending_ = true;
   flushQueue();
 }
@@ -250,6 +293,46 @@ bool MqttLink::takeCommand(char* action, size_t action_cap, char* mac,
   return true;
 }
 
+bool MqttLink::takeManualMeasure(char* mac, size_t mac_cap, bool* vitals,
+                                 char* request_id, size_t request_id_cap) {
+  roztash::ManualMeasureCommand command;
+  const auto result = manual_measurements_.take(millis(), command);
+  if (result == roztash::ManualMeasureTake::None) return false;
+  if (result == roztash::ManualMeasureTake::Expired) {
+    publishManualEvent("measure_reject", command, "command_expired");
+    return false;
+  }
+  if (!policy_.allowsHealth(command.mac, millis()) ||
+      !ble_->hasFreshSighting(command.mac, millis())) {
+    publishManualEvent("measure_reject", command, "off_duty_unseen_or_policy");
+    manual_measurements_.cancelActive(command);
+    return false;
+  }
+  strlcpy(mac, command.mac, mac_cap);
+  strlcpy(request_id, command.request_id, request_id_cap);
+  if (vitals) *vitals = command.vitals;
+  return true;
+}
+
+void MqttLink::manualMeasureStarted() {
+  const auto* command = manual_measurements_.activeCommand();
+  if (command) publishManualEvent("measure_started", *command, "");
+}
+
+void MqttLink::finishManualMeasure(const char* type, const char* detail) {
+  const auto* command = manual_measurements_.activeCommand();
+  if (!command) return;
+  const roztash::ManualMeasureCommand result = *command;
+  publishManualEvent(type, result, detail);
+  manual_measurements_.finish(millis());
+}
+
+void MqttLink::rejectPendingManualMeasure(const char* detail) {
+  roztash::ManualMeasureCommand command;
+  if (manual_measurements_.cancelPending(command))
+    publishManualEvent("measure_reject", command, detail);
+}
+
 void MqttLink::publishCommandEvent(const char* type, const roztash::VibrationCommand& command,
                                   const char* detail) {
   JsonDocument doc;
@@ -262,6 +345,23 @@ void MqttLink::publishCommandEvent(const char* type, const roztash::VibrationCom
     doc["repeats"] = command.repeats;
     doc["completed_pulses"] = command.completed_pulses;
   }
+  if (detail && detail[0]) doc["detail"] = detail;
+  String output;
+  serializeJson(doc, output);
+  char topic[48];
+  snprintf(topic, sizeof topic, "%s/event", base_);
+  send(topic, output.c_str(), false, true);
+}
+
+void MqttLink::publishManualEvent(const char* type,
+                                  const roztash::ManualMeasureCommand& command,
+                                  const char* detail) {
+  JsonDocument doc;
+  doc["gw"] = cfg_.gw_id;
+  doc["type"] = type;
+  doc["reason"] = "manual_measure";
+  doc["request_id"] = command.request_id;
+  doc["mac"] = command.mac;
   if (detail && detail[0]) doc["detail"] = detail;
   String output;
   serializeJson(doc, output);
@@ -297,8 +397,7 @@ void MqttLink::rejectVibration(const char* detail, uint8_t completed_pulses) {
 bool MqttLink::send(const char* topic, const char* payload, bool retained,
                     bool queue_if_offline) {
   if (mqtt_.connected() && mqtt_.publish(topic, payload, retained)) return true;
-  if (queue_if_offline) queueLine(topic, payload);
-  return false;
+  return queue_if_offline && queueLine(topic, payload);
 }
 
 void MqttLink::publishStatus(const char* fw, const char* ip,
@@ -313,8 +412,19 @@ void MqttLink::publishStatus(const char* fw, const char* ip,
   doc["uptime_s"] = (uint32_t)(millis() / 1000UL);
   doc["bands_seen"] = bands_seen;
   doc["adv_seen"] = adv_seen;  // permitted advertisements only
-  doc["scan_policy_ready"] = policy_.ready(millis()) && ble_->policyReady();
+  const bool scan_policy_ready = policy_.ready(millis()) && ble_->policyReady();
+  doc["scan_policy_ready"] = scan_policy_ready;
   doc["scan_enabled"] = ble_->scanEnabled();
+  doc["scan_reason"] = !scan_policy_ready ? "policy_unavailable_or_expired"
+      : (policy_.policy().active_count == 0 && policy_.policy().emergency_count == 0
+          ? "no_active_or_emergency_macs" : "policy_allows_scan");
+  doc["health_schedule_enabled"] = scan_policy_ready && policy_.policy().health_count > 0;
+  doc["active_count"] = policy_.policy().active_count;
+  doc["health_count"] = policy_.policy().health_count;
+  doc["emergency_count"] = policy_.policy().emergency_count;
+  doc["manual_measurement"] = true;
+  doc["manual_measure_pending"] = manual_measurements_.pending();
+  doc["manual_measure_active"] = manual_measurements_.active();
   doc["health_interval_s"] = policy_.policy().health_interval_s;
   doc["health_job_active"] = ble_->healthBusy();
   doc["vibration_request_id"] = true;
@@ -356,11 +466,12 @@ void MqttLink::publishPresence(BleCentral& ble) {
   send(topic, out.c_str(), false, false);  // presence is stale quickly: no queue
 }
 
-void MqttLink::publishHealth(const BleCentral& ble) {
-  if (!policy_.allowsHealth(ble.jobMac(), millis()) || ble.jobRevoked()) return;
+bool MqttLink::publishHealth(const BleCentral& ble) {
+  if (!policy_.allowsHealth(ble.jobMac(), millis()) || ble.jobRevoked()) return false;
   JsonDocument doc;
   doc["gw"] = cfg_.gw_id;
   doc["mac"] = ble.jobMac();
+  if (ble.wasManualMeasure()) doc["request_id"] = ble.manualRequestId();
   doc["state"] = ble.state() == BleCentral::JobState::Done ? "done" : "failed";
   doc["fail"] = failName(ble.failure());
   doc["wearing"] = ble.wearingOk();
@@ -379,8 +490,9 @@ void MqttLink::publishHealth(const BleCentral& ble) {
   serializeJson(doc, out);
   char topic[48];
   snprintf(topic, sizeof topic, "%s/health", base_);
-  send(topic, out.c_str(), false, true);  // queue health when offline
+  const bool published = send(topic, out.c_str(), false, true);  // queue health when offline
   Serial.printf("[mqtt] health -> %s\n", out.c_str());
+  return published;
 }
 
 // "C1C2:PAYLOAD" — one compact hex line per captured raw frame.
@@ -397,6 +509,7 @@ void MqttLink::publishVitals(const BleCentral& ble) {
   JsonDocument doc;
   doc["gw"] = cfg_.gw_id;
   doc["mac"] = ble.jobMac();
+  if (ble.wasManualMeasure()) doc["request_id"] = ble.manualRequestId();
   if (v.battery_ok) doc["battery"] = v.battery;
   if (v.dev_fw[0]) doc["dev_fw"] = v.dev_fw;
   if (v.dev_hw[0]) doc["dev_hw"] = v.dev_hw;
@@ -439,19 +552,21 @@ void MqttLink::publishEvent(const char* type, const char* mac,
 }
 
 // --- offline queue ----------------------------------------------------------
-void MqttLink::queueLine(const char* topic, const char* payload) {
+bool MqttLink::queueLine(const char* topic, const char* payload) {
   // topic carries the base prefix; store only the suffix + payload as JSONL
   const char* suffix = topic + strlen(base_);
   File f = LittleFS.open(kQueuePath, "a");
-  if (!f) return;
+  if (!f) return false;
   if ((size_t)f.size() > kQueueMaxBytes) {
     f.close();
     LittleFS.remove(kQueuePath);  // drop the whole backlog rather than grow
     f = LittleFS.open(kQueuePath, "a");
-    if (!f) return;
+    if (!f) return false;
   }
   f.printf("{\"t\":\"%s\",\"p\":%s}\n", suffix, payload);
+  const bool ok = f.getWriteError() == 0;
   f.close();
+  return ok;
 }
 
 void MqttLink::flushQueue() {

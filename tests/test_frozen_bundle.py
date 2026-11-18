@@ -40,7 +40,7 @@ class FrozenBundleTests(unittest.TestCase):
                     self.assertEqual(pv.bundle_dir(), expected)
                     ok, manifest = pv.load_manifest()
                     self.assertTrue(ok, manifest)
-                    self.assertEqual(manifest["fw_version"], "0.5.2-alerts")
+                    self.assertEqual(manifest["fw_version"], "0.5.3-operational")
                     tools = pv.find_tools(platform="windows-amd64", home=unrelated)
                     self.assertEqual(tools["sources"], {
                         "esptool": "bundled", "mklittlefs": "bundled"})

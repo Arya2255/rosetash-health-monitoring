@@ -213,6 +213,11 @@ class LocalServices:
         log = (self.root/'logs'/('service-'+name+'.log')).open('ab', buffering=0)
         self.files.append(log)
         env = dict(os.environ)
+        # Frozen child processes do not inherit the runner's Python CLI flags.
+        # Keep service logs readable with Persian names on every Windows locale.
+        env['PYTHONUTF8'] = '1'
+        env['PYTHONIOENCODING'] = 'utf-8:backslashreplace'
+        env['PYTHONUNBUFFERED'] = '1'
         # Re-executing a onefile child must have an independent extraction dir.
         env['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
         proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT,

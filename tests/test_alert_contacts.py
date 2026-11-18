@@ -84,16 +84,16 @@ class AlertContactUiTests(unittest.TestCase):
         messages = []
         app = SimpleNamespace(
             state={"view": "alerts"}, page=SimpleNamespace(width=1340),
-            alerts_active=[{"id": "a1", "type": "سقوط", "severity": "danger",
-                            "emp": "Worker", "dept": "تولید روغن — خط روغن ۲",
-                            "location": "سالن تولید ۲", "time": "12:00"}],
-            siren_on=False, snack=messages.append, set_siren=lambda _: None,
-            close_alert=lambda _: None,
+            snack=messages.append, acknowledge_alert=lambda _: None,
         )
+        issue = {"id": "a1", "source": "live", "type": "hr_high", "severity": "danger",
+                 "status": "open", "emp": "Worker", "dept": "تولید روغن — خط روغن ۲",
+                 "location": "سالن تولید ۲", "time": "12:00"}
         rows = [{"mac": MAC_LEAD, "name": "Shift lead", "staff_group": "shift_leader",
                  "dept": "تولید روغن", "present": True, "registered": True,
                  "scan_allowed": True}]
-        with patch.object(alerts, "live_employees", return_value=rows), \
+        with patch.object(alerts, "live_status", return_value={"ok": True, "alerts_active": [issue]}), \
+                patch.object(alerts, "live_employees", return_value=rows), \
                 patch.object(alerts, "send_vibrate", return_value=(True, "sent")) as vibrate:
             view = alerts.alerts_view(app)
             button = next(c for c in self.walk(view)
@@ -103,7 +103,7 @@ class AlertContactUiTests(unittest.TestCase):
         self.assertTrue(any("سرشیفت" in str(msg) and "ویبره" in str(msg)
                             for msg in messages))
 
-    def test_each_active_alert_vibrates_all_hse_wristbands_once(self):
+    def test_rendering_live_alerts_does_not_send_vibration_commands(self):
         messages = []
         app = SimpleNamespace(
             state={"view": "alerts"}, page=SimpleNamespace(width=1340),
@@ -124,29 +124,25 @@ class AlertContactUiTests(unittest.TestCase):
             {"mac": MAC_HSE, "name": "HSE 1", "staff_group": "hse", "present": True, "registered": True},
             {"mac": MAC_SUPERVISOR, "name": "HSE 2", "staff_group": "hse", "present": False, "registered": True},
         ]
-        with patch.object(alerts, "live_employees", return_value=rows), \
+        with patch.object(alerts, "live_status", return_value={"ok": True, "alerts_active": app.alerts_active}), \
+                patch.object(alerts, "live_employees", return_value=rows), \
                 patch.object(alerts, "send_vibrate", return_value=(True, "sent")) as vibrate:
             alerts.alerts_view(app)
             alerts.alerts_view(app)
         vibrate.assert_not_called()
 
-    def test_live_health_alert_activation_notifies_hse_once(self):
+    def test_live_health_alert_refresh_preserves_bridge_id_without_ui_dispatch(self):
         page = SimpleNamespace(web=True, width=1340, height=800)
         app = app_main.App(page)
         app.state.update(logged_in=True, admin_email="owner@example.test", role="owner")
-        rows = [
-            {"mac": MAC_WORKER, "registered": True, "name": "Worker",
-             "status": "danger", "issues": ["fall"], "dept": "تولید روغن",
-             "location": "سالن تولید"},
-            {"mac": MAC_HSE, "registered": True, "name": "HSE",
-             "staff_group": "hse", "present": True},
-        ]
-        with patch.object(app_main, "live_employees", return_value=rows), \
-                patch.object(app_main, "live_status", return_value={}):
+        alert = {"id": "bridge-episode-1", "source": "live", "type": "hr_high",
+                 "status": "open", "severity": "danger", "mac": MAC_WORKER}
+        with patch.object(app_main, "live_status", return_value={"ok": True, "alerts_active": [alert]}), \
+                patch.object(app_main, "send_vibrate") as vibrate:
             app.refresh_live_alerts()
             app.refresh_live_alerts()
-        self.assertIn("health:aa:bb:cc:dd:ee:01:fall",
-                      [item["id"] for item in app.alerts_active])
+        self.assertEqual(app.alerts_active, [alert])
+        vibrate.assert_not_called()
 
 
 if __name__ == "__main__":

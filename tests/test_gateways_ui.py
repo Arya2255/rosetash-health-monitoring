@@ -204,7 +204,8 @@ def main():
     v5 = gv.gateways_view(app5)
     t5 = texts_of(v5)
     assert "پل محلی در دسترس نیست" in t5, t5
-    assert "سالن فیلتر ۱" in t5, t5
+    assert "سالن فیلتر ۱" not in t5, t5
+    assert norm("گیتوی ثبت‌شده یا دادهٔ تازه‌ای از پل در دسترس نیست") in t5, t5
 
     # ── ۷) پیشنهاد شناسهٔ خودکار ──
     assert gf.suggest_gw_id([]) == "gw-1"

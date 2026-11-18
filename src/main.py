@@ -27,7 +27,7 @@ from theme import (  # noqa: E402
     fa_clock, fa_date, txt,
 )
 from data import (  # noqa: E402
-    ALERTS_ACTIVE, internet_available, live_employees,
+    internet_available, live_employees,
     live_status, remote_autostart, send_vibrate, ensure_has_role, get_admin_name,
     can_view_settings,
 )
@@ -88,8 +88,9 @@ class App:
             "search": "", "back_to": "dashboard",
             "logged_in": False, "admin_email": None, "admin_name": "",
         }
-        self.alerts_active = [dict(a) for a in ALERTS_ACTIVE]
-        self.siren_on = True
+        self.alerts_active = []
+        self.alerts_history = []
+        self.siren_on = False
         self.content_holder = ft.Container(expand=True)
         self.root = None
         
@@ -219,40 +220,46 @@ class App:
         except Exception:
             pass
 
+    def acknowledge_alert(self, alert_id):
+        if not self.state.get("logged_in"):
+            return False
+        from data import acknowledge_alert
+
+        ok, message = acknowledge_alert(alert_id, actor=self.state.get("admin_email") or "")
+        if ok:
+            self.refresh_live_alerts()
+            rows = self.alerts_active + self.alerts_history
+            verified = next((a for a in rows if a.get("id") == alert_id), None)
+            if verified and verified.get("status") == "acknowledged":
+                self.snack("تأیید هشدار ثبت شد")
+                self.render()
+                return True
+            message = "درخواست پذیرفته شد، اما وضعیت تأیید هنوز از پل دریافت نشده است"
+        self.snack(message or "تأیید هشدار ناموفق بود")
+        return False
+
     def close_alert(self, alert_id):
-        self.alerts_active = [a for a in self.alerts_active if a["id"] != alert_id]
-        self.snack("رویداد بسته شد و در تاریخچهٔ امروز ثبت گردید")
-        self.render()
+        """Compatibility alias; an alert is never locally closed."""
+        return self.acknowledge_alert(alert_id)
 
     def refresh_live_alerts(self):
-        """Build live health alerts and notify HSE wristbands once per event."""
+        """Read the bridge's persistent active and historical alert snapshot."""
         if not self.state.get("logged_in"):
             return
         try:
-            rows = live_employees(force=True) or []
+            doc = live_status(force=True)
         except Exception:
+            self.alerts_active = []
+            self.alerts_history = []
             return
-        live_alerts = []
-        for row in rows:
-            if not row.get("registered") or row.get("status") not in ("warn", "danger"):
-                continue
-            for issue in row.get("issues") or [row.get("status")]:
-                live_alerts.append({
-                    "id": f"health:{row.get('mac')}:{issue}",
-                    "source": "live",
-                    "type": issue,
-                    "severity": "danger" if row.get("status") == "danger" else "warn",
-                    "emp": row.get("name") or row.get("mac"),
-                    "dept": row.get("dept") or "",
-                    "location": row.get("location") or row.get("zone") or "—",
-                    "time": row.get("last_seen") or "—",
-                })
-        try:
-            live_status(force=True)
-        except Exception:
-            pass
-        self.alerts_active = ([a for a in self.alerts_active if a.get("source") != "live"]
-                              + live_alerts)
+        if not doc or not doc.get("ok"):
+            self.alerts_active = []
+            self.alerts_history = []
+            return
+        self.alerts_active = [a for a in (doc or {}).get("alerts_active", [])
+                              if a.get("source") == "live"]
+        self.alerts_history = [a for a in (doc or {}).get("alerts_history", [])
+                               if a.get("source") == "live"]
 
     # ── مسیریابی ──
     def _navigation_role(self):
@@ -463,6 +470,8 @@ def main(page: ft.Page):
         app.state["admin_email"] = None
         app.state["admin_name"] = ""
         app.state["role"] = ""
+        app.alerts_active = []
+        app.alerts_history = []
         app.state["view"] = "login"
         app.render()
 

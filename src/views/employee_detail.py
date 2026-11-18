@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import time
 
 import flet as ft
 
@@ -28,6 +29,22 @@ from components.sidebar import ensure_profile_origin
 
 BAR_BLUE = "#8FB4DE"
 BAR_EMPTY = "#E3E5E8"
+
+_MEASUREMENT_PENDING = {
+    "pending": "فرمان فرستاده شد؛ در انتظار پاسخ گیت‌وی…",
+    "queued": "درخواست در صف گیت‌وی است…",
+    "started": "مچ‌بند در حال اندازه‌گیری ضربان است…",
+}
+_MEASUREMENT_ERRORS = {
+    "off_duty_unseen_or_policy": "گیت‌وی مچ‌بند را نمی‌بیند یا هنوز مجوز اندازه‌گیری را دریافت نکرده است",
+    "policy_revoked": "مجوز پایش هنگام درخواست پایان یافت",
+    "manual_measure_queue_busy": "گیت‌وی درگیر درخواست دیگری است؛ کمی بعد دوباره تلاش کنید",
+    "command_expired": "مهلت اجرای درخواست روی گیت‌وی پایان یافت",
+    "no_hr_samples": "ضربان معتبری دریافت نشد؛ مچ‌بند را روی دست و نزدیک گیت‌وی نگه دارید",
+    "health_job_failed": "اندازه‌گیری مچ‌بند ناموفق بود؛ اتصال ساعت به برنامهٔ گوشی را بررسی کنید",
+    "job_could_not_start": "گیت‌وی نتوانست اندازه‌گیری را شروع کند",
+    "publish failed": "فرمان به پیام‌رسان محلی نرسید",
+}
 
 
 def _find(emp_id):
@@ -97,6 +114,7 @@ def _live_detail(app, mac):
 
     doc = live_employees()
     emp0 = _find_emp(doc)
+    current_emp = {"value": emp0}
 
     # ── حالت‌های خاص: پل قطع است یا کارکن در دفتر نیست ──
     if emp0 is None:
@@ -161,6 +179,108 @@ def _live_detail(app, mac):
                 msg = "فرمان رفت، ولی گیت‌وی آفلاین است — به مچ‌بند نمی‌رسد"
         app.snack(msg if ok else f"لرزاندن نرسید — {msg}")
 
+    measure_feedback = txt("", size=12, font=FONT, color=TEXT_MUTED,
+                           data="employee:measure-feedback")
+    measurement_busy = False
+    awaiting_until = 0.0
+    last_report = None
+
+    def _measurement_active():
+        return (state.get("view") == "employee" and state.get("emp") == mac
+                and state.get("empd_gen") == gen)
+
+    def _measurement_allowed(employee):
+        return bool(employee and employee.get("registered") and employee.get("scan_allowed")
+                    and not employee.get("scan_paused") and state.get("logged_in")
+                    and state.get("admin_email"))
+
+    def _apply_measurement(employee):
+        nonlocal awaiting_until, last_report
+        allowed = _measurement_allowed(employee)
+        report = (employee.get("manual_measurement") or {}) if allowed else {}
+        status = report.get("status")
+        signature = (report.get("request_id"), status, report.get("updated_at"))
+        if not allowed and employee is not None:
+            awaiting_until = 0.0
+            last_report = None
+            measure_feedback.value = (monitoring_reason_text(employee)
+                                      if employee.get("registered") else "")
+            measure_feedback.color = TEXT_MUTED
+        elif not measurement_busy and status and signature != last_report:
+            last_report = signature
+            awaiting_until = 0.0
+            bpm = report.get("bpm")
+            if status in _MEASUREMENT_PENDING:
+                measure_feedback.value = _MEASUREMENT_PENDING[status]
+                measure_feedback.color = TEXT_MUTED
+            elif status == "done" and type(bpm) in (int, float) and 30 <= bpm <= 240:
+                measure_feedback.value = f"نتیجهٔ اندازه‌گیری دستی: {fa_num(round(bpm))} ضربه در دقیقه"
+                measure_feedback.color = OK
+            else:
+                measure_feedback.value = (
+                    "در مهلت تعیین‌شده نتیجه‌ای از گیت‌وی نرسید" if status == "timeout"
+                    else _MEASUREMENT_ERRORS.get(report.get("detail"), "اندازه‌گیری دستی ناموفق بود"))
+                measure_feedback.color = DANGER
+        elif awaiting_until and time.monotonic() >= awaiting_until:
+            awaiting_until = 0.0
+            measure_feedback.value = "در مهلت تعیین‌شده نتیجه‌ای از گیت‌وی نرسید"
+            measure_feedback.color = DANGER
+        btn_measure.disabled = not allowed or measurement_busy or bool(awaiting_until) or status in _MEASUREMENT_PENDING
+
+    async def _send_measurement(actor):
+        nonlocal measurement_busy, awaiting_until
+        if not _measurement_active() or state.get("admin_email") != actor:
+            return
+        from data import send_measure
+
+        try:
+            ok, message = await asyncio.to_thread(send_measure, mac, actor=actor)
+        except Exception:
+            ok, message = False, "پل به درخواست اندازه‌گیری پاسخ نداد"
+        if not _measurement_active() or state.get("admin_email") != actor:
+            return
+        measure_feedback.value = message or (
+            "درخواست اندازه‌گیری پذیرفته شد؛ منتظر دریافت داده هستیم"
+            if ok else "درخواست اندازه‌گیری رد شد")
+        measure_feedback.color = TEXT_MUTED if ok else DANGER
+        awaiting_until = time.monotonic() + 125 if ok else 0.0
+        measurement_busy = False
+        _apply_measurement(current_emp["value"])
+        try:
+            app.page.update()
+        except RuntimeError:
+            return
+
+    def _on_measure(e):
+        nonlocal measurement_busy
+        if not _measurement_active() or measurement_busy or awaiting_until:
+            return
+        employee = current_emp["value"] or {}
+        if not employee.get("registered"):
+            measure_feedback.value = "این مچ‌بند به کارکن ثبت‌شده‌ای تخصیص ندارد"
+            measure_feedback.color = DANGER
+            app.page.update()
+            return
+        if not employee.get("scan_allowed") or employee.get("scan_paused"):
+            measure_feedback.value = monitoring_reason_text(employee) or "پایش در حال حاضر مجاز نیست"
+            measure_feedback.color = TEXT_MUTED
+            app.page.update()
+            return
+        if not _measurement_allowed(employee) or (employee.get("manual_measurement") or {}).get("status") in _MEASUREMENT_PENDING:
+            return
+        measurement_busy = True
+        btn_measure.disabled = True
+        measure_feedback.value = "درخواست اندازه‌گیری در حال ارسال…"
+        measure_feedback.color = TEXT_MUTED
+        app.page.update()
+        if hasattr(app.page, "run_task"):
+            app.page.run_task(_send_measurement, state["admin_email"])
+        else:
+            measurement_busy = False
+            btn_measure.disabled = False
+            measure_feedback.value = "ارسال غیرهم‌زمان در این نما در دسترس نیست"
+            app.page.update()
+
     def _open_edit(e):
         cur = _find_emp(live_employees()) or emp0
         open_employee_form(app, emp=cur, on_saved=_refresh_now)
@@ -183,21 +303,34 @@ def _live_detail(app, mac):
                         on_click=_on_vibrate,
                         style=ft.ButtonStyle(bgcolor=INK, color=WHITE,
                                              shape=ft.RoundedRectangleBorder(radius=R_BTN)))
+    btn_measure = ft.Button(
+        "اندازه‌گیری دستی ضربان", icon=ft.Icons.MONITOR_HEART, height=40,
+        disabled=not bool(emp0.get("registered") and emp0.get("scan_allowed")
+                          and not emp0.get("scan_paused")),
+        on_click=_on_measure, data="employee:measure",
+        style=ft.ButtonStyle(bgcolor=INK, color=WHITE,
+                             shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+    )
     if is_phone(app):
         # موبایل: دکمه‌ها زیر هم — چیپ اتصال در ردیف خودش
         actions = card(ft.Column([
             ft.Row([conn_chip], alignment=ft.MainAxisAlignment.END),
-            ft.Row([btn_vib, edit_btn, del_btn], spacing=10,
+            ft.Row([btn_vib, btn_measure, edit_btn, del_btn], spacing=10,
                    wrap=True, run_spacing=8),
+            measure_feedback,
         ], spacing=10), pad=12)
     else:
-        actions = card(ft.Row([
-            btn_vib,
-            edit_btn,
-            del_btn,
-            ft.Container(expand=True),
-            conn_chip,
-        ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER), pad=12)
+        actions = card(ft.Column([
+            ft.Row([
+                btn_vib,
+                btn_measure,
+                edit_btn,
+                del_btn,
+                ft.Container(expand=True),
+                conn_chip,
+            ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            measure_feedback,
+        ], spacing=8), pad=12)
 
     # ── بنر مشکلات (وضعیت هشدار/اضطرار) ──
     issues_icon = ft.Icon(ft.Icons.ERROR_OUTLINE, size=18, color=WARN)
@@ -333,7 +466,10 @@ def _live_detail(app, mac):
             conn_chip.bgcolor = "#E6F4EB"
         e = _find_emp(doc)
         if e is None:
+            current_emp["value"] = None
+            _apply_measurement(None)
             return
+        current_emp["value"] = e
         name = e.get("name") or "مچ‌بند ثبت‌نشده"
         name_v.value = name
         avatar_holder.content = person_avatar(e, r=27)
@@ -361,6 +497,7 @@ def _live_detail(app, mac):
                                  else status_chip(e.get("status") or "off"))
         edit_btn.content = "ویرایش" if e.get("registered") else "ثبت کارکن"
         del_btn.visible = bool(e.get("registered"))
+        _apply_measurement(e)
 
         h = e.get("health") or {}
         v = e.get("vitals") or {}
@@ -468,7 +605,10 @@ def _live_detail(app, mac):
         while (state.get("view") == "employee" and state.get("emp") == mac
                and state.get("empd_gen") == gen):
             try:
-                _apply(live_employees())
+                fresh = await asyncio.to_thread(live_employees)
+                if not _measurement_active():
+                    return
+                _apply(fresh)
                 app.page.update()
             except Exception:
                 return

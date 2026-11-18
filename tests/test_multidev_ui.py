@@ -53,6 +53,12 @@ def make_doc():
              "steps": 1234, "spo2_raw": [], "hrv_raw": [], "ts": iso(now - 30), "age_s": 30.0},
         ],
         "events": [],
+        "employees": [
+            {"mac": "f3:b6:d6:b7:47:d7", "registered": True, "name": "Worker 1",
+             "dept": "تولید", "present": True, "status": "ok",
+             "health": {"state": "done", "n": 3, "avg": 96},
+             "vitals": {"battery": 90}},
+        ],
     }
 
 
@@ -143,21 +149,14 @@ check("تک-مچ‌بند: زیرنویس ساده",
       norm("دیده می‌شود") in norm(vals2) and norm("۲ مچ‌بند در دید") not in norm(vals2))
 check("تک-گیت‌وی: چیپ شمارشی نیست", "۲ از ۲" not in vals2)
 
-# ── ۳) نوار زندهٔ داشبورد ──
-summary_multi = {
-    "available": True, "fetched_at": iso(now),
-    "gateway": doc["gateways"][0], "band": doc["bands"][0],
-    "health": doc["health"][0], "vitals": doc["vitals"][0],
-    "gateways_count": 2, "gateways_online": 2, "bands_count": 2,
-}
-svals = norm(" || ".join(texts(v_dash._live_strip(summary_multi))))
-check("نوار داشبورد: ۲ گیت‌وی", norm("۲ گیت‌وی") in svals and norm("۲ آنلاین") in svals)
-check("نوار داشبورد: ۲ مچ‌بند", norm("۲ مچ‌بند") in svals)
-
-summary_one = dict(summary_multi)
-summary_one.update({"gateways_count": 1, "gateways_online": 1, "bands_count": 1})
-s1 = " || ".join(texts(v_dash._live_strip(summary_one)))
-check("نوار داشبورد تک: نام گیت‌وی", "gw-test-1" in s1)
+# ── ۳) داشبورد واقعی، بدون نوار نمونهٔ قدیمی ──
+dash_app = FakeApp()
+v_dash.live_status = lambda force=False: dict(doc, alerts_active=[])
+live_dashboard = v_dash.dashboard_view(dash_app)
+svals = norm(" || ".join(texts(live_dashboard)))
+check("داشبورد دادهٔ کارکن و ضربان واقعی",
+      norm("Worker 1") in svals and norm("۹۶") in svals)
+check("داشبورد بدون افراد یا هشدار نمونه", norm("SAMPLE") not in svals and norm("ALERT") not in svals)
 
 print()
 print("نتیجه:", "همهٔ بررسی‌ها پاس شد" if not fails else f"{len(fails)} خطا: {fails}")

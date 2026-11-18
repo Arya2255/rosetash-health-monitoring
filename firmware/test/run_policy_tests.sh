@@ -18,3 +18,15 @@ compiler="${CXX:-c++}"
   -Ifirmware/gateway -I"$json_include" firmware/test/vibration_command_host_test.cpp \
   -o "$TMPDIR/vibration-command-host-test"
 "$TMPDIR/vibration-command-host-test"
+"$compiler" -std=c++17 -O2 -Wall -Wextra -Werror \
+  -Ifirmware/gateway -I"$json_include" firmware/test/manual_measure_host_test.cpp \
+  -o "$TMPDIR/manual-measure-host-test"
+"$TMPDIR/manual-measure-host-test"
+"$compiler" -std=c++17 -O2 -Wall -Wextra -Werror \
+  -Ifirmware/gateway firmware/test/broker_discovery_retry_host_test.cpp \
+  -o "$TMPDIR/broker-discovery-retry-host-test"
+"$TMPDIR/broker-discovery-retry-host-test"
+"$compiler" -std=c++17 -O2 -Wall -Wextra -Werror \
+  -Ifirmware/gateway firmware/test/gateway_discovery_protocol_host_test.cpp \
+  -o "$TMPDIR/gateway-discovery-protocol-host-test"
+"$TMPDIR/gateway-discovery-protocol-host-test"

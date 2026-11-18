@@ -52,6 +52,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B tests/test_bundle_layout.py -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B tests/test_bridge_utf8_http.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B scripts/validate_windows_single.py --inputs-only
 
       - name: Fetch verified broker and tunnel runtimes
@@ -79,7 +81,7 @@ jobs:
             --add-data "assets;assets" `
             --add-data "../distribution/gateway-provisioner;distribution/gateway-provisioner" `
             --add-data "../build/windows-runtime;runtime/windows" `
-            --hidden-import flet_desktop flet_web http.server http.client smtplib urllib.request urllib.error email.mime.text email.mime.multipart tzdata backend.bridge backend.battery_alerts tools.discovery_udp ble_discovery bleak.backends.winrt.scanner `
+            --hidden-import flet_desktop flet_web http.server http.client smtplib urllib.request urllib.error email.mime.text email.mime.multipart tzdata backend.bridge backend.battery_alerts tools.discovery_udp tools.gateway_discovery ble_discovery bleak.backends.winrt.scanner `
             -- --clean --noupx --paths .. --runtime-hook ../scripts/pyi_windowed_stdio.py --collect-data tzdata --collect-data flet_web --collect-submodules flet_web --collect-submodules uvicorn --collect-submodules bleak
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

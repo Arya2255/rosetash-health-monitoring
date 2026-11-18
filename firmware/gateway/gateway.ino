@@ -25,8 +25,9 @@
 #include "config.h"
 #include "mqtt_link.h"
 #include "discovery.h"
+#include "broker_discovery_retry.h"
 
-const char* kFwVersion = "0.5.2-alerts";
+const char* kFwVersion = "0.5.3-operational";
 
 // SpO2 + HRV stages run only every Nth health window: three PPG measurements
 // back to back on every window would drain the band's battery. Battery and
@@ -41,31 +42,46 @@ static uint32_t last_presence_ms = 0;
 static uint32_t last_status_ms = 0;
 static roztash::HealthSchedule health_schedule;
 static DiscoveryClient discovery;
-static bool broker_resolved = false;
-static uint32_t last_broker_discovery_ms = 0;
+static GatewayDiscoveryResponder gateway_discovery;
+static roztash::BrokerDiscoveryRetry broker_retry;
+static bool network_was_ready = false;
+static char last_network_ip[16] = {0};
+static uint32_t last_gateway_discovery_attempt_ms = 0;
 static char resolved_mqtt_host[48] = {0};
 static uint16_t resolved_mqtt_port = 1884;
 
 // Resolve MQTT host via discovery after DHCP is ready; keep config as fallback.
 static void resolveMqttHost() {
-  strncpy(resolved_mqtt_host, cfg.mqtt_host, sizeof(resolved_mqtt_host) - 1);
-  resolved_mqtt_host[sizeof(resolved_mqtt_host) - 1] = '\0';
-  resolved_mqtt_port = cfg.mqtt_port;
+  if (!discovery.active()) {
+    if (!discovery.start()) {
+      broker_retry.recordFailure(millis());
+      Serial.println("[gw] broker discovery socket unavailable; retrying");
+      return;
+    }
+    Serial.println("[gw] broker discovery query sent");
+    return;
+  }
 
   char discovered_host[sizeof(resolved_mqtt_host)] = {0};
-  uint16_t discovered_port = resolved_mqtt_port;
-  const bool found = discovery.discover(cfg.mqtt_host, cfg.mqtt_port,
-                                        discovered_host, sizeof discovered_host,
-                                        &discovered_port);
-  if (found) {
+  uint16_t discovered_port = cfg.mqtt_port;
+  const auto result = discovery.poll(discovered_host, sizeof discovered_host, &discovered_port);
+  if (result == DiscoveryClient::PollResult::Success) {
+    broker_retry.recordSuccess(discovered_host, discovered_port, millis());
     strncpy(resolved_mqtt_host, discovered_host, sizeof(resolved_mqtt_host) - 1);
     resolved_mqtt_host[sizeof(resolved_mqtt_host) - 1] = '\0';
     resolved_mqtt_port = discovered_port;
+    mqtt.setBroker(resolved_mqtt_host, resolved_mqtt_port);
+    Serial.printf("[gw] broker: %s:%u (discovered)\n", resolved_mqtt_host,
+                  resolved_mqtt_port);
+  } else if (result == DiscoveryClient::PollResult::Failure) {
+    broker_retry.recordFailure(millis());
+    strncpy(resolved_mqtt_host, cfg.mqtt_host, sizeof(resolved_mqtt_host) - 1);
+    resolved_mqtt_host[sizeof(resolved_mqtt_host) - 1] = '\0';
+    resolved_mqtt_port = cfg.mqtt_port;
+    mqtt.setBroker(resolved_mqtt_host, resolved_mqtt_port);
+    Serial.printf("[gw] broker: %s:%u (config fallback; discovery retrying)\n",
+                  resolved_mqtt_host, resolved_mqtt_port);
   }
-  mqtt.setBroker(resolved_mqtt_host, resolved_mqtt_port);
-  Serial.printf("[gw] broker: %s:%u%s\n", resolved_mqtt_host,
-                resolved_mqtt_port, found ? " (discovered)" : " (config fallback)");
-  broker_resolved = true;
 }
 
 // Consume one assigned MAC, even when absent or a connection fails. Advancing
@@ -97,8 +113,8 @@ static void normalBegin() {
   ble.begin(cfg.scan_interval_ms, cfg.scan_window_ms,
             (uint32_t)cfg.measure_timeout_s * 1000UL);
 
-  broker_resolved = false;
-  last_broker_discovery_ms = 0;
+  broker_retry = roztash::BrokerDiscoveryRetry{};
+  network_was_ready = false;
   last_presence_ms = millis();
   last_status_ms = millis();
   Serial.println("[gw] BLE ready; waiting for Ethernet DHCP");
@@ -120,11 +136,36 @@ void setup() {
 void loop() {
   mqtt.poll();
   const uint32_t now = millis();
+  const bool network_ready = mqtt.networkReady();
+  if (network_ready) {
+    const String ip = ETH.localIP().toString();
+    if (last_network_ip[0] && ip != last_network_ip) {
+      broker_retry.networkReady();
+      discovery.cancel();
+      Serial.printf("[gw] DHCP address changed: %s; refreshing broker discovery\n", ip.c_str());
+    }
+    strncpy(last_network_ip, ip.c_str(), sizeof(last_network_ip) - 1);
+    last_network_ip[sizeof(last_network_ip) - 1] = '\0';
+  } else last_network_ip[0] = '\0';
+  if (network_ready && !network_was_ready) {
+    broker_retry.networkReady();
+  } else if (!network_ready && network_was_ready) {
+    broker_retry.networkLost();
+    discovery.cancel();
+    gateway_discovery.stop();
+    last_gateway_discovery_attempt_ms = 0;
+  }
+  network_was_ready = network_ready;
+  if (network_ready && !gateway_discovery.active() &&
+      (last_gateway_discovery_attempt_ms == 0 ||
+       uint32_t(now - last_gateway_discovery_attempt_ms) >= 5000)) {
+    last_gateway_discovery_attempt_ms = now ? now : 1;
+    gateway_discovery.begin(cfg.gw_id, kFwVersion);
+  }
+  gateway_discovery.poll(mqtt.online());
 
   // Discover the HSE broker only after W5500 has link and a DHCP lease.
-  if (mqtt.networkReady() && !broker_resolved &&
-      now - last_broker_discovery_ms >= 1000) {
-    last_broker_discovery_ms = now;
+  if (network_ready && (discovery.active() || broker_retry.due(now))) {
     resolveMqttHost();
   }
 
@@ -149,6 +190,20 @@ void loop() {
             : !mqtt.policy().allows(ble.jobMac(), millis())))
           mqtt.rejectVibration("policy_revoked", ble.vibrateAcks());
         else mqtt.finishVibration(false, ble.vibrateAcks());
+      } else if (ble.wasManualMeasure()) {
+        if (ble.jobRevoked() || !mqtt.policy().allowsHealth(ble.jobMac(), millis())) {
+          mqtt.finishManualMeasure("measure_reject", "policy_revoked");
+        } else {
+          const bool health_published = mqtt.publishHealth(ble);
+          mqtt.publishVitals(ble);
+          if (ble.state() == BleCentral::JobState::Done && ble.validHrSampleCount() > 0 &&
+              health_published)
+            mqtt.finishManualMeasure("measure_done");
+          else
+            mqtt.finishManualMeasure("measure_fail", ble.state() != BleCentral::JobState::Done
+                ? "health_job_failed" : (ble.validHrSampleCount() == 0
+                    ? "no_hr_samples" : "health_publish_failed"));
+        }
       } else if (ble.jobRevoked() || !mqtt.policy().allows(ble.jobMac(), millis())) {
         // Discard all results of revoked work; do not leak an off-duty sample.
       } else {
@@ -164,10 +219,18 @@ void loop() {
       // Commands get a turn between jobs; never overlap a health connection.
       char act[16] = {0};
       char cmac[20] = {0};
+      char request_id[65] = {0};
+      bool vitals = false;
       bool emergency = false;
       uint8_t repeats = 1;
       uint8_t completed_pulses = 0;
-      if (mqtt.takeCommand(act, sizeof act, cmac, sizeof cmac, &emergency,
+      if (mqtt.takeManualMeasure(cmac, sizeof cmac, &vitals, request_id,
+                                 sizeof request_id)) {
+        if (!ble.startHealth(cmac, vitals, request_id))
+          mqtt.finishManualMeasure("measure_fail", "job_could_not_start");
+        else
+          mqtt.manualMeasureStarted();
+      } else if (mqtt.takeCommand(act, sizeof act, cmac, sizeof cmac, &emergency,
                            &repeats, &completed_pulses)) {
         if (strcmp(act, "vibrate") == 0) {
           if (!ble.startVibrate(cmac, emergency, repeats, completed_pulses))

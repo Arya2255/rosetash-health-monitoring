@@ -45,6 +45,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
@@ -54,13 +55,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 import applog
+from tools import gateway_discovery
 from tools.discovery_udp import DISCOVERY_PORT, DiscoveryServer
 if __package__:
     from . import battery_alerts as battery_policy
     from . import staff_alerts as staff_alert_policy
+    from . import manual_measurements as measurement_policy
+    from . import operational_alerts as operational_alert_policy
 else:  # Direct script execution and legacy ``import bridge`` callers.
     import battery_alerts as battery_policy
     import staff_alerts as staff_alert_policy
+    import manual_measurements as measurement_policy
+    import operational_alerts as operational_alert_policy
 
 claim_battery = battery_policy.claim
 observe_battery = battery_policy.observe
@@ -68,7 +74,7 @@ pending_battery_rows = battery_policy.pending_rows
 record_battery_publish = battery_policy.record_publish
 record_battery_result = battery_policy.record_result
 visible_battery_alerts = battery_policy.visible_alerts
-from admin_roles import (can_manage_employee_scanning,
+from admin_roles import (can_manage_employee_scanning, can_manage_gateways,
                          can_manage_employee_schedules, can_delete_employees, get_role)
 from personnel import STAFF_GROUP_LABELS
 from alert_contacts import alert_recipients
@@ -92,6 +98,7 @@ PRESENCE_TTL = float(os.environ.get("ROZTASH_PRESENCE_TTL", "60"))
 HEALTH_TTL = float(os.environ.get("ROZTASH_HEALTH_TTL", "900"))
 VITALS_TTL = float(os.environ.get("ROZTASH_VITALS_TTL", "3600"))
 GATEWAY_ONLINE_TTL = float(os.environ.get("ROZTASH_GATEWAY_ONLINE_TTL", "180"))
+GATEWAY_DISCOVERY_TTL = 120.0
 EVENTS_KEEP = 3000
 HEALTH_KEEP = 5000
 VITALS_KEEP = 2000
@@ -150,6 +157,9 @@ CREATE TABLE IF NOT EXISTS catalogs(
 CREATE TABLE IF NOT EXISTS gateway_registry(
   gw TEXT PRIMARY KEY, label TEXT, zone TEXT, kind TEXT,
   x REAL, y REAL, note TEXT, mac TEXT, created_at REAL, updated_at REAL);
+CREATE TABLE IF NOT EXISTS network_gateway_observations(
+  gw TEXT PRIMARY KEY, mac TEXT NOT NULL, fw TEXT NOT NULL, ip TEXT NOT NULL,
+  transport TEXT NOT NULL, mqtt_connected INTEGER NOT NULL, seen_at REAL NOT NULL);
 """
 
 _lock = threading.Lock()
@@ -159,7 +169,19 @@ _started_at = time.time()
 
 def log(msg: str) -> None:
     ts = datetime.now().strftime("%H:%M:%S")
-    print(f"[bridge {ts}] {msg}", flush=True)
+    line = f"[bridge {ts}] {msg}"
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        # A frozen Windows worker can inherit a legacy redirected stdout codec.
+        # Logging occurs after DB commits and must never abort the HTTP response.
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        try:
+            print(line.encode(encoding, "backslashreplace").decode(encoding), flush=True)
+        except (OSError, ValueError):
+            pass
+    except (OSError, ValueError):
+        pass
 
 
 def db() -> sqlite3.Connection:
@@ -172,6 +194,23 @@ def db() -> sqlite3.Connection:
         _db.executescript(SCHEMA)
         battery_policy.ensure_schema(_db)
         staff_alert_policy.ensure_schema(_db)
+        measurement_policy.ensure_schema(_db)
+        operational_alert_policy.ensure_schema(_db)
+        # Backfill real prior sightings for upgrades where a retained LWT had
+        # already reset gateways.last_seen before alert tracking existed.
+        _db.execute(
+            "INSERT INTO operational_gateway_state(gw,ever_seen,last_seen) "
+            "SELECT gw,1,last_seen FROM gateways WHERE last_seen>0 "
+            "ON CONFLICT(gw) DO UPDATE SET ever_seen=1,"
+            "last_seen=max(COALESCE(operational_gateway_state.last_seen,0),excluded.last_seen)"
+        )
+        for event in _db.execute("SELECT gw,ts,payload FROM events WHERE kind='status'").fetchall():
+            try:
+                status = json.loads(event["payload"] or "{}")
+            except (ValueError, TypeError):
+                continue
+            if isinstance(status, dict) and status.get("online") is not False:
+                operational_alert_policy.note_gateway_seen(_db, event["gw"], event["ts"])
         # مهاجرت نرم — ستون‌های تازهٔ کارکنان روی دیتابیس‌های موجود
         cols = {r[1] for r in _db.execute("PRAGMA table_info(employees)")}
         for col, coltype in (("conditions", "TEXT"), ("medications", "TEXT"),
@@ -414,6 +453,7 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
                     "INSERT INTO gateways(gw,last_seen) VALUES(?,0.0) "
                     "ON CONFLICT(gw) DO UPDATE SET last_seen=0.0", (gw,))
             else:
+                operational_alert_policy.note_gateway_seen(c, gw, ts)
                 c.execute(
                     "INSERT INTO gateways(gw,zone,fw,ip,rssi,uptime_s,bands_seen,adv_seen,last_seen,payload) "
                     "VALUES(?,?,?,?,?,?,?,?,?,?) "
@@ -429,6 +469,9 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
             mac = _norm_mac(doc.get("mac"))
             if not _valid_mac(mac) or not _mac_data_visible(c, mac, ts, ts):
                 return
+            if "request_id" in doc and not measurement_policy.record_health(
+                    c, gw, {**doc, "mac": mac}, ts):
+                return
             c.execute(
                 "INSERT INTO health(ts,gw,mac,state,fail,wearing,ended,bpm,n,avg,payload) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -440,6 +483,9 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
         elif leaf == "vitals":
             mac = _norm_mac(doc.get("mac"))
             if not _valid_mac(mac) or not _mac_data_visible(c, mac, ts, ts):
+                return
+            if "request_id" in doc and not measurement_policy.matching_request(
+                    c, gw, {**doc, "mac": mac}, ts):
                 return
             level = doc.get("battery")
             if not battery_policy.valid_percent(level):
@@ -467,6 +513,7 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
             if leaf == "event":
                 record_battery_result(c, gw, {**doc, "mac": mac}, ts)
                 staff_alert_policy.record_result(c, gw, {**doc, "mac": mac}, ts)
+                measurement_policy.record_result(c, gw, {**doc, "mac": mac}, ts)
             c.execute("INSERT INTO events(ts,gw,kind,mac,payload) VALUES(?,?,?,?,?)",
                       (ts, gw, doc.get("type", leaf), mac or None, payload))
         # هرس سبک
@@ -663,13 +710,30 @@ def employee_scan_policy(now: float | None = None) -> dict:
             "SELECT gw FROM gateway_registry WHERE kind='installed' ORDER BY gw")]
         health_by_gateway = {gw: [] for gw in installed}
         winners = _fresh_bands(c, now, installed_only=True)
+        capable_fresh = {}
+        for observation in c.execute(
+                "SELECT b.mac,b.gw,g.last_seen,g.payload,b.rssi FROM band_observations b "
+                "JOIN gateway_registry r ON r.gw=b.gw AND r.kind='installed' "
+                "JOIN gateways g ON g.gw=b.gw "
+                "WHERE b.seen_at BETWEEN ? AND ? "
+                "AND g.last_seen BETWEEN ? AND ? "
+                "ORDER BY b.mac,b.rssi DESC,b.gw",
+                (now - PRESENCE_TTL, now, now - GATEWAY_ONLINE_TTL, now)):
+            try:
+                capabilities = json.loads(observation["payload"] or "{}")
+            except (TypeError, ValueError):
+                capabilities = {}
+            if (isinstance(capabilities, dict)
+                    and capabilities.get("manual_measurement") is True):
+                capable_fresh.setdefault(observation["mac"], observation["gw"])
         last_seen = {}
         for row in c.execute(
                 "SELECT b.mac,b.gw FROM band_observations b JOIN gateway_registry g ON g.gw=b.gw "
                 "WHERE g.kind='installed' AND b.seen_at<=? ORDER BY b.seen_at DESC,b.rssi DESC,b.gw", (now,)):
             last_seen.setdefault(row["mac"], row["gw"])
         for mac in health_active:
-            gw = winners.get(mac, {}).get("gw") or last_seen.get(mac)
+            gw = (capable_fresh.get(mac) or winners.get(mac, {}).get("gw")
+                  or last_seen.get(mac))
             if gw is None and installed:
                 gw = installed[0]
             if gw in health_by_gateway:
@@ -753,7 +817,7 @@ def remove_employee(mac) -> tuple[bool, str]:
             # MAC is the current assignment key; do not relabel an old person's
             # health/observation records as the next wearer of this band.
             for table in ("battery_alert_state", "health", "vitals", "events",
-                          "bands", "band_observations"):
+                          "bands", "band_observations", "manual_measurements"):
                 c.execute("DELETE FROM " + table + " WHERE mac=?", (mac,))
     _delete_photos(mac)
     log(f"employee removed mac={mac}")
@@ -1144,6 +1208,9 @@ def _gateways_view(c: sqlite3.Connection, now: float) -> list[dict]:
     هم با registered=false به فهرست می‌آیند تا کاربر تعریفشان کند.
     """
     live = {r["gw"]: r for r in c.execute("SELECT * FROM gateways")}
+    network = {r["gw"]: r for r in c.execute(
+        "SELECT * FROM network_gateway_observations WHERE seen_at BETWEEN ? AND ?",
+        (now - GATEWAY_DISCOVERY_TTL, now))}
     reg = c.execute(
         "SELECT * FROM gateway_registry ORDER BY created_at, gw").fetchall()
     rows = []
@@ -1157,7 +1224,7 @@ def _gateways_view(c: sqlite3.Connection, now: float) -> list[dict]:
             "registered": True,
             "live": lv is not None,
             "online": bool(lv is not None and age is not None
-                           and age <= GATEWAY_ONLINE_TTL),
+                           and 0 <= age <= GATEWAY_ONLINE_TTL),
             "fw": lv["fw"] if lv is not None else None,
             "ip": lv["ip"] if lv is not None else None,
             "adv_seen": lv["adv_seen"] if lv is not None else None,
@@ -1171,12 +1238,31 @@ def _gateways_view(c: sqlite3.Connection, now: float) -> list[dict]:
             "mac": None, "x": None, "y": None, "note": None,
             "registered": False,
             "live": True,
-            "online": bool(age is not None and age <= GATEWAY_ONLINE_TTL),
+            "online": bool(age is not None and 0 <= age <= GATEWAY_ONLINE_TTL),
             "fw": lv["fw"], "ip": lv["ip"], "adv_seen": lv["adv_seen"],
             "last_seen": _iso(lv["last_seen"]),
             "age_s": round(age, 1) if age is not None else None,
         })
+    for row in rows:
+        observation = network.pop(row["gw"], None)
+        if observation is not None:
+            row.update(_gateway_network_fields(observation))
+    for gw, observation in sorted(network.items()):
+        rows.append({"gw": gw, "label": None, "zone": None, "kind": "installed",
+                     "mac": None, "x": None, "y": None, "note": None,
+                     "registered": False, "online": False, "live": False,
+                     "fw": None, "ip": None, "last_seen": None, "age_s": None,
+                     **_gateway_network_fields(observation)})
     return rows
+
+
+def _gateway_network_fields(observation: sqlite3.Row) -> dict:
+    # The network interface MAC can differ from the serial provisioning identity.
+    return {"network_seen": True, "network_ip": observation["ip"],
+            "network_mac": observation["mac"], "network_fw": observation["fw"],
+            "network_transport": observation["transport"],
+            "network_mqtt_connected": bool(observation["mqtt_connected"]),
+            "network_seen_at": _iso(observation["seen_at"])}
 
 
 # ───────── آمادهسازی گیتوی — وایفای و آدرس سیستم ─────────
@@ -1648,11 +1734,20 @@ def snapshot(now: float | None = None) -> dict:
                     v["vitals_age_s"] = round(now - back["ts"], 1)
             vitals.append(v)
         employees = _employees_view(c, now)
+        map_gateways = _gateways_view(c, now)
+        operational_alerts = _sync_operational_alerts(c, employees, map_gateways, now)
+        manual_rows = []
+        manual_by_mac = measurement_policy.latest_by_mac(c, now)
+        for employee in employees:
+            measurement = manual_by_mac.get(employee["mac"])
+            if (measurement is not None and employee["registered"] and employee["scan_allowed"]
+                    and _mac_data_visible(c, employee["mac"], measurement["requested_at"], now)):
+                employee["manual_measurement"] = measurement
+                manual_rows.append(measurement)
         battery_alert_rows = visible_battery_alerts(
             c, now, lambda mac, at, current: current - at <= VITALS_TTL
             and _mac_data_visible(c, mac, at, current))
         bands_known = _bands_known_view(c, now)
-        map_gateways = _gateways_view(c, now)
         catalogs = {kind: [] for kind in CATALOG_KINDS}
         for r in c.execute("SELECT * FROM catalogs ORDER BY kind, name"):
             catalogs.setdefault(r["kind"], []).append(dict(r))
@@ -1664,7 +1759,16 @@ def snapshot(now: float | None = None) -> dict:
         "employees": employees, "bands_known": bands_known,
         "catalogs": catalogs, "map_gateways": map_gateways,
         "events": events, "battery_alerts": battery_alert_rows,
+        "manual_measurements": manual_rows,
+        **operational_alerts,
     }
+
+
+def _sync_operational_alerts(c, employees, gateways, now):
+    with c:
+        measurement_policy.expire(c, now)
+        operational_alert_policy.sync(c, employees, gateways, now)
+        return operational_alert_policy.view(c, now)
 
 
 # ───────────────────────────── MQTT ─────────────────────────────
@@ -1820,6 +1924,8 @@ def dispatch_alert_notifications(now: float | None = None) -> dict:
         with _lock:
             c = db()
             employees = _employees_view(c, moment)
+            # Keep alert episodes and request expiry current with no UI open.
+            _sync_operational_alerts(c, employees, _gateways_view(c, moment), moment)
             episodes = staff_alert_policy.sync_episodes(c, employees, moment)
             by_mac = {str(row.get("mac") or "").lower(): row for row in employees}
             for episode in episodes.values():
@@ -1992,6 +2098,128 @@ def publish(topic: str, payload: str, retained: bool = False) -> tuple[bool, str
         return False, repr(exc)[:200]
 
 
+def request_measurement(doc: dict, now: float | None = None) -> tuple[bool, str, dict]:
+    """Queue an authenticated, on-duty request; publication is not a result."""
+    moment = time.time() if now is None else now
+    actor = str(doc.get("actor") or "").strip().lower()
+    if not actor or not can_manage_employee_scanning(get_role(actor)):
+        return False, "forbidden", {}
+    mac = _norm_mac(doc.get("mac"))
+    if not _valid_mac(mac):
+        return False, "invalid mac", {}
+    vitals = doc.get("vitals", False)
+    if type(vitals) is not bool:
+        return False, "invalid measurement", {}
+    scan_policy = employee_scan_policy(moment)
+    assigned_gateways = {gw for gw, macs in scan_policy["health_by_gateway"].items()
+                         if mac in macs}
+    with _lock:
+        c = db()
+        employee = c.execute("SELECT * FROM employees WHERE mac=?", (mac,)).fetchone()
+        if employee is None:
+            return False, "not found", {}
+        monitoring = _monitoring_state(employee, moment)
+        if not monitoring["scan_allowed"]:
+            return False, "employee monitoring is paused or outside scheduled hours", {}
+        earliest = max(moment - PRESENCE_TTL, monitoring["data_floor"] or 0)
+        observations = c.execute(
+            "SELECT b.gw,g.last_seen,g.payload FROM band_observations b "
+            "JOIN gateway_registry r ON r.gw=b.gw AND r.kind='installed' "
+            "LEFT JOIN gateways g ON g.gw=b.gw WHERE b.mac=? AND b.seen_at BETWEEN ? AND ? "
+            "ORDER BY b.rssi DESC,b.gw", (mac, earliest, moment)).fetchall()
+        if not observations:
+            return False, "band unavailable", {}
+        online = [row for row in observations if row["last_seen"] and
+                  0 <= moment-row["last_seen"] <= GATEWAY_ONLINE_TTL]
+        if not online:
+            return False, "gateway unavailable", {}
+        capable = []
+        for row in online:
+            try:
+                caps = json.loads(row["payload"] or "{}")
+            except (ValueError, TypeError):
+                caps = {}
+            if isinstance(caps, dict) and caps.get("manual_measurement") is True:
+                capable.append((row, caps))
+        if not capable:
+            return False, "gateway update required", {}
+        ready = [(row, caps) for row, caps in capable
+                 if caps.get("scan_policy_ready") is True]
+        if not ready:
+            return False, "gateway policy unavailable", {}
+        # Route only through a receiver which holds this MAC's current lease.
+        # Scan policy prefers a capable fresh observer when available; the
+        # strongest observation may be older firmware or not yet authorized.
+        ready = [(row, caps) for row, caps in ready if row["gw"] in assigned_gateways]
+        if not ready:
+            return False, "assigned gateway unavailable", {}
+        gw = ready[0][0]["gw"]
+        with c:
+            measurement_policy.expire(c, moment)
+        active = c.execute("SELECT request_id FROM manual_measurements WHERE mac=? "
+                           "AND status IN ('pending','queued','started') LIMIT 1", (mac,)).fetchone()
+        if active:
+            return False, "measurement already pending", {"request_id":active["request_id"]}
+        request_id = "measure-" + uuid.uuid4().hex
+        c.execute("INSERT INTO manual_measurements(request_id,mac,gateway,actor,requested_at,"
+                  "expires_at,status,detail,updated_at) VALUES(?,?,?,?,?,?,'pending','',?)",
+                  (request_id, mac, gw, actor, moment, moment + 120, moment))
+        c.commit()
+    payload = {"action":"measure","mac":mac,"request_id":request_id,"ttl_s":60,"vitals":vitals}
+    try:
+        ok, detail = publish(f"roztash/{gw}/cmd", json.dumps(payload,separators=(",",":")), retained=False)
+    except Exception:
+        ok, detail = False, "publish failed"
+    with _lock:
+        c = db()
+        if not ok:
+            c.execute("UPDATE manual_measurements SET status='failed',detail='publish failed',updated_at=? "
+                      "WHERE request_id=? AND status='pending'", (moment,request_id))
+        c.commit()
+    return ok, "" if ok else "publish failed", {"gw":gw,"request_id":request_id,"status":"pending"}
+
+
+def discover_network_gateways(*, actor: str, now: float | None = None):
+    """Perform bounded LAN UDP discovery and persist observations, not online state."""
+    actor = str(actor or "").strip().lower()
+    if not actor or not can_manage_gateways(get_role(actor)):
+        return False, "forbidden", []
+    try:
+        rows = gateway_discovery.discover_gateways(candidates=_host_ip_candidates(), timeout_s=2.0)
+    except (OSError, RuntimeError, ValueError) as exc:
+        log(f"gateway network discovery failed: {type(exc).__name__}")
+        return False, "network discovery failed", []
+    moment = time.time() if now is None else float(now)
+    with _lock:
+        c = db()
+        c.execute("DELETE FROM network_gateway_observations WHERE seen_at<?",
+                  (moment - GATEWAY_DISCOVERY_TTL,))
+        for row in rows:
+            c.execute(
+                "INSERT INTO network_gateway_observations(gw,mac,fw,ip,transport,mqtt_connected,seen_at) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(gw) DO UPDATE SET "
+                "mac=excluded.mac,fw=excluded.fw,ip=excluded.ip,transport=excluded.transport,"
+                "mqtt_connected=excluded.mqtt_connected,seen_at=excluded.seen_at",
+                (row["gw"], row["mac"], row["fw"], row["ip"], row["transport"],
+                 int(row["mqtt_connected"]), moment),
+            )
+        c.commit()
+    return True, "", rows
+
+
+def acknowledge_live_alert(doc: dict, now: float | None = None):
+    actor = str(doc.get("actor") or "").strip().lower()
+    if not actor or not can_manage_employee_scanning(get_role(actor)):
+        return False, "forbidden"
+    alert_id = doc.get("id")
+    with _lock:
+        c = db()
+        ok, error = operational_alert_policy.acknowledge(
+            c, alert_id, actor, time.time() if now is None else now)
+        c.commit()
+    return ok, error
+
+
 def command(doc: dict) -> tuple[bool, str, dict]:
     """فرمان را روی roztash/<gw>/cmd منتشر می‌کند؛ گیت‌وی همان مچ‌بند را می‌فرستد.
 
@@ -2127,7 +2355,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        if path not in ("/api/command", "/api/employees", "/api/monitoring", "/api/monitoring/settings",
+        if path not in ("/api/command", "/api/measurements", "/api/alerts/ack",
+                        "/api/gateways/discover", "/api/employees", "/api/monitoring", "/api/monitoring/settings",
                         "/api/bands", "/api/catalogs", "/api/gateways"):
             self._send(404, {"ok": False, "error": "not found"})
             return
@@ -2145,12 +2374,25 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(400, {"ok": False, "error": "bad json body"})
             return
-        if path in ("/api/monitoring", "/api/monitoring/settings"):
+        if path in ("/api/monitoring", "/api/monitoring/settings", "/api/measurements",
+                    "/api/alerts/ack", "/api/gateways/discover"):
             actor = verify_request("POST", self.path, body, self.headers)
             if not actor or doc.get("actor") != actor:
                 self._send(401, {"ok": False, "error": "unauthorized"})
                 return
-        if path == "/api/command":
+        if path == "/api/measurements":
+            ok, err, info = request_measurement(doc)
+            self._send(200 if ok else (403 if err == "forbidden" else 400),
+                       {"ok":ok,"error":err or None,"info":info})
+        elif path == "/api/alerts/ack":
+            ok, err = acknowledge_live_alert(doc)
+            self._send(200 if ok else (403 if err == "forbidden" else 400),
+                       {"ok":ok,"error":err or None})
+        elif path == "/api/gateways/discover":
+            ok, err, rows = discover_network_gateways(actor=str(doc.get("actor") or ""))
+            self._send(200 if ok else (403 if err == "forbidden" else 503),
+                       {"ok":ok,"error":err or None,"gateways":rows})
+        elif path == "/api/command":
             ok, err, info = command(doc)
             self._send(200 if ok else 400,
                        {"ok": ok, "info": info, "error": err or None})

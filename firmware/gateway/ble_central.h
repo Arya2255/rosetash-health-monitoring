@@ -58,11 +58,14 @@ class BleCentral {
   bool jobFinished() const;
   // Enqueue one GATT job on the dedicated worker. MQTT/presence never wait
   // for connection/discovery. The worker owns all measurement state until done.
-  bool startHealth(const char* mac, bool vitals = false);
+  bool startHealth(const char* mac, bool vitals = false,
+                  const char* manual_request_id = nullptr);
   // Connects, sends (05,50) and disconnects: makes the band vibrate (find-device).
   bool startVibrate(const char* mac, bool emergency = false, uint8_t repeats = 1,
                     uint8_t completed_pulses = 0);
   bool wasVibrate() const { return vibrate_mode_; }
+  bool wasManualMeasure() const { return manual_request_id_[0] != 0; }
+  const char* manualRequestId() const { return manual_request_id_; }
   bool wasVibrateEmergency() const { return vibrate_emergency_; }
   bool vibrated() const { return vibrate_mode_ && vibrate_acks_ == vibrate_repeats_; }
   uint8_t vibrateAcks() const { return vibrate_acks_; }
@@ -73,6 +76,7 @@ class BleCentral {
   Fail failure() const { return fail_; }
   const char* jobMac() const { return job_mac_; }
   uint8_t sampleCount() const { return sample_count_; }
+  uint8_t validHrSampleCount() const;
   const uint8_t* samples() const { return samples_; }
   bool wearingOk() const { return wearing_ok_; }
   bool ended() const { return ended_; }
@@ -116,7 +120,8 @@ class BleCentral {
   void onNotifyData(const uint8_t* data, size_t len);
   void drainNotifications();
   void enqueueNotify(uint32_t generation, const uint8_t* data, size_t len);
-  bool launchJob(const char* mac, bool vitals, bool vibrate, bool emergency = false);
+  bool launchJob(const char* mac, bool vitals, bool vibrate, bool emergency = false,
+                 const char* manual_request_id = nullptr);
   bool runHealth(const char* mac, bool vitals);
   bool runVibrate(const char* mac);
   bool jobAllowed() const;
@@ -153,6 +158,7 @@ class BleCentral {
   uint32_t last_scan_retry_ms_ = 0;
   Fail fail_ = Fail::None;
   char job_mac_[18] = {0};
+  char manual_request_id_[65] = {0};
   uint8_t samples_[kMaxSamples]{};
   uint8_t sample_count_ = 0;
   bool wearing_ok_ = true;

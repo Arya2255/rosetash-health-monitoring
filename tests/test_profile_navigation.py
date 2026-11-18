@@ -105,20 +105,19 @@ class ProfileNavigationTests(unittest.TestCase):
                     back.on_click(None)
                     self.assertEqual(self.app.state['view'], origin)
 
-    def test_dashboard_emergency_and_employee_cards_return_to_dashboard(self):
-        self.enterContext(patch.object(dashboard, 'live_summary', return_value=None))
-        self.app.go('dashboard')
-        view = dashboard.dashboard_view(self.app)
-        urgent = next(c for c in walk(view) if isinstance(c, ft.Button)
-                      and c.content == 'اقدام فوری')
-        urgent.on_click(None)
-        self.assertEqual(self.app.state['back_to'], 'dashboard')
-        self.assertEqual(active_labels(self.app.ui['sidebar'].content), ['داشبورد'])
+    def test_dashboard_live_employee_card_preserves_dashboard_origin(self):
+        mac = 'aa:bb:cc:dd:ee:01'
+        person = {'mac': mac, 'registered': True, 'name': 'Fixture',
+                  'status': 'danger', 'dept': 'Fixture unit', 'present': True}
+        self.enterContext(patch.object(dashboard, 'live_status', return_value={
+            'ok': True, 'employees': [person], 'alerts_active': []}))
         self.app.go('dashboard')
         view = dashboard.dashboard_view(self.app)
         grid = next(c for c in walk(view) if isinstance(c, ft.GridView))
         grid.controls[0].on_click(None)
+        self.assertEqual(self.app.state['emp'], mac)
         self.assertEqual(self.app.state['back_to'], 'dashboard')
+        self.assertEqual(active_labels(self.app.ui['sidebar'].content), ['داشبورد'])
 
     def test_registered_employee_row_keeps_shift_group_search_and_origin(self):
         doc = [{'mac': 'aa:bb:cc:dd:ee:01', 'registered': True, 'name': 'Fixture',

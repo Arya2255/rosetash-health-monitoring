@@ -1,4 +1,5 @@
 #include "ble_central.h"
+#include "hr_sample.h"
 
 // Verified GATT UUIDs. Scan identity comes ONLY from the software policy MAC,
 // since passive advertisements need not contain a name or service UUID.
@@ -178,8 +179,8 @@ void BleCentral::poll() {
   }
 }
 
-bool BleCentral::startHealth(const char* mac, bool vitals) {
-  return launchJob(mac, vitals, false);
+bool BleCentral::startHealth(const char* mac, bool vitals, const char* manual_request_id) {
+  return launchJob(mac, vitals, false, false, manual_request_id);
 }
 bool BleCentral::startVibrate(const char* mac, bool emergency, uint8_t repeats,
                               uint8_t completed_pulses) {
@@ -194,7 +195,8 @@ bool BleCentral::startVibrate(const char* mac, bool emergency, uint8_t repeats,
   }
   return started;
 }
-bool BleCentral::launchJob(const char* mac, bool vitals, bool vibrate, bool emergency) {
+bool BleCentral::launchJob(const char* mac, bool vitals, bool vibrate, bool emergency,
+                          const char* manual_request_id) {
   if (!worker_ || worker_active_.load() || state_ != JobState::Idle ||
       !hasFreshSighting(mac, millis(), emergency)) return false;
   portENTER_CRITICAL(&mux_);
@@ -205,6 +207,10 @@ bool BleCentral::launchJob(const char* mac, bool vitals, bool vibrate, bool emer
     return false;
   }
   strlcpy(job_mac_, mac, sizeof job_mac_);
+  if (manual_request_id && manual_request_id[0])
+    strlcpy(manual_request_id_, manual_request_id, sizeof manual_request_id_);
+  else
+    manual_request_id_[0] = 0;
   vibrate_mode_ = vibrate;
   vibrate_emergency_ = emergency;
   vitals_enabled_ = vitals;
@@ -358,6 +364,13 @@ bool BleCentral::healthBusy() const {
 bool BleCentral::jobFinished() const {
   return !worker_active_.load() &&
          (state_ == JobState::Done || state_ == JobState::Failed);
+}
+
+uint8_t BleCentral::validHrSampleCount() const {
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < sample_count_; ++i)
+    if (roztash::isValidHrSample(samples_[i])) ++count;
+  return count;
 }
 
 void BleCentral::finishJob(JobState st, Fail f) {
@@ -653,6 +666,7 @@ void BleCentral::clearJob() {
   notify_char_ = nullptr;
   sample_count_ = 0;
   job_mac_[0] = 0;
+  manual_request_id_[0] = 0;
   stage_ = Stage::Hr;
   stage_settle_ms_ = 0;
   vitals_enabled_ = false;

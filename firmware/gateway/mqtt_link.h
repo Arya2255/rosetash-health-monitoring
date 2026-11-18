@@ -20,6 +20,7 @@
 #include "health_schedule.h"
 #include "mqtt_packet_guard.h"
 #include "vibration_command.h"
+#include "manual_measure.h"
 
 class PolicyNetworkClient : public NetworkClient {
  public:
@@ -48,7 +49,7 @@ class MqttLink {
   void publishStatus(const char* fw, const char* ip,
                      int bands_seen, uint32_t adv_seen);
   void publishPresence(BleCentral& ble);
-  void publishHealth(const BleCentral& ble);
+  bool publishHealth(const BleCentral& ble);
   void publishVitals(const BleCentral& ble);
   void publishEvent(const char* type, const char* mac, const char* detail);
 
@@ -59,16 +60,32 @@ class MqttLink {
   void finishVibration(bool success, uint8_t completed_pulses, const char* detail = "");
   void rejectVibration(const char* detail, uint8_t completed_pulses = 0);
 
+  // One bounded manual HR request is admitted independently of vibration and
+  // the scheduled window, but is started only when the GATT worker is idle.
+  bool takeManualMeasure(char* mac, size_t mac_cap, bool* vitals,
+                         char* request_id, size_t request_id_cap);
+  void manualMeasureStarted();
+  void finishManualMeasure(const char* type, const char* detail = "");
+  void rejectPendingManualMeasure(const char* detail);
+  bool manualMeasurePending() const { return manual_measurements_.pending(); }
+  bool manualMeasureActive() const { return manual_measurements_.active(); }
+  bool cancelActiveManualMeasure(roztash::ManualMeasureCommand& command) {
+    return manual_measurements_.cancelActive(command);
+  }
+
  private:
   bool send(const char* topic, const char* payload, bool retained,
             bool queue_if_offline);
-  void queueLine(const char* topic, const char* payload);
+  bool queueLine(const char* topic, const char* payload);
   void flushQueue();
   void revokePolicy();
   void receivePolicy(const uint8_t* payload, size_t len);
   void publishCommandEvent(const char* type, const roztash::VibrationCommand& cmd,
                            const char* detail);
   void cancelPendingCommand(const char* detail);
+  void publishManualEvent(const char* type,
+                          const roztash::ManualMeasureCommand& command,
+                          const char* detail);
 
   BleCentral* ble_ = nullptr;
   roztash::HealthSchedule* schedule_ = nullptr;
@@ -83,4 +100,5 @@ class MqttLink {
   char base_[40] = {0};
   uint32_t last_mqtt_attempt_ms_ = 0;
   roztash::VibrationCommands vibration_commands_;
+  roztash::ManualMeasureQueue manual_measurements_;
 };
