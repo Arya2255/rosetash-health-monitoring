@@ -646,12 +646,13 @@ def employee_scan_policy(now: float | None = None) -> dict:
             "SELECT mac FROM employees WHERE staff_group='hse' AND mac IS NOT NULL")})
         try:
             health_active = sorted(active_employee_macs(employees, now_dt, limit=MAX_ACTIVE_MACS))
-            active = sorted(set(health_active)
-                            | set(emergency_macs))
-            if len(active) > MAX_ACTIVE_MACS:
+            # The gateway sees the union for presence, but only on-duty bands
+            # belong in the ordinary-command list shared by all gateways.
+            active = health_active
+            if len(set(health_active) | set(emergency_macs)) > MAX_ACTIVE_MACS:
                 raise ValueError("too many active employee wristbands")
         except ValueError as exc:
-            active, health_active, error = [], [], str(exc)
+            active, health_active, emergency_macs, error = [], [], [], str(exc)
         transition = min(transitions) if transitions else None
         remaining = transition - now if transition is not None else 90
         lease = max(1, min(90, math.floor(remaining)))
@@ -661,8 +662,6 @@ def employee_scan_policy(now: float | None = None) -> dict:
         installed = [r["gw"] for r in c.execute(
             "SELECT gw FROM gateway_registry WHERE kind='installed' ORDER BY gw")]
         health_by_gateway = {gw: [] for gw in installed}
-        emergency_macs = sorted({r["mac"] for r in c.execute(
-            "SELECT mac FROM employees WHERE staff_group='hse' AND mac IS NOT NULL")})
         winners = _fresh_bands(c, now, installed_only=True)
         last_seen = {}
         for row in c.execute(
@@ -676,7 +675,8 @@ def employee_scan_policy(now: float | None = None) -> dict:
             if gw in health_by_gateway:
                 health_by_gateway[gw].append(mac)
         interval = _monitoring_settings(c)["health_interval_s"]
-    return {"v": 1, "active_macs": active, "health_by_gateway": health_by_gateway,
+    return {"v": 1, "active_macs": active, "health_macs": health_active,
+            "health_by_gateway": health_by_gateway,
             "emergency_macs": emergency_macs,
             "health_interval_s": interval, "generated_at": now, "lease_s": lease,
             "next_transition_at": transition, "error": error, "allow_unassigned": False}
@@ -1787,7 +1787,10 @@ def dispatch_battery_alerts(now: float | None = None) -> dict:
                                  (mac, gw, moment)).fetchone()
                 staff_busy = c.execute(
                     "SELECT 1 FROM staff_alert_delivery WHERE gateway=? AND status='awaiting_ack' "
-                    "LIMIT 1", (gw,)).fetchone()
+                    "AND next_attempt_at>? AND attempts<? "
+                    "AND (? - COALESCE(first_attempt_at,?))<? LIMIT 1",
+                    (gw, moment, staff_alert_policy.MAX_ATTEMPTS, moment, moment,
+                     staff_alert_policy.RETRY_WINDOW_SECONDS)).fetchone()
                 if busy or staff_busy:
                     continue
                 request = claim_battery(c, row, gw, moment)
@@ -1834,6 +1837,18 @@ def dispatch_alert_notifications(now: float | None = None) -> dict:
             used_gateways, claims = set(), []
             for row in rows:
                 target, group = row["target_mac"], row["target_group"]
+                expired = (row["attempts"] >= staff_alert_policy.MAX_ATTEMPTS or
+                    (row["first_attempt_at"] is not None and
+                     moment-row["first_attempt_at"] >= staff_alert_policy.RETRY_WINDOW_SECONDS))
+                if expired and row["status"] != "unconfirmed":
+                    c.execute("UPDATE staff_alert_delivery SET status='unconfirmed',last_error='ack_not_received' "
+                              "WHERE request_id=? AND status!='confirmed'", (row["request_id"],))
+                    row = c.execute("SELECT * FROM staff_alert_delivery WHERE request_id=?",
+                                    (row["request_id"],)).fetchone()
+                if row["status"] == "unconfirmed":
+                    # The gateway may still have this request in its duplicate
+                    # cache. Do not move the same request to another gateway.
+                    continue
                 if group == "hse":
                     allowed = target in policy["emergency_macs"]
                 else:
@@ -1861,8 +1876,10 @@ def dispatch_alert_notifications(now: float | None = None) -> dict:
                     continue
                 waiting = c.execute(
                     "SELECT 1 FROM staff_alert_delivery WHERE gateway=? AND request_id!=? "
-                    "AND status='awaiting_ack' AND next_attempt_at>? LIMIT 1",
-                    (gw,row["request_id"],moment)).fetchone()
+                    "AND status='awaiting_ack' AND next_attempt_at>? AND attempts<? "
+                    "AND (? - COALESCE(first_attempt_at,?))<? LIMIT 1",
+                    (gw, row["request_id"], moment, staff_alert_policy.MAX_ATTEMPTS,
+                     moment, moment, staff_alert_policy.RETRY_WINDOW_SECONDS)).fetchone()
                 if waiting:
                     continue
                 battery_busy = c.execute(
@@ -1870,13 +1887,6 @@ def dispatch_alert_notifications(now: float | None = None) -> dict:
                     "AND confirmed_at IS NULL AND attempts>0 AND delivery_status IN ('dispatching','awaiting_ack') "
                     "AND next_attempt_at>? LIMIT 1", (gw, moment)).fetchone()
                 if battery_busy:
-                    continue
-                expired = (row["attempts"] >= staff_alert_policy.MAX_ATTEMPTS or
-                    (row["first_attempt_at"] is not None and
-                     moment-row["first_attempt_at"] >= staff_alert_policy.RETRY_WINDOW_SECONDS))
-                if expired:
-                    c.execute("UPDATE staff_alert_delivery SET status='unconfirmed',last_error='ack_not_received' WHERE request_id=?",
-                              (row["request_id"],))
                     continue
                 c.execute("UPDATE staff_alert_delivery SET attempts=attempts+1,gateway=?,status='awaiting_ack',"
                           "next_attempt_at=?,first_attempt_at=COALESCE(first_attempt_at,?),sent_at=?,last_error=NULL "
@@ -1897,7 +1907,8 @@ def dispatch_alert_notifications(now: float | None = None) -> dict:
             if not ok:
                 with _lock:
                     c=db()
-                    c.execute("UPDATE staff_alert_delivery SET status='failed',last_error=? WHERE request_id=?",
+                    c.execute("UPDATE staff_alert_delivery SET status='failed',last_error=? WHERE request_id=? "
+                              "AND status NOT IN ('confirmed','closed','cancelled')",
                               (str(detail)[:160],row["request_id"]))
                     c.commit()
             results[row["target_mac"]]="sent" if ok else "publish_failed"
@@ -2018,7 +2029,7 @@ def command(doc: dict) -> tuple[bool, str, dict]:
         assigned = db().execute("SELECT mac,staff_group FROM employees WHERE mac=?", (mac,)).fetchone()
     if emergency and (assigned is None or assigned["staff_group"] != "hse"):
         return False, "emergency vibration is only for HSE", {}
-    if not emergency and assigned is not None and mac not in policy["active_macs"]:
+    if not emergency and assigned is not None and mac not in policy["health_macs"]:
         return False, "employee monitoring is paused or outside scheduled hours", {}
     topic = f"roztash/{gw}/cmd"
     command_doc = {"action": action, "mac": mac}

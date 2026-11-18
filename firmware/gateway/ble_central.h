@@ -64,7 +64,7 @@ class BleCentral {
                     uint8_t completed_pulses = 0);
   bool wasVibrate() const { return vibrate_mode_; }
   bool wasVibrateEmergency() const { return vibrate_emergency_; }
-  bool vibrated() const { return vibrated_; }
+  bool vibrated() const { return vibrate_mode_ && vibrate_acks_ == vibrate_repeats_; }
   uint8_t vibrateAcks() const { return vibrate_acks_; }
   void poll();  // policy monitor only: lease, cancel and scan watchdog
 
@@ -114,6 +114,7 @@ class BleCentral {
 
   void onResult(const NimBLEAdvertisedDevice* dev);
   void onNotifyData(const uint8_t* data, size_t len);
+  void drainNotifications();
   void enqueueNotify(uint32_t generation, const uint8_t* data, size_t len);
   bool launchJob(const char* mac, bool vitals, bool vibrate, bool emergency = false);
   bool runHealth(const char* mac, bool vitals);
@@ -172,7 +173,6 @@ class BleCentral {
   // vibrate job (find-device): reuses the connect/subscribe path
   bool vibrate_mode_ = false;
   bool vibrate_emergency_ = false;
-  bool vibrated_ = false;
   uint8_t vibrate_acks_ = 0;
   uint8_t vibrate_repeats_ = 1;
   bool vibrate_write_pending_ = false;

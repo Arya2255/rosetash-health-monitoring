@@ -39,9 +39,16 @@ class NimBLEScan {
 class NimBLERemoteCharacteristic {
  public:
   using Callback = std::function<void(NimBLERemoteCharacteristic*, uint8_t*, size_t, bool)>;
-  bool subscribe(bool, Callback, bool) { return true; }
-  bool writeValue(const uint8_t*, size_t, bool) { return true; }
+  inline static std::function<void(NimBLERemoteCharacteristic&, const uint8_t*, size_t)> on_write;
+  bool subscribe(bool, Callback cb, bool) { callback_ = cb; return true; }
+  bool writeValue(const uint8_t* data, size_t size, bool) {
+    if (on_write) on_write(*this, data, size);
+    return true;
+  }
+  void notify(uint8_t* data, size_t size) { if (callback_) callback_(this, data, size, true); }
   std::string readValue() { return {}; }
+ private:
+  Callback callback_;
 };
 class NimBLERemoteService {
   NimBLERemoteCharacteristic ch_;

@@ -8,6 +8,7 @@ static const NimBLEUUID kNotifyUuid("4cdabaa2-2cea-c0c1-b38d-a0481ae60a97");
 
 static const uint32_t kConnectTimeoutMs = 10000;
 static const uint32_t kStageSettleMs = 1500;  // wait for late result frames
+static const uint32_t kVibrationGapMs = 250;
 
 // Standard GATT services the band also exposes (verified live 2026-10-11):
 //   180F/2A19 battery percent (read+notify), 180A/2A27-2A29 device information.
@@ -186,7 +187,6 @@ bool BleCentral::startVibrate(const char* mac, bool emergency, uint8_t repeats,
   vibrate_repeats_ = repeats;
   vibrate_acks_ = completed_pulses;
   vibrate_write_pending_ = false;
-  vibrated_ = false;
   const bool started = launchJob(mac, false, true, emergency);
   if (!started) {
     vibrate_repeats_ = 1;
@@ -225,23 +225,27 @@ void BleCentral::workerLoop() {
     else if (vibrate_mode_) runVibrate(job_mac_);
     else runHealth(job_mac_, vitals_enabled_);
     while (state_ == JobState::Measuring) {
-      Notification n;
-      while (xQueueReceive(notifications_, &n, 0) == pdTRUE)
-        if (n.generation == job_generation_ && jobAllowed()) onNotifyData(n.data, n.len);
+      drainNotifications();
       pollMeasurement();
       vTaskDelay(pdMS_TO_TICKS(10));
     }
-    if (!jobAllowed()) {
+    // Finish disconnect before handing the result/next job back to loop().
+    if (job_client_ && job_client_->isConnected()) job_client_->disconnect();
+    while (job_client_ && job_client_->getConnHandle() != BLE_HS_CONN_HANDLE_NONE)
+      vTaskDelay(pdMS_TO_TICKS(10));
+    // A vibration ACK admitted before revocation/disconnect still counts.
+    // Never drain health samples after the measurement has ended.
+    if (vibrate_mode_) drainNotifications();
+    if (vibrated()) {
+      fail_ = Fail::None;
+      state_ = JobState::Done;
+    } else if (!jobAllowed()) {
       fail_ = Fail::Policy;
       state_ = JobState::Failed;
       sample_count_ = 0;
       vitals_ = Vitals{};
       cancelled_ = true;
     }
-    // Finish disconnect before handing the result/next job back to loop().
-    if (job_client_ && job_client_->isConnected()) job_client_->disconnect();
-    while (job_client_ && job_client_->getConnHandle() != BLE_HS_CONN_HANDLE_NONE)
-      vTaskDelay(pdMS_TO_TICKS(10));
     xSemaphoreTake(lifecycle_, portMAX_DELAY);
     portENTER_CRITICAL(&mux_);
     job_client_ = nullptr;
@@ -249,6 +253,11 @@ void BleCentral::workerLoop() {
     portEXIT_CRITICAL(&mux_);
     xSemaphoreGive(lifecycle_);
   }
+}
+void BleCentral::drainNotifications() {
+  Notification n;
+  while (xQueueReceive(notifications_, &n, 0) == pdTRUE)
+    if (n.generation == job_generation_) onNotifyData(n.data, n.len);
 }
 void BleCentral::enqueueNotify(uint32_t generation, const uint8_t* data, size_t len) {
   if (len > sizeof(Notification::data)) return;
@@ -444,7 +453,6 @@ bool BleCentral::runHealth(const char* mac, bool vitals) {
   stage_ = Stage::Hr;
   stage_end_type_ = 0;
   stage_settle_ms_ = 0;
-  vibrated_ = false;
 
   if (!beginJob(mac)) return false;
 
@@ -469,7 +477,6 @@ bool BleCentral::runHealth(const char* mac, bool vitals) {
 // the band acknowledges and vibrates.
 bool BleCentral::runVibrate(const char* mac) {
   vitals_ = Vitals{};
-  vibrated_ = false;
   vibrate_write_pending_ = false;
   vibrate_write_at_ = millis();
 
@@ -572,28 +579,21 @@ void BleCentral::advanceStage() {
 }
 
 void BleCentral::pollMeasurement() {
-  if (!jobAllowed()) { finishJob(JobState::Failed, Fail::Policy); return; }
   if (state_ != JobState::Measuring) return;
+  if (vibrated()) {
+    finishJob(JobState::Done, Fail::None);
+    return;
+  }
+  if (!jobAllowed()) { finishJob(JobState::Failed, Fail::Policy); return; }
   if (!job_client_ || !job_client_->isConnected()) {
     finishJob(JobState::Failed, Fail::Connect);
     return;
   }
   const uint32_t now = millis();
 
-  // Vibrate jobs end as soon as the band answers (05,50) — or after a short
-  // grace window if the ack never arrives.
+  // Only one write may be awaiting an ACK; the callback's queued ACK sets
+  // the next due time. A timeout reports the number already acknowledged.
   if (vibrate_mode_) {
-    if (vibrate_write_pending_ && vibrated_) {
-      vibrate_write_pending_ = false;
-      ++vibrate_acks_;
-      if (vibrate_acks_ >= vibrate_repeats_) {
-        finishJob(JobState::Done, Fail::None);
-        Serial.printf("[ble] vibrate %s: pulses=%u\n", job_mac_, (unsigned)vibrate_acks_);
-        return;
-      }
-      vibrated_ = false;
-      vibrate_write_at_ = now + 250;
-    }
     if (!vibrate_write_pending_ && vibrate_acks_ < vibrate_repeats_ &&
         static_cast<int32_t>(now - vibrate_write_at_) >= 0) {
       if (!jobAllowed()) { finishJob(JobState::Failed, Fail::Policy); return; }
@@ -658,7 +658,6 @@ void BleCentral::clearJob() {
   vitals_enabled_ = false;
   vibrate_mode_ = false;
   vibrate_emergency_ = false;
-  vibrated_ = false;
   vibrate_acks_ = 0;
   vibrate_repeats_ = 1;
   vibrate_write_pending_ = false;
@@ -668,7 +667,9 @@ void BleCentral::clearJob() {
 }
 
 void BleCentral::onNotifyData(const uint8_t* data, size_t len) {
-  if (!jobAllowed()) return;
+  // Only the vibration ACK can survive a policy change between enqueue and
+  // consumption. enqueueNotify still rejects all new frames after revocation.
+  if (!vibrate_mode_ && !jobAllowed()) return;
   fundo::Parsed p;
   if (!fundo::parseFrame(data, len, p) || !p.valid || !p.crc_ok) {
     Serial.printf("[ble] notify unparsed (len=%u)\n", (unsigned)len);
@@ -677,11 +678,15 @@ void BleCentral::onNotifyData(const uint8_t* data, size_t len) {
   Serial.printf("[ble] notify (%02X,%02X) dlen=%u stage=%u\n", p.cmd1, p.cmd2,
                 (unsigned)p.data_len, (unsigned)stage_);
 
-  // --- find-device (vibrate) ack (05,50) -------------------------------------
-  if (p.cmd1 == fundo::CMD_FIND_DEVICE && p.cmd2 == fundo::SUB_FIND_DEVICE) {
-    if (!vibrate_mode_ || !vibrate_write_pending_ || vibrated_) return;
-    vibrated_ = true;
-    Serial.println("[ble] vibrate ack");
+  if (vibrate_mode_) {
+    // The verified find-device ACK is (05,50,[00]); one ACK per outstanding write.
+    if (vibrate_write_pending_ && p.cmd1 == fundo::CMD_FIND_DEVICE &&
+        p.cmd2 == fundo::SUB_FIND_DEVICE && p.data_len == 1 && p.data[0] == 0) {
+      vibrate_write_pending_ = false;
+      ++vibrate_acks_;
+      vibrate_write_at_ = millis() + kVibrationGapMs;
+      Serial.printf("[ble] vibrate ack %u/%u\n", (unsigned)vibrate_acks_, (unsigned)vibrate_repeats_);
+    }
     return;
   }
 

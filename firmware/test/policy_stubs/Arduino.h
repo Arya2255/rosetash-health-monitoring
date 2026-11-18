@@ -22,10 +22,18 @@ using TaskHandle_t = void*;
 constexpr int pdPASS = 1, pdTRUE = 1;
 constexpr uint32_t portMAX_DELAY = UINT32_MAX;
 #define pdMS_TO_TICKS(ms) (ms)
-inline int xTaskCreate(void (*)(void*), const char*, uint32_t, void*, int, TaskHandle_t* handle) {
-  if (handle) *handle = reinterpret_cast<void*>(1);
+inline void (*fake_worker)(void*) = nullptr;
+inline void* fake_worker_arg = nullptr;
+inline void (*fake_wait)() = nullptr;
+inline void (*fake_delay)(uint32_t) = nullptr;
+inline int xTaskCreate(void (*entry)(void*), const char*, uint32_t, void* arg, int, TaskHandle_t* handle) {
+  if (handle) {
+    *handle = reinterpret_cast<void*>(1);
+    fake_worker = entry;
+    fake_worker_arg = arg;
+  }
   return pdPASS;
 }
 inline void xTaskNotifyGive(TaskHandle_t) {}
-inline void ulTaskNotifyTake(int, uint32_t) {}
-inline void vTaskDelay(uint32_t) {}
+inline void ulTaskNotifyTake(int, uint32_t) { if (fake_wait) fake_wait(); }
+inline void vTaskDelay(uint32_t ms) { if (fake_delay) fake_delay(ms); }

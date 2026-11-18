@@ -143,11 +143,12 @@ void loop() {
   if (!ble.healthBusy()) {
     if (ble.jobFinished()) {
       if (ble.wasVibrate()) {
-        if (ble.jobRevoked() || (ble.wasVibrateEmergency()
+        if (ble.vibrated()) mqtt.finishVibration(true, ble.vibrateAcks());
+        else if (ble.jobRevoked() || (ble.wasVibrateEmergency()
             ? !mqtt.policy().allowsEmergency(ble.jobMac(), millis())
             : !mqtt.policy().allows(ble.jobMac(), millis())))
-          mqtt.rejectVibration("policy_revoked");
-        else mqtt.finishVibration(ble.vibrated(), ble.vibrateAcks());
+          mqtt.rejectVibration("policy_revoked", ble.vibrateAcks());
+        else mqtt.finishVibration(false, ble.vibrateAcks());
       } else if (ble.jobRevoked() || !mqtt.policy().allows(ble.jobMac(), millis())) {
         // Discard all results of revoked work; do not leak an off-duty sample.
       } else {

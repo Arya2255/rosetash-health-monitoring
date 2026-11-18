@@ -1,6 +1,6 @@
 {
   "schema": "roztash-gateway-bundle/v1",
-  "built_at": "2026-11-18T17:17:01+03:30",
+  "built_at": "2026-11-18T20:47:49+03:30",
   "fw_version": "0.5.2-alerts",
   "fqbn": "esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=min_spiffs,CDCOnBoot=cdc",
   "core": "esp32:esp32 3.3.12",
@@ -26,8 +26,8 @@
       {
         "addr": "0x10000",
         "file": "firmware/app.bin",
-        "sha256": "1fcbd0cae2fd5e6f19b074ca99f9c79344cba7ba94988140c844c728bf6d1fba",
-        "size": 935008
+        "sha256": "539c5de38c36d515bacb7a5786039c83a8cecb7bba66b4b61da7673fd7cc82f1",
+        "size": 935152
       },
       {
         "addr": "0xe000",
@@ -38,7 +38,7 @@
       {
         "addr": "0x3D0000",
         "file": "firmware/littlefs-blank.bin",
-        "sha256": "53e0b28f7e37e2f92153e69184d6f93903f281538cc0c160817d09d93b0f6f33",
+        "sha256": "50b1538aea1179c879b19e258213fbf331a3e5e9f8132f01462f4c167fe1f04d",
         "size": 131072
       }
     ]

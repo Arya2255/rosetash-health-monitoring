@@ -284,10 +284,11 @@ void MqttLink::finishVibration(bool success, uint8_t completed_pulses, const cha
   vibration_commands_.finish(success, millis(), completed_pulses);
 }
 
-void MqttLink::rejectVibration(const char* detail) {
+void MqttLink::rejectVibration(const char* detail, uint8_t completed_pulses) {
   const auto* command = vibration_commands_.active();
   if (!command) return;
   roztash::VibrationCommand result = *command;
+  if (completed_pulses > result.completed_pulses) result.completed_pulses = completed_pulses;
   publishCommandEvent("cmd_reject", result, detail);
   vibration_commands_.finish(false, millis(), result.completed_pulses);
 }

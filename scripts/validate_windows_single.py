@@ -127,6 +127,7 @@ def validate_exe(executable, root=ROOT):
                    "uvicorn", "uvicorn.protocols.websockets.websockets_impl",
                    "provisioner", "views.login", "remote", "portable_runtime",
                    "private_profile", "state_paths", "backend.bridge", "backend.battery_alerts",
+                   "backend.staff_alerts",
                    "ble_discovery", "bleak", "bleak.backends.winrt.scanner",
                    "tools.discovery_udp",
                    "http.server", "smtplib", "urllib.request", "tzdata"):

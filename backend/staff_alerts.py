@@ -50,12 +50,7 @@ def ensure_schema(connection):
 def sync_episodes(connection, employees, now):
     """Open one episode per active registered band/issue and close recovered ones."""
     active = {}
-    resolved_sources = set()
-    for person in employees or []:
-        if (isinstance(person, dict) and person.get("registered") is True
-                and person.get("present") is True
-                and (person.get("health") is not None or person.get("vitals") is not None)):
-            resolved_sources.add(str(person.get("mac") or "").lower())
+    for person in employees or ():
         if (not isinstance(person, dict) or person.get("registered") is not True
                 or person.get("status") not in ("warn", "danger")):
             continue
@@ -75,7 +70,10 @@ def sync_episodes(connection, employees, now):
     current = {row["fingerprint"]: row for row in connection.execute(
         "SELECT * FROM staff_alert_episode WHERE closed_at IS NULL")}
     for fingerprint, episode in current.items():
-        if fingerprint not in active and episode["source_mac"] in resolved_sources:
+        # A source that leaves the valid monitoring view, loses fresh telemetry,
+        # or becomes ineligible must not keep an old episode and its deliveries
+        # alive indefinitely. A later warning creates a new episode id.
+        if fingerprint not in active:
             connection.execute("UPDATE staff_alert_episode SET closed_at=? WHERE id=? AND closed_at IS NULL",
                                (now, episode["id"]))
             connection.execute("UPDATE staff_alert_delivery SET status='closed',last_error='alert_closed' "

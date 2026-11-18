@@ -57,7 +57,7 @@ class MqttLink {
                    bool* emergency = nullptr, uint8_t* repeats = nullptr,
                    uint8_t* completed_pulses = nullptr);
   void finishVibration(bool success, uint8_t completed_pulses, const char* detail = "");
-  void rejectVibration(const char* detail);
+  void rejectVibration(const char* detail, uint8_t completed_pulses = 0);
 
  private:
   bool send(const char* topic, const char* payload, bool retained,
