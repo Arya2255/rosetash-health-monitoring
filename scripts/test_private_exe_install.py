@@ -1,4 +1,5 @@
 """Exercise private first-run configuration using ONLY synthetic CI values."""
+from contextlib import closing
 import io
 import json
 import os
@@ -22,9 +23,11 @@ def main():
         binary = root/'app.exe'
         shutil.copy2(original,binary)
         database=root/'seed.db'
-        with sqlite3.connect(database) as db:
+        # SQLite's transaction context leaves the file handle open on Windows.
+        with closing(sqlite3.connect(database)) as db:
             db.execute('CREATE TABLE test_marker(value TEXT)')
             db.execute('INSERT INTO test_marker VALUES(?)',('synthetic',))
+            db.commit()
         out=io.BytesIO()
         with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
             z.writestr('remote.json',json.dumps({'auto_start':False,'smtp':{
@@ -47,13 +50,8 @@ def main():
         cfg.write_text(json.dumps(parsed))
         subprocess.run([str(binary),'--inspect-install'],env=env,check=True,timeout=60)
         assert json.loads(cfg.read_text())['smtp']['password']=='LOCALLY_CHANGED'
-        db=sqlite3.connect(root/'profile/state/live.db')
-        try:
+        with closing(sqlite3.connect(root/'profile/state/live.db')) as db:
             assert db.execute('SELECT value FROM test_marker').fetchone()==('synthetic',)
-        finally:
-            # SQLite's context manager commits/rolls back but does not close the
-            # connection; Windows refuses TemporaryDirectory cleanup otherwise.
-            db.close()
         assert not (root/'profile/session.json').exists()
     print('PASS: personalized EXE starts; config/DB imported; upgrades preserve state; no credentials or mail used')
 
