@@ -1,4 +1,5 @@
 #include "manual_measure.h"
+#include "hr_sample.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -89,10 +90,21 @@ static void manual_success_requires_a_valid_hr_sample() {
   assert(!roztash::isValidHrSample(241));
 }
 
+static void mixed_hr_samples_publish_only_valid_values() {
+  const uint8_t input[] = {0, 89, 241, 120, 29};
+  uint8_t output[8] = {};
+  uint32_t sum = 0;
+  const uint8_t count = roztash::filterHrSamples(input, 5, output, &sum);
+  assert(count == 2);
+  assert(output[0] == 89 && output[1] == 120);
+  assert(sum == 209);
+}
+
 int main() {
   parser_accepts_only_the_manual_hr_contract();
   queue_is_bounded_idempotent_and_expires_without_interrupting_work();
   manual_measure_requires_health_policy_and_fresh_sighting();
   manual_success_requires_a_valid_hr_sample();
+  mixed_hr_samples_publish_only_valid_values();
   std::puts("manual_measure_host_test: parser, policy, queue, TTL, dedupe and valid-HR gate PASS");
 }

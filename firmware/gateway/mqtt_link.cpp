@@ -478,14 +478,13 @@ bool MqttLink::publishHealth(const BleCentral& ble) {
   doc["ended"] = ble.ended();
   const uint8_t n = ble.sampleCount();
   const uint8_t* s = ble.samples();
-  JsonArray bpm = doc["bpm"].to<JsonArray>();
+  uint8_t valid[32] = {};
   uint32_t sum = 0;
-  for (uint8_t i = 0; i < n; ++i) {
-    bpm.add(s[i]);
-    sum += s[i];
-  }
-  doc["n"] = n;
-  doc["avg"] = n ? (float)sum / n : 0;
+  const uint8_t valid_count = roztash::filterHrSamples(s, n, valid, &sum);
+  JsonArray bpm = doc["bpm"].to<JsonArray>();
+  for (uint8_t i = 0; i < valid_count; ++i) bpm.add(valid[i]);
+  doc["n"] = valid_count;
+  doc["avg"] = valid_count ? (float)sum / valid_count : 0;
   String out;
   serializeJson(doc, out);
   char topic[48];
