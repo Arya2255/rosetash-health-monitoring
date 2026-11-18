@@ -47,8 +47,13 @@ def main():
         cfg.write_text(json.dumps(parsed))
         subprocess.run([str(binary),'--inspect-install'],env=env,check=True,timeout=60)
         assert json.loads(cfg.read_text())['smtp']['password']=='LOCALLY_CHANGED'
-        with sqlite3.connect(root/'profile/state/live.db') as db:
+        db=sqlite3.connect(root/'profile/state/live.db')
+        try:
             assert db.execute('SELECT value FROM test_marker').fetchone()==('synthetic',)
+        finally:
+            # SQLite's context manager commits/rolls back but does not close the
+            # connection; Windows refuses TemporaryDirectory cleanup otherwise.
+            db.close()
         assert not (root/'profile/session.json').exists()
     print('PASS: personalized EXE starts; config/DB imported; upgrades preserve state; no credentials or mail used')
 
