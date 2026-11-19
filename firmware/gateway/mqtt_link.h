@@ -21,6 +21,7 @@
 #include "mqtt_packet_guard.h"
 #include "vibration_command.h"
 #include "manual_measure.h"
+#include "diagnostic_command.h"
 
 class PolicyNetworkClient : public NetworkClient {
  public:
@@ -73,6 +74,16 @@ class MqttLink {
     return manual_measurements_.cancelActive(command);
   }
 
+  // Owner diagnostics are correlated, bounded and never persisted offline.
+  bool takeDiagnostic(roztash::DiagnosticCommand& command);
+  const roztash::DiagnosticCommand* activeDiagnostic() const {
+    return diagnostics_.activeCommand();
+  }
+  bool diagnosticActive() const { return diagnostics_.active(); }
+  void finishDiagnosticScan(const BleCentral& ble);
+  void finishDiagnosticProbe(const BleCentral& ble);
+  void rejectActiveDiagnostic(const char* detail);
+
  private:
   bool send(const char* topic, const char* payload, bool retained,
             bool queue_if_offline);
@@ -86,6 +97,8 @@ class MqttLink {
   void publishManualEvent(const char* type,
                           const roztash::ManualMeasureCommand& command,
                           const char* detail);
+  void publishDiagnosticReject(const roztash::DiagnosticCommand& command,
+                               const char* detail);
 
   BleCentral* ble_ = nullptr;
   roztash::HealthSchedule* schedule_ = nullptr;
@@ -101,4 +114,5 @@ class MqttLink {
   uint32_t last_mqtt_attempt_ms_ = 0;
   roztash::VibrationCommands vibration_commands_;
   roztash::ManualMeasureQueue manual_measurements_;
+  roztash::DiagnosticRequests diagnostics_;
 };

@@ -94,6 +94,46 @@ void MqttLink::begin(const GatewayConfig& cfg, BleCentral& ble, roztash::HealthS
     snprintf(expected, sizeof expected, "%s/cmd", base_);
     if (strcmp(topic, expected) != 0) return;
 
+    if (roztash::isDiagnosticAction(reinterpret_cast<const char*>(payload), len)) {
+      const bool retained = net_.guard.retained();
+      roztash::DiagnosticCommand command;
+      const char* error = nullptr;
+      if (!roztash::parseDiagnosticCommand(reinterpret_cast<const char*>(payload), len,
+                                           command, error)) {
+        publishDiagnosticReject(command, error);
+        return;
+      }
+      if (retained) {
+        publishDiagnosticReject(command, "retained_command_rejected");
+        return;
+      }
+      switch (diagnostics_.offer(command, millis())) {
+        case roztash::DiagnosticOffer::Accepted: {
+          const char* unavailable = nullptr;
+          if (ble_->healthBusy() || ble_->jobFinished()) unavailable = "gatt_busy";
+          else if (command.action == roztash::DiagnosticAction::Probe &&
+                   !ble_->hasFreshDiagnosticSighting(command.mac, millis()))
+            unavailable = "diagnostic_sighting_not_fresh";
+          if (unavailable) {
+            roztash::DiagnosticCommand cancelled;
+            diagnostics_.cancelPending(cancelled);
+            publishDiagnosticReject(command, unavailable);
+          }
+          break;
+        }
+        case roztash::DiagnosticOffer::Duplicate:
+          publishDiagnosticReject(command, "duplicate_request");
+          break;
+        case roztash::DiagnosticOffer::Conflict:
+          publishDiagnosticReject(command, "request_id_conflict");
+          break;
+        case roztash::DiagnosticOffer::Busy:
+          publishDiagnosticReject(command, "diagnostic_busy");
+          break;
+      }
+      return;
+    }
+
     if (roztash::isManualMeasureAction(reinterpret_cast<const char*>(payload), len)) {
       const bool retained = net_.guard.retained();
       roztash::ManualMeasureCommand command;
@@ -333,6 +373,95 @@ void MqttLink::rejectPendingManualMeasure(const char* detail) {
     publishManualEvent("measure_reject", command, detail);
 }
 
+bool MqttLink::takeDiagnostic(roztash::DiagnosticCommand& command) {
+  const auto result = diagnostics_.take(millis(), command);
+  if (result == roztash::DiagnosticTake::None) return false;
+  if (result == roztash::DiagnosticTake::Expired) {
+    publishDiagnosticReject(command, "command_expired");
+    return false;
+  }
+  if (command.action == roztash::DiagnosticAction::Probe &&
+      !ble_->hasFreshDiagnosticSighting(command.mac, millis())) {
+    publishDiagnosticReject(command, "diagnostic_sighting_not_fresh");
+    diagnostics_.finish(millis());
+    return false;
+  }
+  return true;
+}
+
+void MqttLink::publishDiagnosticReject(const roztash::DiagnosticCommand& command,
+                                       const char* detail) {
+  JsonDocument doc;
+  doc["gw"] = cfg_.gw_id;
+  doc["type"] = command.action == roztash::DiagnosticAction::Probe
+      ? "probe_reject" : "scan_reject";
+  doc["request_id"] = command.request_id;
+  if (command.action == roztash::DiagnosticAction::Probe) doc["mac"] = command.mac;
+  if (detail && detail[0]) doc["detail"] = detail;
+  String output;
+  serializeJson(doc, output);
+  char topic[56];
+  snprintf(topic, sizeof topic, "%s/diagnostic", base_);
+  send(topic, output.c_str(), false, false);
+}
+
+void MqttLink::finishDiagnosticScan(const BleCentral& ble) {
+  const auto* active = diagnostics_.activeCommand();
+  if (!active || active->action != roztash::DiagnosticAction::Scan) return;
+  const roztash::DiagnosticCommand command = *active;
+  JsonDocument doc;
+  doc["gw"] = cfg_.gw_id;
+  doc["type"] = "scan_done";
+  doc["request_id"] = command.request_id;
+  JsonArray devices = doc["devices"].to<JsonArray>();
+  int count = 0;
+  for (int i = 0; i < BleCentral::kMaxDiagnosticDevices; ++i) {
+    BleCentral::Sighting sighting;
+    if (!ble.getDiagnosticSlot(i, sighting) || !sighting.used) continue;
+    JsonObject item = devices.add<JsonObject>();
+    item["mac"] = sighting.mac;
+    item["rssi"] = sighting.rssi;
+    ++count;
+  }
+  doc["n"] = count;
+  String output;
+  serializeJson(doc, output);
+  char topic[56];
+  snprintf(topic, sizeof topic, "%s/diagnostic", base_);
+  send(topic, output.c_str(), false, false);
+  diagnostics_.finish(millis());
+}
+
+void MqttLink::finishDiagnosticProbe(const BleCentral& ble) {
+  const auto* active = diagnostics_.activeCommand();
+  if (!active || active->action != roztash::DiagnosticAction::Probe) return;
+  const roztash::DiagnosticCommand command = *active;
+  const bool connected = ble.state() == BleCentral::JobState::Done;
+  JsonDocument doc;
+  doc["gw"] = cfg_.gw_id;
+  doc["type"] = connected ? "probe_done" : "probe_reject";
+  doc["request_id"] = command.request_id;
+  doc["mac"] = command.mac;
+  doc["connected"] = connected;
+  if (connected && ble.vitals().battery_ok) doc["battery"] = ble.vitals().battery;
+  if (!connected) doc["detail"] = failName(ble.failure());
+  else if (!ble.vitals().battery_ok) doc["detail"] = "battery_unavailable";
+  String output;
+  serializeJson(doc, output);
+  char topic[56];
+  snprintf(topic, sizeof topic, "%s/diagnostic", base_);
+  send(topic, output.c_str(), false, false);
+  diagnostics_.finish(millis());
+}
+
+void MqttLink::rejectActiveDiagnostic(const char* detail) {
+  const auto* active = diagnostics_.activeCommand();
+  if (!active) return;
+  const roztash::DiagnosticCommand command = *active;
+  publishDiagnosticReject(command, detail);
+  diagnostics_.finish(millis());
+}
+
 void MqttLink::publishCommandEvent(const char* type, const roztash::VibrationCommand& command,
                                   const char* detail) {
   JsonDocument doc;
@@ -426,9 +555,11 @@ void MqttLink::publishStatus(const char* fw, const char* ip,
   doc["manual_measure_pending"] = manual_measurements_.pending();
   doc["manual_measure_active"] = manual_measurements_.active();
   doc["health_interval_s"] = policy_.policy().health_interval_s;
-  doc["health_job_active"] = ble_->healthBusy();
+  doc["health_job_active"] = ble_->monitoringJobActive();
   doc["vibration_request_id"] = true;
   doc["vibration_repeats"] = 3;
+  doc["diagnostic_scan"] = true;
+  doc["diagnostic_probe"] = true;
   String out;
   serializeJson(doc, out);
   char topic[48];
@@ -442,7 +573,7 @@ void MqttLink::publishPresence(BleCentral& ble) {
   doc["ts"] = (uint32_t)(millis() / 1000UL);
   JsonArray arr = doc["bands"].to<JsonArray>();
   int count = 0;
-  if (ble.healthBusy() && policy_.allows(ble.jobMac(), millis())) {
+  if (ble.monitoringJobActive() && policy_.allows(ble.jobMac(), millis())) {
     doc["connected_mac"] = ble.jobMac();
     doc["advertising_gap"] = true;  // this band's location may be stale while connected
   }

@@ -40,13 +40,20 @@ class NimBLERemoteCharacteristic {
  public:
   using Callback = std::function<void(NimBLERemoteCharacteristic*, uint8_t*, size_t, bool)>;
   inline static std::function<void(NimBLERemoteCharacteristic&, const uint8_t*, size_t)> on_write;
-  bool subscribe(bool, Callback cb, bool) { callback_ = cb; return true; }
+  inline static std::string read_value;
+  inline static unsigned read_calls = 0;
+  inline static unsigned subscribe_calls = 0;
+  bool subscribe(bool, Callback cb, bool) {
+    ++subscribe_calls;
+    callback_ = cb;
+    return true;
+  }
   bool writeValue(const uint8_t* data, size_t size, bool) {
     if (on_write) on_write(*this, data, size);
     return true;
   }
   void notify(uint8_t* data, size_t size) { if (callback_) callback_(this, data, size, true); }
-  std::string readValue() { return {}; }
+  std::string readValue() { ++read_calls; return read_value; }
  private:
   Callback callback_;
 };
@@ -58,10 +65,16 @@ class NimBLEClient {
   NimBLERemoteService svc_;
  public:
   bool connected = false;
+  inline static unsigned connect_calls = 0;
+  inline static bool connect_ok = true;
   void setConnectTimeout(uint32_t) {} void setConnectRetries(uint8_t) {}
   bool isConnected() const { return connected; }
   uint16_t getConnHandle() const { return connected ? 1 : BLE_HS_CONN_HANDLE_NONE; }
-  bool connect(const NimBLEAddress&, bool) { connected = true; return true; }
+  bool connect(const NimBLEAddress&, bool) {
+    ++connect_calls;
+    connected = connect_ok;
+    return connected;
+  }
   bool disconnect() { connected = false; return true; }
   bool cancelConnect() { return true; }
   NimBLERemoteService* getService(const NimBLEUUID&) { return &svc_; }

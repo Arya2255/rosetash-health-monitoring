@@ -26,7 +26,9 @@ inline void (*fake_worker)(void*) = nullptr;
 inline void* fake_worker_arg = nullptr;
 inline void (*fake_wait)() = nullptr;
 inline void (*fake_delay)(uint32_t) = nullptr;
+inline bool fake_control_task_available = true;
 inline int xTaskCreate(void (*entry)(void*), const char*, uint32_t, void* arg, int, TaskHandle_t* handle) {
+  if (!handle && !fake_control_task_available) return 0;
   if (handle) {
     *handle = reinterpret_cast<void*>(1);
     fake_worker = entry;

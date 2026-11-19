@@ -199,6 +199,19 @@ def main():
         assert norm(needle) in t4, f"«{needle}» در صفحه نیامد"
 
     # ── ۶) صفحهٔ گیت‌وی‌ها بدون پل — حالت نمایشی ──
+    app_owner = FakeApp("gateways")
+    app_owner.state.update(logged_in=True, role="owner", admin_email="owner@example.test")
+    owner_view = gv.gateways_view(app_owner)
+    def find_diagnostic(control):
+        if str(getattr(control, "data", "") or "") == "gateway:diagnostic-scan":
+            return True
+        content = getattr(control, "content", None)
+        if content is not None and not isinstance(content, str) and find_diagnostic(content):
+            return True
+        return any(find_diagnostic(child) for child in getattr(control, "controls", None) or [])
+    assert find_diagnostic(owner_view), "آزمون مستقیم گیت‌وی برای ادمین اصلی نمایش داده نشد"
+
+    # ── ۷) صفحهٔ گیت‌وی‌ها بدون پل — حالت نمایشی ──
     gv.live_gateways = lambda force=False: None
     app5 = FakeApp("gateways")
     v5 = gv.gateways_view(app5)

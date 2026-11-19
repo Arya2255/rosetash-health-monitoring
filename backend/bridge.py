@@ -62,11 +62,13 @@ if __package__:
     from . import staff_alerts as staff_alert_policy
     from . import manual_measurements as measurement_policy
     from . import operational_alerts as operational_alert_policy
+    from . import gateway_diagnostics as diagnostic_policy
 else:  # Direct script execution and legacy ``import bridge`` callers.
     import battery_alerts as battery_policy
     import staff_alerts as staff_alert_policy
     import manual_measurements as measurement_policy
     import operational_alerts as operational_alert_policy
+    import gateway_diagnostics as diagnostic_policy
 
 claim_battery = battery_policy.claim
 observe_battery = battery_policy.observe
@@ -196,6 +198,7 @@ def db() -> sqlite3.Connection:
         staff_alert_policy.ensure_schema(_db)
         measurement_policy.ensure_schema(_db)
         operational_alert_policy.ensure_schema(_db)
+        diagnostic_policy.ensure_schema(_db)
         # Backfill real prior sightings for upgrades where a retained LWT had
         # already reset gateways.last_seen before alert tracking existed.
         _db.execute(
@@ -410,6 +413,11 @@ def ingest(topic: str, payload: str, recv_ts: float | None = None) -> None:
                       (ts, gw, "offline_replay", mac or None, payload))
             c.execute("DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?", (EVENTS_KEEP,))
             c.commit()
+            return
+        if leaf == "diagnostic":
+            # Owner-only diagnostics are correlated responses, never employee
+            # presence, health or vitals observations. Results are not replayed.
+            diagnostic_policy.record_result(c, gw, doc, ts)
             return
         if leaf == "presence":
             accepted = []
@@ -2220,6 +2228,35 @@ def acknowledge_live_alert(doc: dict, now: float | None = None):
     return ok, error
 
 
+def gateway_diagnostic(doc: dict, now: float | None = None):
+    """Start or poll one owner-only gateway diagnostic without changing policy."""
+    moment = time.time() if now is None else float(now)
+    actor = str((doc or {}).get("actor") or "").strip().lower()
+    if not actor or not can_manage_gateways(get_role(actor)):
+        return False, "forbidden", {}
+    action = str((doc or {}).get("action") or "").strip()
+    if action == "status":
+        with _lock:
+            return diagnostic_policy.status(db(), (doc or {}).get("request_id"), moment)
+    with _lock:
+        ok, error, info, command_doc = diagnostic_policy.create(
+            db(), actor=actor, action=action, gw=(doc or {}).get("gw"),
+            mac=(doc or {}).get("mac"), now=moment)
+    if not ok:
+        return False, error, info
+    try:
+        sent, _detail = publish(
+            f"roztash/{info['gw']}/cmd",
+            json.dumps(command_doc, separators=(",", ":")), retained=False)
+    except Exception:
+        sent = False
+    if not sent:
+        with _lock:
+            info = diagnostic_policy.publish_failed(db(), info["request_id"], moment)
+        return False, "publish failed", info
+    return True, "", info
+
+
 def command(doc: dict) -> tuple[bool, str, dict]:
     """فرمان را روی roztash/<gw>/cmd منتشر می‌کند؛ گیت‌وی همان مچ‌بند را می‌فرستد.
 
@@ -2356,6 +2393,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
         if path not in ("/api/command", "/api/measurements", "/api/alerts/ack",
+                        "/api/gateways/diagnostics",
                         "/api/gateways/discover", "/api/employees", "/api/monitoring", "/api/monitoring/settings",
                         "/api/bands", "/api/catalogs", "/api/gateways"):
             self._send(404, {"ok": False, "error": "not found"})
@@ -2375,6 +2413,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"ok": False, "error": "bad json body"})
             return
         if path in ("/api/monitoring", "/api/monitoring/settings", "/api/measurements",
+                    "/api/gateways/diagnostics",
                     "/api/alerts/ack", "/api/gateways/discover"):
             actor = verify_request("POST", self.path, body, self.headers)
             if not actor or doc.get("actor") != actor:
@@ -2384,6 +2423,11 @@ class Handler(BaseHTTPRequestHandler):
             ok, err, info = request_measurement(doc)
             self._send(200 if ok else (403 if err == "forbidden" else 400),
                        {"ok":ok,"error":err or None,"info":info})
+        elif path == "/api/gateways/diagnostics":
+            ok, err, info = gateway_diagnostic(doc)
+            code = 200 if ok else (403 if err == "forbidden" else
+                   (409 if err == "diagnostic busy" else (404 if err == "not found" else 400)))
+            self._send(code, {"ok":ok,"error":err or None,"info":info})
         elif path == "/api/alerts/ack":
             ok, err = acknowledge_live_alert(doc)
             self._send(200 if ok else (403 if err == "forbidden" else 400),

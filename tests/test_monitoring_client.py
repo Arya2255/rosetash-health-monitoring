@@ -44,6 +44,34 @@ class ClientTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(msg,live._ERROR_FA["forbidden"])
 
+    def test_vibrate_http_400_returns_bridge_reason_not_no_connection(self):
+        error=urllib.error.HTTPError("http://127.0.0.1/api/command",400,"Bad Request",Message(),
+                                    io.BytesIO(b'{"ok":false,"error":"no gateway known yet"}'))
+        with patch.object(live.urllib.request,"urlopen",side_effect=error):
+            ok, msg = live.send_vibrate("aa:bb:cc:dd:ee:01")
+        self.assertFalse(ok)
+        self.assertIn("وضعیت گیت‌وی", msg)
+
+    def test_vibrate_unrecognized_error_does_not_copy_internal_details(self):
+        error = urllib.error.HTTPError("http://127.0.0.1/api/command", 400, "Bad Request", Message(),
+                                       io.BytesIO(b'{"ok":false,"error":"internal path or device identifier"}'))
+        with patch.object(live.urllib.request, "urlopen", side_effect=error), \
+                patch.object(live.applog, "warn") as warning:
+            ok, msg = live.send_vibrate()
+        self.assertFalse(ok)
+        self.assertIn("400", msg)
+        self.assertNotIn("internal path", msg)
+        self.assertNotIn("internal path", repr(warning.call_args))
+
+    def test_vibrate_http_error_without_json_still_identifies_rejection(self):
+        error = urllib.error.HTTPError("http://127.0.0.1/api/command", 502, "Bad Gateway", Message(),
+                                       io.BytesIO(b"<html>upstream error</html>"))
+        with patch.object(live.urllib.request, "urlopen", side_effect=error):
+            ok, msg = live.send_vibrate()
+        self.assertFalse(ok)
+        self.assertIn("502", msg)
+        self.assertNotIn("<html>", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

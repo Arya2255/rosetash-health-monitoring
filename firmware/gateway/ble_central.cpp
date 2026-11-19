@@ -77,7 +77,7 @@ void BleCentral::setScanPolicy(const roztash::ScanPolicy& policy, uint32_t recei
   for (auto& s : sightings_)
     if (s.used && !policy_.allows(s.mac, millis()) &&
         !policy_.allowsEmergency(s.mac, millis())) s = Sighting{};
-  if (job_mac_[0] && !(vibrate_mode_
+  if (job_mac_[0] && !diagnostic_probe_mode_ && !(vibrate_mode_
       ? (vibrate_emergency_ ? policy_.allowsEmergency(job_mac_, millis())
                             : policy_.allows(job_mac_, millis()))
       : policy_.allowsHealth(job_mac_, millis()))) cancelled_ = true;
@@ -88,7 +88,7 @@ void BleCentral::stopScanPolicy() {
   portENTER_CRITICAL(&mux_);
   policy_.revoke();
   for (auto& s : sightings_) s = Sighting{};
-  if (job_mac_[0]) cancelled_ = true;
+  if (job_mac_[0] && !diagnostic_probe_mode_) cancelled_ = true;
   portEXIT_CRITICAL(&mux_);
 }
 
@@ -126,9 +126,10 @@ bool BleCentral::hasFreshSighting(const char* mac, uint32_t now, bool emergency)
 bool BleCentral::jobAllowed() const {
   portENTER_CRITICAL(&mux_);
   const bool allowed = !cancelled_.load() &&
-      (vibrate_mode_ ? (vibrate_emergency_ ? policy_.allowsEmergency(job_mac_, millis())
-                                          : policy_.allows(job_mac_, millis()))
-                     : policy_.allowsHealth(job_mac_, millis()));
+      (diagnostic_probe_mode_ ||
+       (vibrate_mode_ ? (vibrate_emergency_ ? policy_.allowsEmergency(job_mac_, millis())
+                                           : policy_.allows(job_mac_, millis()))
+                      : policy_.allowsHealth(job_mac_, millis())));
   portEXIT_CRITICAL(&mux_);
   return allowed;
 }
@@ -140,9 +141,10 @@ void BleCentral::cancelRevokedJob() {
   portENTER_CRITICAL(&mux_);
   NimBLEClient* client = job_client_;
   const bool allowed = !cancelled_.load() &&
-      (vibrate_mode_ ? (vibrate_emergency_ ? policy_.allowsEmergency(job_mac_, millis())
-                                          : policy_.allows(job_mac_, millis()))
-                     : policy_.allowsHealth(job_mac_, millis()));
+      (diagnostic_probe_mode_ ||
+       (vibrate_mode_ ? (vibrate_emergency_ ? policy_.allowsEmergency(job_mac_, millis())
+                                           : policy_.allows(job_mac_, millis()))
+                      : policy_.allowsHealth(job_mac_, millis())));
   const bool busy = worker_active_.load();
   if (job_mac_[0] && !allowed) cancelled_ = true;
   portEXIT_CRITICAL(&mux_);
@@ -158,21 +160,28 @@ void BleCentral::controlEntry(void* self) {
   for (;;) { owner->poll(); vTaskDelay(pdMS_TO_TICKS(25)); }
 }
 void BleCentral::poll() {
+  const uint32_t now = millis();
   portENTER_CRITICAL(&mux_);
-  if (policy_.expire(millis())) {
+  if (policy_.expire(now)) {
     for (auto& s : sightings_) s = Sighting{};
-    if (job_mac_[0]) cancelled_ = true;
+    if (job_mac_[0] && !diagnostic_probe_mode_) cancelled_ = true;
   }
+  if (diagnostic_scan_active_ &&
+      uint32_t(now - diagnostic_scan_started_ms_) >= kDiagnosticScanMs) {
+    diagnostic_scan_active_ = false;
+    diagnostic_scan_finished_ = true;
+  }
+  const bool diagnostic_active = diagnostic_scan_active_;
   portEXIT_CRITICAL(&mux_);
   cancelRevokedJob();
   if (!scan_) return;
-  if (!scanEnabled()) {
+  const bool policy_scan = scanEnabled();
+  if (!policy_scan && !diagnostic_active) {
     if (scan_->isScanning()) scan_->stop();
     return;
   }
   // NimBLE may stop scanning during initiation. Resume even while collecting
   // GATT data from one band so other permitted advertisers remain observable.
-  const uint32_t now = millis();
   if (!connecting_.load() && !scan_->isScanning() && now - last_scan_retry_ms_ >= 1000) {
     last_scan_retry_ms_ = now;
     scan_->start(0, false, false);
@@ -195,6 +204,41 @@ bool BleCentral::startVibrate(const char* mac, bool emergency, uint8_t repeats,
   }
   return started;
 }
+
+bool BleCentral::startDiagnosticProbe(const char* mac) {
+  if (!mac || !worker_ || worker_active_.load() || state_ != JobState::Idle) return false;
+  const uint32_t now = millis();
+  portENTER_CRITICAL(&mux_);
+  bool fresh = false;
+  if (!diagnostic_scan_active_)
+    for (const auto& s : diagnostic_sightings_)
+      if (s.used && std::strcmp(s.mac, mac) == 0 &&
+          uint32_t(now - s.seen_ms) <= kDiagnosticSightingFreshMs) {
+        fresh = true;
+        break;
+      }
+  if (!fresh) {
+    portEXIT_CRITICAL(&mux_);
+    return false;
+  }
+  strlcpy(job_mac_, mac, sizeof job_mac_);
+  manual_request_id_[0] = 0;
+  diagnostic_probe_mode_ = true;
+  vibrate_mode_ = false;
+  vibrate_emergency_ = false;
+  vibrate_acks_ = 0;
+  vibrate_repeats_ = 1;
+  vibrate_write_pending_ = false;
+  vitals_enabled_ = false;
+  cancelled_ = false;
+  ++job_generation_;
+  state_ = JobState::Connecting;
+  worker_active_ = true;
+  portEXIT_CRITICAL(&mux_);
+  xTaskNotifyGive(worker_);
+  return true;
+}
+
 bool BleCentral::launchJob(const char* mac, bool vitals, bool vibrate, bool emergency,
                           const char* manual_request_id) {
   if (!worker_ || worker_active_.load() || state_ != JobState::Idle ||
@@ -211,6 +255,7 @@ bool BleCentral::launchJob(const char* mac, bool vitals, bool vibrate, bool emer
     strlcpy(manual_request_id_, manual_request_id, sizeof manual_request_id_);
   else
     manual_request_id_[0] = 0;
+  diagnostic_probe_mode_ = false;
   vibrate_mode_ = vibrate;
   vibrate_emergency_ = emergency;
   vitals_enabled_ = vitals;
@@ -228,6 +273,7 @@ void BleCentral::workerLoop() {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     xQueueReset(notifications_);
     if (!jobAllowed()) finishJob(JobState::Failed, Fail::Policy);
+    else if (diagnostic_probe_mode_) runDiagnosticProbe(job_mac_);
     else if (vibrate_mode_) runVibrate(job_mac_);
     else runHealth(job_mac_, vitals_enabled_);
     while (state_ == JobState::Measuring) {
@@ -287,8 +333,30 @@ void BleCentral::onResult(const NimBLEAdvertisedDevice* dev) {
   const std::string mac = addr.toString();
   const uint32_t now = millis();
   portENTER_CRITICAL(&mux_);
-  // Gate BEFORE reading RSSI, counting, storing, or logging advertisements.
-  // Physical reception still occurs; excluded devices leave no application data.
+  // Only an active owner diagnostic may observe an unfiltered advertisement.
+  // Its storage and counters are disjoint from employee presence/policy data.
+  if (diagnostic_scan_active_) {
+    const int rssi = dev->getRSSI();
+    int slot = -1, free_slot = -1;
+    for (int i = 0; i < kMaxDiagnosticDevices; ++i) {
+      if (diagnostic_sightings_[i].used && diagnostic_sightings_[i].addr.equals(addr)) {
+        slot = i;
+        break;
+      }
+      if (!diagnostic_sightings_[i].used && free_slot < 0) free_slot = i;
+    }
+    if (slot < 0) slot = free_slot;
+    if (slot >= 0) {
+      Sighting& s = diagnostic_sightings_[slot];
+      s.used = true;
+      s.addr = addr;
+      strlcpy(s.mac, mac.c_str(), sizeof s.mac);
+      s.rssi = rssi;
+      s.seen_ms = now;
+    }
+  }
+  // Normal presence remains fail-closed: without a separate diagnostic grant,
+  // excluded devices are gated BEFORE RSSI, counting, storing, or logging.
   if (!policy_.allows(mac.c_str(), now) &&
       !policy_.allowsEmergency(mac.c_str(), now)) {
     portEXIT_CRITICAL(&mux_);
@@ -354,6 +422,78 @@ void BleCentral::pruneStale(uint32_t now, uint32_t ttl_ms) {
     if (s.used && age >= 0 && static_cast<uint32_t>(age) > ttl_ms) s = Sighting{};
   }
   portEXIT_CRITICAL(&mux_);
+}
+
+// --- owner diagnostics -------------------------------------------------------
+bool BleCentral::startDiagnosticScan() {
+  if (!scan_ || !control_ready_.load() || worker_active_.load() ||
+      state_ != JobState::Idle) return false;
+  portENTER_CRITICAL(&mux_);
+  if (diagnostic_scan_active_) {
+    portEXIT_CRITICAL(&mux_);
+    return false;
+  }
+  for (auto& s : diagnostic_sightings_) s = Sighting{};
+  diagnostic_scan_started_ms_ = millis();
+  diagnostic_scan_active_ = true;
+  diagnostic_scan_finished_ = false;
+  portEXIT_CRITICAL(&mux_);
+  if (!scan_->isScanning() && !connecting_.load() && !scan_->start(0, false, false)) {
+    portENTER_CRITICAL(&mux_);
+    diagnostic_scan_active_ = false;
+    portEXIT_CRITICAL(&mux_);
+    return false;
+  }
+  return true;
+}
+
+bool BleCentral::diagnosticScanActive() const {
+  portENTER_CRITICAL(&mux_);
+  const bool active = diagnostic_scan_active_;
+  portEXIT_CRITICAL(&mux_);
+  return active;
+}
+
+bool BleCentral::diagnosticScanFinished() const {
+  portENTER_CRITICAL(&mux_);
+  const bool finished = diagnostic_scan_finished_;
+  portEXIT_CRITICAL(&mux_);
+  return finished;
+}
+
+void BleCentral::clearDiagnosticScanFinished() {
+  portENTER_CRITICAL(&mux_);
+  diagnostic_scan_finished_ = false;
+  portEXIT_CRITICAL(&mux_);
+}
+
+int BleCentral::diagnosticSightingCount() const {
+  int count = 0;
+  portENTER_CRITICAL(&mux_);
+  for (const auto& s : diagnostic_sightings_) if (s.used) ++count;
+  portEXIT_CRITICAL(&mux_);
+  return count;
+}
+
+bool BleCentral::getDiagnosticSlot(int slot, Sighting& out) const {
+  if (slot < 0 || slot >= kMaxDiagnosticDevices) return false;
+  portENTER_CRITICAL(&mux_);
+  out = diagnostic_sightings_[slot];
+  portEXIT_CRITICAL(&mux_);
+  return true;
+}
+
+bool BleCentral::hasFreshDiagnosticSighting(const char* mac, uint32_t now) const {
+  bool fresh = false;
+  portENTER_CRITICAL(&mux_);
+  for (const auto& s : diagnostic_sightings_)
+    if (s.used && std::strcmp(s.mac, mac) == 0 &&
+        uint32_t(now - s.seen_ms) <= kDiagnosticSightingFreshMs) {
+      fresh = true;
+      break;
+    }
+  portEXIT_CRITICAL(&mux_);
+  return fresh;
 }
 
 // --- health jobs ------------------------------------------------------------
@@ -499,6 +639,60 @@ bool BleCentral::runVibrate(const char* mac) {
   job_started_ms_ = millis();
   stage_started_ms_ = job_started_ms_;
   state_ = JobState::Measuring;
+  return true;
+}
+
+// Owner diagnostic: no employee policy lookup, vendor subscription, HR start,
+// vibration, or device-information reads. Connection alone is a successful probe.
+bool BleCentral::runDiagnosticProbe(const char* mac) {
+  vitals_ = Vitals{};
+  sample_count_ = 0;
+  wearing_ok_ = true;
+  ended_ = false;
+  fail_ = Fail::None;
+  state_ = JobState::Connecting;
+
+  NimBLEAddress addr;
+  bool fresh = false;
+  const uint32_t now = millis();
+  portENTER_CRITICAL(&mux_);
+  for (const auto& s : diagnostic_sightings_)
+    if (s.used && std::strcmp(s.mac, mac) == 0 &&
+        uint32_t(now - s.seen_ms) <= kDiagnosticSightingFreshMs) {
+      addr = s.addr;
+      fresh = true;
+      break;
+    }
+  portEXIT_CRITICAL(&mux_);
+  if (!fresh) { finishJob(JobState::Failed, Fail::Connect); return false; }
+
+  NimBLEClient* c = clientFor(addr);
+  if (!c) { finishJob(JobState::Failed, Fail::Connect); return false; }
+  portENTER_CRITICAL(&mux_);
+  job_client_ = c;
+  portEXIT_CRITICAL(&mux_);
+  const bool warm = clients_[warm_idx_].discovered;
+  connecting_ = true;
+  const bool connected = c->isConnected() || c->connect(addr, !warm);
+  connecting_ = false;
+  if (!connected) {
+    Serial.printf("[ble] diagnostic connect failed: %s\n", mac);
+    finishJob(JobState::Failed, Fail::Connect);
+    return false;
+  }
+  clients_[warm_idx_].discovered = true;
+
+  if (NimBLERemoteService* svc = c->getService(kBatterySvc))
+    if (NimBLERemoteCharacteristic* ch = svc->getCharacteristic(kBatteryChr)) {
+      const std::string value = ch->readValue();
+      if (value.size() == 1 && static_cast<uint8_t>(value[0]) <= 100) {
+        vitals_.battery = static_cast<uint8_t>(value[0]);
+        vitals_.battery_ok = true;
+      }
+    }
+  finishJob(JobState::Done, Fail::None);
+  Serial.printf("[ble] diagnostic probe done: %s battery=%d\n", mac,
+                vitals_.battery_ok ? static_cast<int>(vitals_.battery) : -1);
   return true;
 }
 
@@ -670,6 +864,7 @@ void BleCentral::clearJob() {
   stage_ = Stage::Hr;
   stage_settle_ms_ = 0;
   vitals_enabled_ = false;
+  diagnostic_probe_mode_ = false;
   vibrate_mode_ = false;
   vibrate_emergency_ = false;
   vibrate_acks_ = 0;

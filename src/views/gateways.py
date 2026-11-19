@@ -28,6 +28,7 @@ from components.common import SHADOW, card, rel_age, section_header
 from components.gateway_form import (
     open_gateway_delete, open_gateway_form,
 )
+from components.gateway_diagnostics import gateway_diagnostics_card
 
 _KIND_FA = {"installed": "نصب‌شده", "proposed": "پیشنهادی"}
 _DISCOVERED = "#9AA0A6"
@@ -472,7 +473,8 @@ def gateways_view(app):
     ], spacing=10), pad=14)
 
     # ── کشف‌شده‌های شبکه ──
-    blocks = [header, discovery_card]
+    blocks = [header, discovery_card,
+              gateway_diagnostics_card(app, rows, _discovery_is_current)]
     if not bridge_up:
         blocks.append(_demo_banner())
     blocks.append(counters)

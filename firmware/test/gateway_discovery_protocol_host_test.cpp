@@ -42,7 +42,7 @@ static void loopback_udp_exchange_uses_production_reply_builder() {
                             reinterpret_cast<sockaddr*>(&client_addr), &client_len);
   assert(got == static_cast<ssize_t>(sizeof(query) - 1));
   const roztash::GatewayDiscoveryInfo info{"gw-loopback", "aa:bb:cc:dd:ee:01",
-                                           "0.5.3-operational", "127.0.0.1", false};
+                                           "0.5.4-diagnostics", "127.0.0.1", false};
   char response[384]; size_t response_len = 0;
   assert(roztash::buildGatewayDiscoveryReply(received, static_cast<size_t>(got), info,
                                              response, sizeof(response), response_len));
@@ -59,7 +59,7 @@ static void loopback_udp_exchange_uses_production_reply_builder() {
 }
 
 int main() {
-  const roztash::GatewayDiscoveryInfo info{"gw-2", "aa:bb:cc:dd:ee:01", "0.5.3-operational",
+  const roztash::GatewayDiscoveryInfo info{"gw-2", "aa:bb:cc:dd:ee:01", "0.5.4-diagnostics",
                                           "192.168.50.22", true};
   std::string out;
   reply(QUERY, std::strlen(QUERY), info, out);
@@ -69,7 +69,7 @@ int main() {
   assert(payload.find("\"v\":1") != std::string::npos);
   assert(payload.find("\"gw\":\"gw-2\"") != std::string::npos);
   assert(payload.find("\"mac\":\"aa:bb:cc:dd:ee:01\"") != std::string::npos);
-  assert(payload.find("\"fw\":\"0.5.3-operational\"") != std::string::npos);
+  assert(payload.find("\"fw\":\"0.5.4-diagnostics\"") != std::string::npos);
   assert(payload.find("\"ip\":\"192.168.50.22\"") != std::string::npos);
   assert(payload.find("\"transport\":\"ethernet\"") != std::string::npos);
   assert(payload.find("\"mqtt_connected\":true") != std::string::npos);

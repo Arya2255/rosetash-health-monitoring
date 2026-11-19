@@ -166,7 +166,7 @@ def main():
     t = texts_of(page)
     for needle in ("آماده‌سازی گیتوی", "اسکن پورت‌های سریال",
                    "شروع فلش کامل", "dialout",
-                   "CP210x", "فریمور 0.5.3-operational", "192.168.50.1", "DHCP", "W5500"):
+                   "CP210x", "فریمور 0.5.4-diagnostics", "192.168.50.1", "DHCP", "W5500"):
         assert norm(needle) in t, f"متن پیدا نشد: {needle}\n---\n{t[:1000]}"
     for obsolete in ("SSID", "رمز وای‌فای", "RoztashGw",
                      "بدون تنظیمات", "خودش AP باز می‌کند"):

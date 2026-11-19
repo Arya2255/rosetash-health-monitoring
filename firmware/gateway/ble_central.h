@@ -23,6 +23,9 @@ class BleCentral {
   static constexpr int kMaxBands = roztash::kMaxPolicyMacs;
   static constexpr int kMaxSamples = 32;
   static constexpr int kMaxClients = 3;
+  static constexpr int kMaxDiagnosticDevices = 32;
+  static constexpr uint32_t kDiagnosticScanMs = 8000;
+  static constexpr uint32_t kDiagnosticSightingFreshMs = 60000;
 
   struct Sighting {
     bool used = false;
@@ -53,13 +56,26 @@ class BleCentral {
   int findSighting(const char* mac);      // -1 when unseen
   void pruneStale(uint32_t now, uint32_t ttl_ms);
 
+  // Owner diagnostics use separate sightings and never satisfy employee policy.
+  bool startDiagnosticScan();
+  bool diagnosticScanActive() const;
+  bool diagnosticScanFinished() const;
+  void clearDiagnosticScanFinished();
+  int diagnosticSightingCount() const;
+  bool getDiagnosticSlot(int slot, Sighting& out) const;
+  bool hasFreshDiagnosticSighting(const char* mac, uint32_t now) const;
+
   // ---- health jobs ----------------------------------------------------------
   bool healthBusy() const;
+  bool monitoringJobActive() const { return healthBusy() && !diagnostic_probe_mode_; }
   bool jobFinished() const;
   // Enqueue one GATT job on the dedicated worker. MQTT/presence never wait
   // for connection/discovery. The worker owns all measurement state until done.
   bool startHealth(const char* mac, bool vitals = false,
                   const char* manual_request_id = nullptr);
+  // Connects to a fresh diagnostic sighting, reads only 180F/2A19, disconnects.
+  bool startDiagnosticProbe(const char* mac);
+  bool wasDiagnosticProbe() const { return diagnostic_probe_mode_; }
   // Connects, sends (05,50) and disconnects: makes the band vibrate (find-device).
   bool startVibrate(const char* mac, bool emergency = false, uint8_t repeats = 1,
                     uint8_t completed_pulses = 0);
@@ -124,6 +140,7 @@ class BleCentral {
                  const char* manual_request_id = nullptr);
   bool runHealth(const char* mac, bool vitals);
   bool runVibrate(const char* mac);
+  bool runDiagnosticProbe(const char* mac);
   bool jobAllowed() const;
   void cancelRevokedJob();
   void pollMeasurement();
@@ -143,6 +160,12 @@ class BleCentral {
   NimBLEScan* scan_ = nullptr;
   uint16_t scan_interval_ms_ = 160;
   uint16_t scan_window_ms_ = 80;
+
+  // diagnostic sightings — separate storage and lifetime from employee data
+  Sighting diagnostic_sightings_[kMaxDiagnosticDevices]{};
+  bool diagnostic_scan_active_ = false;   // guarded by mux_
+  bool diagnostic_scan_finished_ = false; // guarded by mux_
+  uint32_t diagnostic_scan_started_ms_ = 0;
 
   // health job
   std::atomic<JobState> state_{JobState::Idle};
@@ -175,6 +198,9 @@ class BleCentral {
   uint32_t stage_settle_ms_ = 0;  // 0 = not settling; >0 = waiting before next stage
   uint8_t stage_end_type_ = 0;
   Vitals vitals_;
+
+  // Diagnostic probe shares the worker, never the employee connect/subscribe path.
+  bool diagnostic_probe_mode_ = false;
 
   // vibrate job (find-device): reuses the connect/subscribe path
   bool vibrate_mode_ = false;

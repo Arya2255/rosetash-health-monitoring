@@ -145,17 +145,26 @@ def send_vibrate(mac: str | None = None, timeout: float = 2.5,
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             doc = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            with exc:
+                doc = json.loads(exc.read(8192).decode("utf-8"))
+        except Exception:
+            doc = None
+        error = doc.get("error") if isinstance(doc, dict) else None
+        reason = _ERROR_FA.get(error) if isinstance(error, str) else None
+        applog.warn("فرمان لرزش رد شد — HTTP %s — %s", exc.code, reason or "علت گزارش‌نشده")
+        return False, reason or f"پل درخواست را رد کرد — HTTP {exc.code}"
     except Exception as exc:
         applog.error("فرمان لرزش نرسید — پل پاسخ نداد — %s: %s",
                      type(exc).__name__, exc)
         return False, "پل پاسخ نداد"
-    if doc.get("ok"):
+    if isinstance(doc, dict) and doc.get("ok") is True:
         applog.info("فرمان لرزش برای مچ‌بند %s فرستاده شد",
                     applog.mask_mac(mac))
-        return True, "فرمان لرزاندن رفت — اگر روی دست باشد می‌لرزد"
-    err = str(doc.get("error") or "فرمان نرسید")
-    applog.warn("فرمان لرزش رد شد — %s", err)
-    return False, err
+        return True, "فرمان لرزش ارسال شد. لرزش مچ‌بند را بررسی کنید"
+    applog.warn("پاسخ پل تأیید ارسال فرمان لرزش را نداشت")
+    return False, "ارسال فرمان لرزش تأیید نشد"
 
 
 def request_manual_measurement(mac: str, *, actor: str, timeout: float = 8.0):
@@ -238,6 +247,13 @@ _ERROR_FA = {
     "invalid_alert_id": "شناسهٔ هشدار معتبر نیست",
     "alert_not_found": "این هشدار در پل پیدا نشد",
     "alert_closed": "این هشدار دیگر فعال نیست",
+    "no gateway known yet": "هنوز پیام وضعیت گیت‌وی به پل نرسیده است",
+    "employee monitoring is paused or outside scheduled hours": "پایش این کارکن متوقف است یا اکنون خارج از ساعت کاری است",
+    "gateway scan capacity exceeded": "ظرفیت پایش گیت‌وی پر است",
+    "emergency vibration is only for HSE": "لرزش اضطراری فقط برای مچ‌بند گروه ایمنی مجاز است",
+    "diagnostic busy": "یک آزمون دیگر روی این گیت‌وی در حال اجراست",
+    "publish failed": "فرمان آزمون به گیت‌وی ارسال نشد؛ اتصال پیام‌رسان را بررسی کنید",
+
 }
 
 
@@ -492,6 +508,52 @@ def discover_gateways(*, actor: str) -> tuple[bool, list[dict] | str]:
     if error == "unauthorized":
         return False, _ERROR_FA["unauthorized"]
     return False, "جستجوی شبکه ناموفق بود؛ اتصال شبکهٔ محلی را بررسی کنید"
+
+
+def gateway_diagnostic(*, actor: str, action: str, gw: str = "", mac: str = "",
+                       request_id: str = "") -> tuple[bool, dict | str]:
+    """Start or poll an owner-only gateway BLE diagnostic over the signed bridge API."""
+    if MODE == "0":
+        return False, "حالت زنده خاموش است"
+    path = "/api/gateways/diagnostics"
+    actor = str(actor or "").strip().lower()
+    payload = {"actor": actor, "action": str(action or "").strip()}
+    if gw:
+        payload["gw"] = str(gw).strip().lower()
+    if mac:
+        payload["mac"] = str(mac).strip().lower()
+    if request_id:
+        payload["request_id"] = str(request_id).strip()
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    try:
+        headers = {"Content-Type": "application/json", **sign_request("POST", path, body, actor)}
+        request = urllib.request.Request(BRIDGE + path, data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(request, timeout=8.0) as response:
+            doc = json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            with exc:
+                doc = json.load(exc)
+        except (ValueError, OSError):
+            return False, "پل درخواست آزمون را رد کرد"
+    except (OSError, ValueError):
+        return False, "پل برای آزمون گیت‌وی پاسخ نداد"
+    if not isinstance(doc, dict):
+        return False, "پاسخ پل برای آزمون گیت‌وی معتبر نیست"
+    if doc.get("ok") is True and isinstance(doc.get("info"), dict):
+        return True, doc["info"]
+    error = doc.get("error")
+    if error == "forbidden":
+        return False, "آزمون مستقیم گیت‌وی فقط برای ادمین اصلی مجاز است"
+    if error == "unauthorized":
+        return False, _ERROR_FA["unauthorized"]
+    if error == "invalid gw":
+        return False, _ERROR_FA["invalid gw"]
+    if error == "invalid mac":
+        return False, _ERROR_FA["invalid mac"]
+    if error == "not found":
+        return False, "این درخواست آزمون پیدا نشد"
+    return False, _ERROR_FA.get(error if isinstance(error, str) else "", "آزمون گیت‌وی پذیرفته نشد")
 
 
 def save_gateway(doc: dict) -> tuple[bool, str]:

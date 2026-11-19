@@ -40,7 +40,7 @@ class FrozenBundleTests(unittest.TestCase):
                     self.assertEqual(pv.bundle_dir(), expected)
                     ok, manifest = pv.load_manifest()
                     self.assertTrue(ok, manifest)
-                    self.assertEqual(manifest["fw_version"], "0.5.3-operational")
+                    self.assertEqual(manifest["fw_version"], "0.5.4-diagnostics")
                     tools = pv.find_tools(platform="windows-amd64", home=unrelated)
                     self.assertEqual(tools["sources"], {
                         "esptool": "bundled", "mklittlefs": "bundled"})
@@ -118,6 +118,10 @@ class PayloadValidationTests(unittest.TestCase):
         self.assertIn('--collect-submodules bleak', workflow)
         hidden_line = next(line for line in workflow.splitlines() if '--hidden-import' in line)
         self.assertIn('ble_discovery', hidden_line.split())
+
+    def test_gateway_diagnostics_backend_is_explicitly_validated(self):
+        validator = (ROOT / "scripts/validate_windows_single.py").read_text()
+        self.assertIn('"backend.gateway_diagnostics"', validator)
 
     @classmethod
     def setUpClass(cls):

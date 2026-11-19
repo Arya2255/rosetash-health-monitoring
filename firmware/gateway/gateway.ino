@@ -27,7 +27,7 @@
 #include "discovery.h"
 #include "broker_discovery_retry.h"
 
-const char* kFwVersion = "0.5.3-operational";
+const char* kFwVersion = "0.5.4-diagnostics";
 
 // SpO2 + HRV stages run only every Nth health window: three PPG measurements
 // back to back on every window would drain the band's battery. Battery and
@@ -136,6 +136,13 @@ void setup() {
 void loop() {
   mqtt.poll();
   const uint32_t now = millis();
+  const auto* active_diagnostic = mqtt.activeDiagnostic();
+  if (active_diagnostic &&
+      active_diagnostic->action == roztash::DiagnosticAction::Scan &&
+      ble.diagnosticScanFinished()) {
+    mqtt.finishDiagnosticScan(ble);
+    ble.clearDiagnosticScanFinished();
+  }
   const bool network_ready = mqtt.networkReady();
   if (network_ready) {
     const String ip = ETH.localIP().toString();
@@ -179,7 +186,8 @@ void loop() {
   }
 
   // B) sequential health windows. No catch-up overlap when a cycle overruns.
-  if (!ble.healthBusy() && !ble.jobFinished() && health_schedule.openIfDue(mqtt.policy(), millis()))
+  if (!ble.healthBusy() && !ble.jobFinished() && !mqtt.diagnosticActive() &&
+      health_schedule.openIfDue(mqtt.policy(), millis()))
     Serial.printf("[gw] health window %lu open\n", (unsigned long)health_schedule.generation());
   if (!ble.healthBusy()) {
     if (ble.jobFinished()) {
@@ -204,6 +212,8 @@ void loop() {
                 ? "health_job_failed" : (ble.validHrSampleCount() == 0
                     ? "no_hr_samples" : "health_publish_failed"));
         }
+      } else if (ble.wasDiagnosticProbe()) {
+        mqtt.finishDiagnosticProbe(ble);
       } else if (ble.jobRevoked() || !mqtt.policy().allows(ble.jobMac(), millis())) {
         // Discard all results of revoked work; do not leak an off-duty sample.
       } else {
@@ -224,7 +234,16 @@ void loop() {
       bool emergency = false;
       uint8_t repeats = 1;
       uint8_t completed_pulses = 0;
-      if (mqtt.takeManualMeasure(cmac, sizeof cmac, &vitals, request_id,
+      roztash::DiagnosticCommand diagnostic;
+      if (mqtt.diagnosticActive()) {
+        // A diagnostic scan holds the next idle slot; no new GATT job may start.
+      } else if (mqtt.takeDiagnostic(diagnostic)) {
+        const bool started = diagnostic.action == roztash::DiagnosticAction::Scan
+            ? ble.startDiagnosticScan() : ble.startDiagnosticProbe(diagnostic.mac);
+        if (!started)
+          mqtt.rejectActiveDiagnostic(diagnostic.action == roztash::DiagnosticAction::Scan
+              ? "diagnostic_scan_unavailable" : "diagnostic_sighting_not_fresh_or_busy");
+      } else if (mqtt.takeManualMeasure(cmac, sizeof cmac, &vitals, request_id,
                                  sizeof request_id)) {
         if (!ble.startHealth(cmac, vitals, request_id))
           mqtt.finishManualMeasure("measure_fail", "job_could_not_start");

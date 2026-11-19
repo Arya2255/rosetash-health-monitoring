@@ -52,6 +52,41 @@ class OperationalHTTPTests(IsolatedBridge):
         status, body = self.post("/api/measurements", {"mac": MAC, "actor": ACTOR}, signed=False)
         self.assertEqual(status, 401)
 
+    def test_vibration_rejection_distinguishes_registry_from_mqtt_and_work_hours(self):
+        self.gateway("gw-a", .2, .3)
+        self.employee(schedule={})
+        host, port = self.server.server_address
+        with patch.object(live, "BRIDGE", f"http://{host}:{port}"), \
+                patch.object(live, "MODE", "auto"), patch.object(bridge, "publish") as publish:
+            ok, reason = live.send_vibrate(MAC)
+            self.assertFalse(ok)
+            self.assertIn("وضعیت گیت‌وی", reason)
+
+            bridge.ingest("roztash/gw-a/status", '{"online":true}', bridge.time.time())
+            ok, reason = live.send_vibrate(MAC)
+            self.assertFalse(ok)
+            self.assertIn("ساعت کاری", reason)
+            publish.assert_not_called()
+
+    def test_gateway_diagnostic_http_is_signed_and_live_client_polls_status(self):
+        with patch.object(bridge, "get_role", return_value="owner"), \
+                patch.object(bridge, "publish", return_value=(True, "sent")):
+            status, body = self.post("/api/gateways/diagnostics", {
+                "actor": ACTOR, "action": "scan", "gw": "gw-a"})
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            request_id = body["info"]["request_id"]
+            host, port = self.server.server_address
+            with patch.object(live, "BRIDGE", f"http://{host}:{port}"), \
+                    patch.object(live, "MODE", "auto"):
+                ok, info = live.gateway_diagnostic(
+                    actor=ACTOR, action="status", request_id=request_id)
+            self.assertTrue(ok, info)
+            self.assertEqual(info["status"], "pending")
+        status, body = self.post("/api/gateways/diagnostics", {
+            "actor": ACTOR, "action": "status", "request_id": request_id}, signed=False)
+        self.assertEqual(status, 401)
+
     def test_ack_route_persists_and_requires_signed_actor(self):
         self.assertEqual(bridge.upsert_employee({"mac": MAC, "name": "Synthetic"}), (True, ""))
         bridge.db().execute("UPDATE employees SET weekly_schedule=? WHERE mac=?",

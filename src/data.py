@@ -44,6 +44,7 @@ from live import (  # noqa: E402,F401
     delete_employee,
     delete_gateway,
     discover_gateways,
+    gateway_diagnostic,
     live_available,
     live_bands,
     live_catalogs,
