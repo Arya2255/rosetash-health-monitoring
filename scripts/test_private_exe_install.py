@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,10 +17,26 @@ sys.path.insert(0, str(ROOT/'src'))
 from private_profile import append_profile
 
 
+def _cleanup_temp(path, retries=5, delay=0.5):
+    """Remove a temp directory, retrying on Windows file locks."""
+    import gc
+    gc.collect()
+    for attempt in range(retries):
+        try:
+            shutil.rmtree(path, ignore_errors=False)
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(delay)
+            gc.collect()
+
+
 def main():
     original = Path(sys.argv[1]).resolve()
-    with tempfile.TemporaryDirectory(prefix='roztash-personalize-test-') as tmp:
-        root = Path(tmp)
+    tmp = Path(tempfile.mkdtemp(prefix='roztash-personalize-test-'))
+    try:
+        root = tmp
         binary = root/'app.exe'
         shutil.copy2(original,binary)
         database=root/'seed.db'
@@ -53,6 +70,8 @@ def main():
         with closing(sqlite3.connect(root/'profile/state/live.db')) as db:
             assert db.execute('SELECT value FROM test_marker').fetchone()==('synthetic',)
         assert not (root/'profile/session.json').exists()
+    finally:
+        _cleanup_temp(tmp)
     print('PASS: personalized EXE starts; config/DB imported; upgrades preserve state; no credentials or mail used')
 
 
