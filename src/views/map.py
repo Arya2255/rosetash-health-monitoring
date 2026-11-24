@@ -39,9 +39,9 @@ _COLOR = {"proposed": WARN, "installed": OK}
 _DISCOVERED = "#9AA0A6"   # گیت‌وی کشف‌شده از شبکه که هنوز تعریف نشده
 _ENTRY_COLOR = "#5B6B7B"
 _BAND_COLOR = "#1A5FB4"
-_PIN = 30          # قطر پین نشانگر
-_CHIP_W = 98       # عرض برچسب زیر پین
-_M_CHIP_W = 58     # عرض برچسب «≈ فاصله» زیر نقطهٔ مچ‌بند
+_PIN = 24          # قطر پین نشانگر
+_CHIP_W = 82       # عرض برچسب زیر پین
+_M_CHIP_W = 46     # عرض برچسب «≈ فاصله» زیر نقطهٔ مچ‌بند
 
 # تخمین فاصله از قدرت سیگنال — مدل تضعیف مسیر:
 #     فاصله ≈ ۱۰ به‌توان ((A − RSSI) / ۱۰×n)
@@ -142,13 +142,13 @@ def _gw_marker(n, item, W, H, spot=None):
              else _COLOR.get(item.get("kind"), WARN))
     pin = ft.Container(
         width=_PIN, height=_PIN, border_radius=_PIN // 2, bgcolor=color,
-        border=ft.Border.all(2.5, WHITE),
-        shadow=ft.BoxShadow(blur_radius=7, color="#40000000"),
+        border=ft.Border.all(2, WHITE),
+        shadow=ft.BoxShadow(blur_radius=5, color="#40000000"),
         alignment=ft.alignment.Alignment(0, 0),
-        content=txt(fa_num(n), size=13, font=FONT_B, color=WHITE),
+        content=txt(fa_num(n), size=11, font=FONT_B, color=WHITE),
     )
     col = ft.Column(
-        [pin, _label_chip(_short_label(item), _CHIP_W, size=10.5)],
+        [pin, _label_chip(_short_label(item), _CHIP_W, size=9.5)],
         spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
     )
     left = min(max(cx - _CHIP_W / 2, 3), W - _CHIP_W - 3)
@@ -166,7 +166,7 @@ def _entry_marker(W, H):
     """نشانگر ورودی کارخانه — کوچک و کم‌رنگ، فقط برای جهت‌یابی."""
     cx, cy = MAP_ENTRANCE["x"] * W, MAP_ENTRANCE["y"] * H
     dot = ft.Container(
-        width=11, height=11, border_radius=6, bgcolor=_ENTRY_COLOR,
+        width=9, height=9, border_radius=5, bgcolor=_ENTRY_COLOR,
         border=ft.Border.all(2, WHITE),
         shadow=ft.BoxShadow(blur_radius=4, color="#40000000"),
     )
@@ -206,14 +206,14 @@ def _worker_dots(W, H, doc=None, rows=None):
             cx = g["x"] * W + (i % 4 - 1.5) * 18
             cy = g["y"] * H + _PIN / 2 + 46 + (i // 4) * 18
             dot = ft.Container(
-                width=14, height=14, border_radius=7,
+                width=10, height=10, border_radius=5,
                 bgcolor="#9AA0A6" if stale else _rssi_color(rssi),
                 border=ft.Border.all(2, WHITE),
                 shadow=ft.BoxShadow(blur_radius=4, color="#40000000"),
             )
             chip = ft.Container(
                 width=_M_CHIP_W,
-                content=txt(_m_text(rssi), size=9.5, font=FONT_MED,
+                content=txt(_m_text(rssi), size=9, font=FONT_MED,
                             color=TEXT_MUTED if stale else INK,
                             text_align=ft.TextAlign.CENTER),
                 bgcolor=WHITE, border_radius=7,
@@ -394,6 +394,7 @@ def map_view(app):
     watch = state.setdefault("map_watch", {"weakest": None, "weakest_at": None,
                                            "samples": 0, "last_seen": None})
     edit = bool(state.get("map_edit"))
+    fullscreen = bool(state.get("map_fullscreen"))
     if not edit and os.environ.get("ROSETASH_MAP_EDIT") == "1":
         # قلاب تست بصری — شروع در حالت چیدن (تور اسکرین‌شات)
         state["map_edit"] = True
@@ -553,10 +554,14 @@ def map_view(app):
         state["map_edit"] = not bool(state.get("map_edit"))
         app.render()
 
+    def _toggle_fullscreen(e):
+        state["map_fullscreen"] = not bool(state.get("map_fullscreen"))
+        app.render()
+
     # نقش کاربر
     my_role = app.state.get("role", "viewer")
     can_edit_map_role = can_edit_map(my_role)
-    
+
     can_edit = bool(src["rows"]) and can_edit_map_role
     edit_btn = ft.Button(
         "پایان چیدن" if edit else "چیدن روی نقشه",
@@ -569,6 +574,17 @@ def map_view(app):
             padding=ft.Padding.symmetric(horizontal=12, vertical=6),
         ),
         on_click=_toggle_edit if can_edit else None,
+    )
+    full_btn = ft.Button(
+        "بسته کردن نقشه" if fullscreen else "نمایش نقشه تمام‌صفحه",
+        icon=ft.Icons.FULLSCREEN,
+        tooltip="نمایش نقشه در حالت تمام‌صفحه",
+        style=ft.ButtonStyle(
+            bgcolor=BRAND_RED if fullscreen else INK, color=WHITE,
+            shape=ft.RoundedRectangleBorder(radius=8),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        ),
+        on_click=_toggle_fullscreen,
     )
 
     def _new_gateway(e):
@@ -589,6 +605,7 @@ def map_view(app):
             ft.Row([
                 txt("گیت‌وی‌ها و چیدمان", size=14, font=FONT_B, color=INK),
                 ft.Container(expand=True),
+                full_btn,
                 edit_btn,
             ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
             hint,
@@ -620,6 +637,22 @@ def map_view(app):
 
     panel = ft.Column(panel_controls, width=296, spacing=12,
                       scroll=ft.ScrollMode.AUTO)
+    if fullscreen:
+        # حالت تمام‌صفحه: فقط نقشه و دکمهٔ بستن، بدون سربرگ و پنل‌ها
+        return ft.Column([
+            ft.Row([
+                ft.Container(expand=True),
+                full_btn,
+            ], vertical_alignment=ft.CrossAxisAlignment.START),
+            ft.Container(
+                content=ft.Stack([
+                    ft.Image(src=MAP_IMAGE, width=W, height=H, fit=ft.BoxFit.FILL),
+                    *stack.controls[1:],  # skip Image, keep markers
+                ], width=W, height=H),
+                alignment=ft.alignment.Alignment(0, 0),
+                expand=True,
+            ),
+        ], spacing=0, expand=True)
     return ft.Column([
         header,
         ft.Row([
