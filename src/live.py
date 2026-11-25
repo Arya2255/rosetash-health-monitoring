@@ -45,7 +45,7 @@ def _env(*names, default: str = "") -> str:
 BRIDGE = _env("ROZTASH_BRIDGE", "ROSETASH_BRIDGE",
               default="http://127.0.0.1:8726")
 MODE = _env("ROZTASH_LIVE", "ROSETASH_LIVE", default="auto")
-CACHE_TTL = float(_env("ROZTASH_LIVE_TTL", "ROSETASH_LIVE_TTL", default="4"))
+CACHE_TTL = float(_env("ROZTASH_LIVE_TTL", "ROSETASH_LIVE_TTL", default="1"))
 
 _cache: dict = {"t": 0.0, "doc": None}
 _cached_once = False
@@ -167,13 +167,18 @@ def send_vibrate(mac: str | None = None, timeout: float = 2.5,
     return False, "ارسال فرمان لرزش تأیید نشد"
 
 
-def request_manual_measurement(mac: str, *, actor: str, timeout: float = 8.0):
-    """Request a real measurement from the currently observing installed gateway."""
+def request_manual_measurement(mac: str, *, actor: str, timeout: float = 8.0,
+                               vitals_type: str = "hr"):
+    """Request a real measurement from the currently observing installed gateway.
+
+    ``vitals_type`` is ``"hr"`` for heart rate or ``"spo2"`` for blood oxygen.
+    """
     if MODE == "0":
         return False, "حالت زنده خاموش است", None
     path = "/api/measurements"
     payload = {"mac": str(mac or "").strip().lower(), "actor": str(actor or "").strip().lower(),
-               "vitals": False}
+               "vitals": vitals_type == "spo2",
+               "vitals_type": vitals_type}
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     try:
@@ -212,9 +217,9 @@ def request_manual_measurement(mac: str, *, actor: str, timeout: float = 8.0):
     return True, "درخواست به گیت‌وی ارسال شد؛ نتیجه پس از اندازه‌گیری واقعی نمایش داده می‌شود", info
 
 
-def send_measure(mac: str, *, actor: str):
+def send_measure(mac: str, *, actor: str, vitals_type: str = "hr"):
     """Data-layer facade: return the request outcome without implying a sensor result."""
-    ok, message, _info = request_manual_measurement(mac, actor=actor)
+    ok, message, _info = request_manual_measurement(mac, actor=actor, vitals_type=vitals_type)
     return ok, message
 
 

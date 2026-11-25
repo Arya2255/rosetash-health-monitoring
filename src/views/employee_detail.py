@@ -17,7 +17,7 @@ from theme import (
     BORDER, DANGER, DANGER_BG, FONT, FONT_B, FONT_MED, FONT_SB, INK, OFFLINE,
     OK, R_BTN, R_CARD, TEXT_MAIN, TEXT_MUTED, WARN, WHITE, fa_hours, fa_num, txt,
 )
-from data import EMPLOYEES, WEEK_HOURS, ZONE_COLORS, live_employees, live_status, send_vibrate
+from data import EMPLOYEES, WEEK_HOURS, ZONE_COLORS, live_employees, live_status, send_vibrate, send_measure
 from layout import flow, is_phone, table_scroll
 from components.common import (
     ISSUE_LABELS, att_chip, avatar_circle, back_button, card, kv_row,
@@ -34,6 +34,7 @@ _MEASUREMENT_PENDING = {
     "pending": "فرمان فرستاده شد؛ در انتظار پاسخ گیت‌وی…",
     "queued": "درخواست در صف گیت‌وی است…",
     "started": "مچ‌بند در حال اندازه‌گیری ضربان است…",
+    "started_spo2": "مچ‌بند در حال اندازه‌گیری اکسیژن خون است…",
 }
 _MEASUREMENT_ERRORS = {
     "off_duty_unseen_or_policy": "گیت‌وی مچ‌بند را نمی‌بیند یا هنوز مجوز اندازه‌گیری را دریافت نکرده است",
@@ -41,6 +42,7 @@ _MEASUREMENT_ERRORS = {
     "manual_measure_queue_busy": "گیت‌وی درگیر درخواست دیگری است؛ کمی بعد دوباره تلاش کنید",
     "command_expired": "مهلت اجرای درخواست روی گیت‌وی پایان یافت",
     "no_hr_samples": "ضربان معتبری دریافت نشد؛ مچ‌بند را روی دست و نزدیک گیت‌وی نگه دارید",
+    "no_spo2_samples": "اکسیژن خون معتبری دریافت نشد؛ مچ‌بند را روی دست و نزدیک گیت‌وی نگه دارید",
     "health_job_failed": "اندازه‌گیری مچ‌بند ناموفق بود؛ اتصال ساعت به برنامهٔ گوشی را بررسی کنید",
     "job_could_not_start": "گیت‌وی نتوانست اندازه‌گیری را شروع کند",
     "publish failed": "فرمان به پیام‌رسان محلی نرسید",
@@ -210,12 +212,24 @@ def _live_detail(app, mac):
             last_report = signature
             awaiting_until = 0.0
             bpm = report.get("bpm")
+            spo2 = report.get("spo2")
+            vt = report.get("vitals_type", "hr")
             if status in _MEASUREMENT_PENDING:
-                measure_feedback.value = _MEASUREMENT_PENDING[status]
+                measure_feedback.value = _MEASUREMENT_PENDING.get(status,
+                    _MEASUREMENT_PENDING.get("started_spo2" if vt == "spo2" else "started"))
                 measure_feedback.color = TEXT_MUTED
-            elif status == "done" and type(bpm) in (int, float) and 30 <= bpm <= 240:
-                measure_feedback.value = f"نتیجهٔ اندازه‌گیری دستی: {fa_num(round(bpm))} ضربه در دقیقه"
-                measure_feedback.color = OK
+            elif status == "done":
+                if vt == "spo2" and type(spo2) in (int, float) and 70 <= spo2 <= 100:
+                    measure_feedback.value = f"نتیجهٔ اندازه‌گیری دستی: اکسیژن خون {fa_num(spo2)}٪"
+                    measure_feedback.color = OK
+                elif type(bpm) in (int, float) and 30 <= bpm <= 240:
+                    measure_feedback.value = f"نتیجهٔ اندازه‌گیری دستی: {fa_num(round(bpm))} ضربه در دقیقه"
+                    measure_feedback.color = OK
+                else:
+                    measure_feedback.value = (
+                        "در مهلت تعیین‌شده نتیجه‌ای از گیت‌وی نرسید" if status == "timeout"
+                        else _MEASUREMENT_ERRORS.get(report.get("detail"), "اندازه‌گیری دستی ناموفق بود"))
+                    measure_feedback.color = DANGER
             else:
                 measure_feedback.value = (
                     "در مهلت تعیین‌شده نتیجه‌ای از گیت‌وی نرسید" if status == "timeout"
@@ -225,16 +239,18 @@ def _live_detail(app, mac):
             awaiting_until = 0.0
             measure_feedback.value = "در مهلت تعیین‌شده نتیجه‌ای از گیت‌وی نرسید"
             measure_feedback.color = DANGER
-        btn_measure.disabled = not allowed or measurement_busy or bool(awaiting_until) or status in _MEASUREMENT_PENDING
+        pending_statuses = set(_MEASUREMENT_PENDING.keys()) | {"started_spo2"}
+        btn_measure.disabled = not allowed or measurement_busy or bool(awaiting_until) or status in pending_statuses
+        btn_measure_spo2.disabled = not allowed or measurement_busy or bool(awaiting_until) or status in pending_statuses
 
-    async def _send_measurement(actor):
+    async def _send_measurement(actor, vitals_type="hr"):
         nonlocal measurement_busy, awaiting_until
         if not _measurement_active() or state.get("admin_email") != actor:
             return
         from data import send_measure
 
         try:
-            ok, message = await asyncio.to_thread(send_measure, mac, actor=actor)
+            ok, message = await asyncio.to_thread(send_measure, mac, actor=actor, vitals_type=vitals_type)
         except Exception:
             ok, message = False, "پل به درخواست اندازه‌گیری پاسخ نداد"
         if not _measurement_active() or state.get("admin_email") != actor:
@@ -274,10 +290,40 @@ def _live_detail(app, mac):
         measure_feedback.color = TEXT_MUTED
         app.page.update()
         if hasattr(app.page, "run_task"):
-            app.page.run_task(_send_measurement, state["admin_email"])
+            app.page.run_task(_send_measurement, state["admin_email"], "hr")
         else:
             measurement_busy = False
             btn_measure.disabled = False
+            measure_feedback.value = "ارسال غیرهم‌زمان در این نما در دسترس نیست"
+            app.page.update()
+
+    def _on_measure_spo2(e):
+        nonlocal measurement_busy
+        if not _measurement_active() or measurement_busy or awaiting_until:
+            return
+        employee = current_emp["value"] or {}
+        if not employee.get("registered"):
+            measure_feedback.value = "این مچ‌بند به کارکن ثبت‌شده‌ای تخصیص ندارد"
+            measure_feedback.color = DANGER
+            app.page.update()
+            return
+        if not employee.get("scan_allowed") or employee.get("scan_paused"):
+            measure_feedback.value = monitoring_reason_text(employee) or "پایش در حال حاضر مجاز نیست"
+            measure_feedback.color = TEXT_MUTED
+            app.page.update()
+            return
+        if not _measurement_allowed(employee) or (employee.get("manual_measurement") or {}).get("status") in _MEASUREMENT_PENDING:
+            return
+        measurement_busy = True
+        btn_measure_spo2.disabled = True
+        measure_feedback.value = "درخواست اندازه‌گیری اکسیژن خون در حال ارسال…"
+        measure_feedback.color = TEXT_MUTED
+        app.page.update()
+        if hasattr(app.page, "run_task"):
+            app.page.run_task(_send_measurement, state["admin_email"], "spo2")
+        else:
+            measurement_busy = False
+            btn_measure_spo2.disabled = False
             measure_feedback.value = "ارسال غیرهم‌زمان در این نما در دسترس نیست"
             app.page.update()
 
@@ -307,15 +353,23 @@ def _live_detail(app, mac):
         "اندازه‌گیری دستی ضربان", icon=ft.Icons.MONITOR_HEART, height=40,
         disabled=not bool(emp0.get("registered") and emp0.get("scan_allowed")
                           and not emp0.get("scan_paused")),
-        on_click=_on_measure, data="employee:measure",
+        on_click=_on_measure, data="employee:measure_hr",
         style=ft.ButtonStyle(bgcolor=INK, color=WHITE,
+                             shape=ft.RoundedRectangleBorder(radius=R_BTN)),
+    )
+    btn_measure_spo2 = ft.Button(
+        "اندازه‌گیری دستی اکسیژن خون", icon=ft.Icons.WATER_DROP, height=40,
+        disabled=not bool(emp0.get("registered") and emp0.get("scan_allowed")
+                          and not emp0.get("scan_paused")),
+        on_click=_on_measure_spo2, data="employee:measure_spo2",
+        style=ft.ButtonStyle(bgcolor="#1A5FB4", color=WHITE,
                              shape=ft.RoundedRectangleBorder(radius=R_BTN)),
     )
     if is_phone(app):
         # موبایل: دکمه‌ها زیر هم — چیپ اتصال در ردیف خودش
         actions = card(ft.Column([
             ft.Row([conn_chip], alignment=ft.MainAxisAlignment.END),
-            ft.Row([btn_vib, btn_measure, edit_btn, del_btn], spacing=10,
+            ft.Row([btn_vib, btn_measure, btn_measure_spo2, edit_btn, del_btn], spacing=10,
                    wrap=True, run_spacing=8),
             measure_feedback,
         ], spacing=10), pad=12)
@@ -324,6 +378,7 @@ def _live_detail(app, mac):
             ft.Row([
                 btn_vib,
                 btn_measure,
+                btn_measure_spo2,
                 edit_btn,
                 del_btn,
                 ft.Container(expand=True),

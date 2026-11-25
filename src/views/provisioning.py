@@ -170,7 +170,8 @@ def _start_flash(app, st):
         app.snack("پورت بروکر باید عددی بین ۱ تا ۶۵۵۳۵ باشد")
         return
     cfg = pv.build_config(st["gw_id"], st.get("zone") or "",
-                          st.get("host") or "", mqtt_port, 600)
+                          st.get("host") or "", mqtt_port,
+                          int(st.get("health_interval_s") or 600))
     ident = dict(ident)
     registration = {"gw": st["gw_id"], "label": st.get("label") or st["gw_id"],
                     "zone": st.get("zone") or "", "kind": "installed", "mac": ident["mac"]}
@@ -436,6 +437,7 @@ def _step2_card(app, st) -> ft.Control:
         flow(app, [
             _field("آدرس جایگزین بروکر MQTT", "host", st, expand=3),
             _field("پورت MQTT", "port", st, expand=1),
+            _field("بازه پایش (دقیقه)", "health_interval_s", st, expand=1),
         ], spacing=8),
         txt("شبکهٔ عادی با DHCP از W5500 می‌آید؛ آدرس بروکر با UDP کشف می‌شود. "
             "نشانی بالا فقط در صورت در دسترس نبودن سرویس کشف استفاده می‌شود.",
