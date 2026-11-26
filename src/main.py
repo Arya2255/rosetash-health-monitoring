@@ -48,9 +48,10 @@ from views.gateways import gateways_view  # noqa: E402
 from views.employee_detail import employee_detail_view  # noqa: E402
 from views.alerts import alerts_view  # noqa: E402
 from views.settings import settings_view  # noqa: E402
-from views.logs import logs_view  # noqa: E402
-from views.provisioning import provisioning_view  # noqa: E402
 from views.login import login_view  # noqa: E402
+from views.logs import logs_view  # noqa: E402
+from views.network_fix import network_fix_view  # noqa: E402
+from views.provisioning import provisioning_view  # noqa: E402
 
 BUILDERS = {
     "login": login_view,
@@ -67,6 +68,7 @@ BUILDERS = {
     "alerts": alerts_view,
     "settings": settings_view,
     "logs": logs_view,
+    "network_fix": network_fix_view,
 }
 
 
