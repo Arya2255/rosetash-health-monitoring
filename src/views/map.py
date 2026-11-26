@@ -639,6 +639,7 @@ def map_view(app):
                       scroll=ft.ScrollMode.AUTO)
     if fullscreen:
         # حالت تمام‌صفحه: فقط نقشه و دکمهٔ بستن، بدون سربرگ و پنل‌ها
+        # نقشه باید کل فضای उपलब्ध را بگیرد و بزرگ شود
         return ft.Column([
             ft.Row([
                 ft.Container(expand=True),
@@ -646,9 +647,9 @@ def map_view(app):
             ], vertical_alignment=ft.CrossAxisAlignment.START),
             ft.Container(
                 content=ft.Stack([
-                    ft.Image(src=MAP_IMAGE, width=W, height=H, fit=ft.BoxFit.FILL),
+                    ft.Image(src=MAP_IMAGE, fit=ft.BoxFit.FILL),
                     *stack.controls[1:],  # skip Image, keep markers
-                ], width=W, height=H),
+                ], expand=True),
                 alignment=ft.alignment.Alignment(0, 0),
                 expand=True,
             ),

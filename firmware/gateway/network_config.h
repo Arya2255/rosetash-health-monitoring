@@ -14,7 +14,7 @@ inline constexpr int kW5500Irq = -1;  // W5500 INT is not wired.
 inline constexpr uint8_t kW5500SpiMhz = 8;
 
 // Dedicated HSE LAN fallback. DHCP still assigns each gateway its own address.
-inline constexpr uint8_t kHseIp[4] = {192, 168, 50, 1};
+inline constexpr uint8_t kHseIp[4] = {192, 168, 50, 10};
 inline constexpr uint16_t kMqttPort = 1884;
 inline constexpr uint16_t kDiscoveryPort = 19198;
 

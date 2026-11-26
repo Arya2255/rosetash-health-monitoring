@@ -7,7 +7,7 @@
 struct GatewayConfig {
   char gw_id[24] = "gw-1";
   char zone[40] = "zone-1";
-  char mqtt_host[48] = "192.168.50.1";
+  char mqtt_host[48] = "192.168.50.10";
   uint16_t mqtt_port = 1884;
   uint16_t health_interval_s = 600;  // health-window period (10 min)
   uint16_t scan_interval_ms = 160;   // BLE scan duty cycle (WiFi coexistence)
